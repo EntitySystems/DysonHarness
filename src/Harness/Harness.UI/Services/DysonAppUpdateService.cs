@@ -12,7 +12,7 @@ public enum DysonAppUpdatePhase
     /// <summary>A newer release is available; the modal is prompting.</summary>
     Available,
 
-    /// <summary>Streaming the MSI to <c>%TEMP%</c>; the modal is locked.</summary>
+    /// <summary>Streaming the installer to the temp directory; the modal is locked.</summary>
     Downloading,
 
     /// <summary>Download or hand-off failed; the modal shows <see cref="DysonAppUpdateService.Error"/>.</summary>
@@ -28,12 +28,15 @@ public sealed record DysonManualUpdateCheckResult(
     bool IsInAppInstallEligible);
 
 /// <summary>
-/// Windows-only in-app updater: compares the build-stamped CalVer against GitHub
-/// releases on the same track (<c>stable</c> / <c>preview</c>), then downloads the MSI
-/// and hands off to <c>msiexec</c>. Singleton — one check per process, UI subscribes via <see cref="Changed"/>.
+/// In-app updater: compares the build-stamped CalVer against GitHub releases on the
+/// same track (<c>stable</c> / <c>preview</c>), then downloads the Windows MSI or the
+/// macOS pkg for this <c>version.json</c> rid and hands off to the platform installer.
+/// Singleton — one check per process, UI subscribes via <see cref="Changed"/>.
 /// </summary>
 public sealed class DysonAppUpdateService(HttpClient http)
 {
+    /// <summary>Installed app the macOS helper reopens after <c>installer</c> finishes or fails.</summary>
+    public const string MacAppPath = "/Applications/DysonHarness.app";
     /// <summary>Progress repaints are throttled so a fast download does not flood the Blazor circuit.</summary>
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(150);
 
@@ -69,18 +72,25 @@ public sealed class DysonAppUpdateService(HttpClient http)
     }
 
     /// <summary>
-    /// Reads the local stamped version and looks for a newer MSI release.
-    /// No-ops (success) on non-Windows hosts and unstamped local builds.
+    /// True when this stamped build can install in-app: Windows, or macOS with rid
+    /// <c>osx-arm64</c> / <c>osx-x64</c>. Dev builds stay lookup-only.
+    /// </summary>
+    public static bool IsInAppInstallSupported(DysonAppVersionInfo local) =>
+        local.IsStampedRelease
+        && (OperatingSystem.IsWindows()
+            || (OperatingSystem.IsMacOS() && DysonGitHubReleaseClient.IsMacPkgRid(local.Rid)));
+
+    /// <summary>
+    /// Reads the local stamped version and looks for a newer installer release.
+    /// No-ops (success) on hosts that cannot install in-app, including unstamped local builds.
     /// </summary>
     public async Task<VoidResult<string>> CheckAsync(CancellationToken cancellationToken = default)
     {
         var local = DysonAppVersionInfo.Local;
-        if (!OperatingSystem.IsWindows() || !local.IsStampedRelease)
+        if (!IsInAppInstallSupported(local))
             return VoidResult<string>.Success;
 
-        var found = await _releases
-            .FindNewestMsiReleaseAsync(local.EffectiveRepo, local.EffectiveChannel, cancellationToken)
-            .ConfigureAwait(false);
+        var found = await FindNewestForHostAsync(local, cancellationToken).ConfigureAwait(false);
         if (found.IsError)
             return VoidResult<string>.AsError(found.Error);
 
@@ -92,23 +102,21 @@ public sealed class DysonAppUpdateService(HttpClient http)
     }
 
     /// <summary>
-    /// Queries GitHub for the newest matching MSI release, including on non-Windows and unstamped builds.
-    /// Eligible newer stamped Windows releases are handed to the existing update modal.
+    /// Queries GitHub for the newest matching installer release, including on unstamped builds
+    /// and hosts that cannot install in-app. Eligible newer releases are handed to the update modal.
     /// </summary>
     public async Task<Result<DysonManualUpdateCheckResult, string>> CheckManuallyAsync(
         CancellationToken cancellationToken = default)
     {
         var local = DysonAppVersionInfo.Local;
-        var found = await _releases
-            .FindNewestMsiReleaseAsync(local.EffectiveRepo, local.EffectiveChannel, cancellationToken)
-            .ConfigureAwait(false);
+        var found = await FindNewestForHostAsync(local, cancellationToken).ConfigureAwait(false);
         if (found.IsError)
             return Result<DysonManualUpdateCheckResult, string>.AsError(found.Error);
 
         var isNewerStampedRelease = local.IsStampedRelease
             && found.Value is { } release
             && DysonAppVersionInfo.IsNewer(release.TagName, local.Version);
-        var isInAppInstallEligible = OperatingSystem.IsWindows() && isNewerStampedRelease;
+        var isInAppInstallEligible = IsInAppInstallSupported(local) && isNewerStampedRelease;
         var result = new DysonManualUpdateCheckResult(
             local.Version,
             local.EffectiveChannel,
@@ -134,13 +142,13 @@ public sealed class DysonAppUpdateService(HttpClient http)
     }
 
     /// <summary>
-    /// Downloads the pending MSI to <c>%TEMP%</c>, launches <c>msiexec</c> after a short delay,
-    /// and exits the process so CEF/WPF release their file locks. Only returns on failure.
+    /// Downloads the pending installer to the temp directory, starts the platform installer
+    /// after this process can release its files, and exits. Only returns on failure.
     /// </summary>
     public async Task<VoidResult<string>> DownloadAndInstallAsync(CancellationToken cancellationToken = default)
     {
-        if (!OperatingSystem.IsWindows())
-            return VoidResult<string>.AsError("In-app updates are Windows-only.");
+        if (!IsInAppInstallSupported(DysonAppVersionInfo.Local))
+            return VoidResult<string>.AsError("In-app updates are not available on this build.");
         if (_release is not { } release)
             return VoidResult<string>.AsError("No update is pending.");
         if (Phase is DysonAppUpdatePhase.Downloading)
@@ -150,17 +158,31 @@ public sealed class DysonAppUpdateService(HttpClient http)
         Error = null;
         SetPhase(DysonAppUpdatePhase.Downloading);
 
-        var msiPath = Path.Combine(Path.GetTempPath(), release.AssetName);
-        var download = await DownloadToFileAsync(release.DownloadUrl, msiPath, cancellationToken).ConfigureAwait(false);
+        var installerPath = Path.Combine(Path.GetTempPath(), release.AssetName);
+        var download = await DownloadToFileAsync(release.DownloadUrl, installerPath, cancellationToken).ConfigureAwait(false);
         if (download.IsError)
             return Fail(download.Error);
 
-        var launch = LaunchInstaller(msiPath);
+        var launch = OperatingSystem.IsMacOS()
+            ? LaunchMacPkgInstaller(installerPath)
+            : LaunchWindowsInstaller(installerPath);
         if (launch.IsError)
             return Fail(launch.Error);
 
         Environment.Exit(0);
         return VoidResult<string>.Success;
+    }
+
+    private async Task<Result<DysonGitHubMsiRelease?, string>> FindNewestForHostAsync(
+        DysonAppVersionInfo local,
+        CancellationToken cancellationToken)
+    {
+        var suffix = OperatingSystem.IsMacOS() && DysonGitHubReleaseClient.IsMacPkgRid(local.Rid)
+            ? DysonGitHubReleaseClient.MacPkgAssetSuffix(local.Rid)
+            : DysonGitHubReleaseClient.MsiAssetSuffix;
+        return await _releases
+            .FindNewestReleaseAsync(local.EffectiveRepo, local.EffectiveChannel, suffix, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<VoidResult<string>> DownloadToFileAsync(
@@ -215,7 +237,65 @@ public sealed class DysonAppUpdateService(HttpClient http)
         }
     }
 
-    private static VoidResult<string> LaunchInstaller(string msiPath)
+    private static VoidResult<string> LaunchMacPkgInstaller(string pkgPath)
+    {
+        try
+        {
+            var scriptPath = Path.Combine(Path.GetTempPath(), $"dyson-pkg-update-{Environment.ProcessId}.sh");
+            File.WriteAllText(scriptPath, BuildMacUpdateScript(pkgPath));
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "/usr/bin/nohup",
+                ArgumentList = { "/bin/bash", scriptPath },
+                WorkingDirectory = Path.GetTempPath(),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            return Process.Start(startInfo) is null
+                ? VoidResult<string>.AsError("Could not start the installer.")
+                : VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return VoidResult<string>.AsError($"Could not start the installer: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Detached helper: wait until this process is gone, run <c>installer</c> with an admin
+    /// password dialog, then open <see cref="MacAppPath"/>. A cancelled or failed install
+    /// still opens that path. The pkg itself does not launch the app.
+    /// ponytail: fixed 1s after the pid exits so the kernel can drop bundle locks; switch to a
+    /// bundle-busy wait if an install ever fails with "resource busy".
+    /// </summary>
+    internal static string BuildMacUpdateScript(string pkgPath)
+    {
+        var pkg = BashSingleQuote(pkgPath);
+        var pid = Environment.ProcessId;
+        return $$"""
+            #!/bin/bash
+            exec >/dev/null 2>&1
+            pkg={{pkg}}
+            while kill -0 {{pid}} 2>/dev/null; do
+              sleep 0.2
+            done
+            # kill -0 clears before the kernel drops bundle file locks.
+            sleep 1
+            osascript - "$pkg" <<'EOF' || true
+            on run argv
+              do shell script "installer -pkg " & quoted form of (item 1 of argv) & " -target /" with administrator privileges
+            end run
+            EOF
+            open {{MacAppPath}}
+            rm -f -- "$0"
+            """;
+    }
+
+    private static string BashSingleQuote(string value) =>
+        "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+
+    private static VoidResult<string> LaunchWindowsInstaller(string msiPath)
     {
         try
         {

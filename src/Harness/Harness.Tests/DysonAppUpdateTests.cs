@@ -2,7 +2,7 @@ using Harness.UI.Services;
 
 namespace Harness.Tests;
 
-/// <summary>CalVer parsing and GitHub release selection for the Windows in-app updater.</summary>
+/// <summary>CalVer parsing and GitHub release selection for the in-app updater.</summary>
 public class DysonAppUpdateTests
 {
     [Fact]
@@ -219,6 +219,101 @@ public class DysonAppUpdateTests
                "assets": [{ "name": "DysonHarness-2026.8.150-linux-x64.zip",
                             "browser_download_url": "https://example.invalid/a.zip", "size": 1 }] }]
             """));
+    }
+
+    [Fact]
+    public void SelectNewestRelease_PreviewOsxArm64PkgIgnoresMsiAndOtherArchitecture()
+    {
+        const string json = """
+            [
+              {
+                "tag_name": "2026.11.168",
+                "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.11.168",
+                "draft": false,
+                "prerelease": true,
+                "assets": [
+                  { "name": "DysonHarness-2026.11.168-win-x64.msi",
+                    "browser_download_url": "https://example.invalid/newer.msi", "size": 9 },
+                  { "name": "DysonHarness-2026.11.168-osx-x64.pkg",
+                    "browser_download_url": "https://example.invalid/newer-x64.pkg", "size": 8 }
+                ]
+              },
+              {
+                "tag_name": "2026.11.167",
+                "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.11.167",
+                "draft": false,
+                "prerelease": true,
+                "assets": [
+                  { "name": "DysonHarness-2026.11.167-win-x64.msi",
+                    "browser_download_url": "https://example.invalid/msi", "size": 7 },
+                  { "name": "DysonHarness-2026.11.167-osx-x64.pkg",
+                    "browser_download_url": "https://example.invalid/x64.pkg", "size": 6 },
+                  { "name": "DysonHarness-2026.11.167-osx-arm64.pkg",
+                    "browser_download_url": "https://example.invalid/arm64.pkg", "size": 5 }
+                ]
+              },
+              {
+                "tag_name": "2026.11.200",
+                "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.11.200",
+                "draft": false,
+                "prerelease": false,
+                "assets": [
+                  { "name": "DysonHarness-2026.11.200-osx-arm64.pkg",
+                    "browser_download_url": "https://example.invalid/stable-arm64.pkg", "size": 4 }
+                ]
+              }
+            ]
+            """;
+
+        var arm = DysonGitHubReleaseClient.SelectNewestRelease(
+            json, "preview", DysonGitHubReleaseClient.MacPkgAssetSuffix(DysonGitHubReleaseClient.MacArm64Rid));
+        Assert.NotNull(arm);
+        Assert.Equal("2026.11.167", arm.TagName);
+        Assert.Equal("DysonHarness-2026.11.167-osx-arm64.pkg", arm.AssetName);
+        Assert.Equal("https://example.invalid/arm64.pkg", arm.DownloadUrl);
+
+        var x64 = DysonGitHubReleaseClient.SelectNewestRelease(
+            json, "preview", DysonGitHubReleaseClient.MacPkgAssetSuffix(DysonGitHubReleaseClient.MacX64Rid));
+        Assert.NotNull(x64);
+        Assert.Equal("2026.11.168", x64.TagName);
+        Assert.Equal("DysonHarness-2026.11.168-osx-x64.pkg", x64.AssetName);
+    }
+
+    [Fact]
+    public void MacUpdateScript_ReopensApplicationsAppWhenInstallerFails()
+    {
+        var script = DysonAppUpdateService.BuildMacUpdateScript("/tmp/Dyson Harness's pkg.pkg");
+
+        Assert.Contains("pkg='/tmp/Dyson Harness'\\''s pkg.pkg'", script, StringComparison.Ordinal);
+        Assert.Contains("osascript - \"$pkg\" <<'EOF' || true", script, StringComparison.Ordinal);
+        Assert.Contains("quoted form of (item 1 of argv)", script, StringComparison.Ordinal);
+        Assert.Contains("with administrator privileges", script, StringComparison.Ordinal);
+        var installAt = script.IndexOf("do shell script", StringComparison.Ordinal);
+        var openAt = script.IndexOf("open /Applications/DysonHarness.app", StringComparison.Ordinal);
+        Assert.True(installAt >= 0 && openAt > installAt);
+        Assert.DoesNotContain("set -e", script, StringComparison.Ordinal);
+
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        var path = Path.Combine(Path.GetTempPath(), "dyson-pkg-update-syntax.sh");
+        File.WriteAllText(path, script);
+        try
+        {
+            using var proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "/bin/bash",
+                ArgumentList = { "-n", path },
+                RedirectStandardError = true,
+            });
+            Assert.NotNull(proc);
+            proc.WaitForExit();
+            Assert.True(proc.ExitCode == 0, proc.StandardError.ReadToEnd());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     /// <summary>Draft releases and zip-only releases must be skipped even when their tag is highest.</summary>
