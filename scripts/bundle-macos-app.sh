@@ -68,18 +68,11 @@ sign_developer_id() {
   local entitlements="${CODESIGN_ENTITLEMENTS:-$ROOT/packaging/macos/entitlements.plist}"
   [[ -f "$entitlements" ]] || { echo "Missing entitlements: $entitlements" >&2; exit 1; }
 
-  # codesign treats every executable file in the bundle as nested code.
-  # Managed assemblies are not Mach-O; an executable .dll fails the bundle seal.
-  while IFS= read -r -d '' bin; do
-    file -b "$bin" | grep -q 'Mach-O' && continue
-    chmod a-x "$bin"
-  done < <(find "$APP" -type f -perm -111 -print0)
-
+  # Everything in Contents/MacOS is nested code, including managed .dll files and JSON.
   # Longest path first. `read` keeps the rest of the line, including spaces.
   while IFS= read -r -d '' bin; do
-    file -b "$bin" | grep -q 'Mach-O' || continue
     printf '%08d %s\n' "${#bin}" "$bin"
-  done < <(find "$APP" -type f -print0) | sort -nr | while read -r _len bin; do
+  done < <(find "$APP/Contents/MacOS" -type f -print0) | sort -nr | while read -r _len bin; do
     sign_one "$bin"
   done
 
