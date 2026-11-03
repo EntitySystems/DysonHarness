@@ -143,7 +143,9 @@ public sealed class OpenAiCodexAuthService(
             return Result<OpenAiCodexAccess, string>.AsError("Not a ChatGPT Codex credential handle.");
 
         var gate = _gates.GetOrAdd(id, static _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // A cancelled caller must not skip the gate: the holder may already have rotated the
+        // single-use refresh token, and a second refresh with the old one is refresh_token_reused.
+        await gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
             var loaded = await LoadAsync(id, cancellationToken).ConfigureAwait(false);
@@ -204,7 +206,7 @@ public sealed class OpenAiCodexAuthService(
             return Result<string, string>.AsError("The credential has no refresh token.");
 
         var gate = _gates.GetOrAdd(credentialId, static _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
             var refreshed = await _oauth.RefreshAsync(credential.RefreshToken, CancellationToken.None).ConfigureAwait(false);
@@ -254,7 +256,7 @@ public sealed class OpenAiCodexAuthService(
             return VoidResult<string>.AsError("Not a ChatGPT Codex credential handle.");
 
         var gate = _gates.GetOrAdd(id, static _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
             return await _store.DeleteAsync(id, cancellationToken).ConfigureAwait(false);

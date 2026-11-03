@@ -24,9 +24,6 @@ public class OpenAiCodexCallback : IAsyncDisposable
     public const string PortReservedMessage =
         "Windows has reserved localhost port 1455, so Codex login cannot listen for the browser. Connect failed.";
 
-    private static readonly byte[] OkBody = Encoding.UTF8.GetBytes(
-        "<!doctype html><title>Signed in</title><p>ChatGPT sign-in complete. You can close this tab.</p>");
-
     private readonly Func<Result<TcpListener, string>> _tryBind;
     private readonly TaskCompletionSource<OpenAiCodexCallbackResult> _done =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -157,16 +154,19 @@ public class OpenAiCodexCallback : IAsyncDisposable
                 }
 
                 var result = ParseRequestLine(requestLine);
-                var body = result.Ok
-                    ? OkBody
-                    : Encoding.UTF8.GetBytes("<!doctype html><title>Sign-in failed</title><p>ChatGPT sign-in did not complete. Return to Dyson and try Connect again.</p>");
-                var status = result.Ok ? "302 Found" : "400 Bad Request";
-                var location = result.Ok ? "Location: /success\r\n" : "";
-                var head =
-                    $"HTTP/1.1 {status}\r\n{location}Content-Type: text/html; charset=utf-8\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n";
-                var headBytes = Encoding.ASCII.GetBytes(head);
-                await stream.WriteAsync(headBytes).ConfigureAwait(false);
-                await stream.WriteAsync(body).ConfigureAwait(false);
+                if (result.Ok)
+                {
+                    var okHead = "HTTP/1.1 302 Found\r\nLocation: /success\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    await stream.WriteAsync(Encoding.ASCII.GetBytes(okHead)).ConfigureAwait(false);
+                }
+                else if (result.Error is not null)
+                {
+                    var failBody = Encoding.UTF8.GetBytes("<!doctype html><title>Sign-in failed</title><p>ChatGPT sign-in did not complete. Return to Dyson and try Connect again.</p>");
+                    var failHead = $"HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {failBody.Length}\r\nConnection: close\r\n\r\n";
+                    await stream.WriteAsync(Encoding.ASCII.GetBytes(failHead)).ConfigureAwait(false);
+                    await stream.WriteAsync(failBody).ConfigureAwait(false);
+                }
+
                 if (result.Ok || result.Error is not null)
                     _done.TrySetResult(result);
             }
