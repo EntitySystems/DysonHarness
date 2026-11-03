@@ -38,6 +38,9 @@ public readonly record struct MetaChatItem(
 
     /// <summary>Question card on a DisplayInfo bubble. Null everywhere else.</summary>
     public DysonUserQuestion? UserQuestion { get; init; }
+
+    /// <summary>Secrets card on a DisplayInfo bubble. Null everywhere else. Never a value.</summary>
+    public DysonSecureDataRequest? SecureDataRequest { get; init; }
 }
 
 /// <summary>Click on a meta-chat conversation action button. Index is into that turn's actions.</summary>
@@ -152,6 +155,7 @@ public static class MetaChatItems
                     TurnId = voiceInput ? null : turn.Id,
                     VisualizationId = voiceInput ? null : turn.VisualizationId,
                     UserQuestion = voiceInput ? null : turn.UserQuestion,
+                    SecureDataRequest = voiceInput ? null : turn.SecureDataRequest,
                 });
             }
         }

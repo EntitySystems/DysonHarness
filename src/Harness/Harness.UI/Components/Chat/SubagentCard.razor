@@ -2,6 +2,7 @@
 @using DysonHarness
 @using Harness.UI.Demo
 @implements IDisposable
+@using Harness.UI.Components.Meta
 @inject DysonUiHost Host
 @inject DysonMessageBus Bus
 
@@ -14,7 +15,11 @@
             data-running="@(_state?.IsRunning == true ? "true" : null)"
             title="@CardAccessibleName"
             aria-label="@CardAccessibleName"
-            @onclick="NavigateAsync">
+            @onclick="NavigateAsync"
+            @oncontextmenu="OpenMenu"
+            @oncontextmenu:preventDefault="true"
+            @oncontextmenu:stopPropagation="true"
+            @onkeydown="OnKeyDown">
         <span class="subagent-card__tile" aria-hidden="true">
             <span class="subagent-card__icon @icon.ColorClass"
                   style="--subagent-mode-icon: url('@icon.Url')"
@@ -42,6 +47,7 @@
             <span class="subagent-card__spinner" aria-hidden="true"></span>
         }
     </button>
+    <MetaRosterContextMenu @ref="_menu" />
 }
 
 @code {
@@ -53,6 +59,7 @@
     private DysonSubagentCardState? _state;
     private Guid? _boundPersistenceId;
     private IDisposable? _sub;
+    private MetaRosterContextMenu? _menu;
 
     private string CardAccessibleName
     {
@@ -172,6 +179,31 @@
 
         await Host.NavigateToSessionAsync(PersistenceId);
         await AfterNavigate.InvokeAsync();
+    }
+
+    private void OpenMenu(MouseEventArgs e) => ShowMenu(e.ClientX, e.ClientY);
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "ContextMenu" || (e.ShiftKey && e.Key == "F10"))
+            ShowMenu(0, 0);
+    }
+
+    private void ShowMenu(double x, double y)
+    {
+        if (_menu is null || _state is null || PersistenceId == Guid.Empty)
+            return;
+
+        var report = Host.GetSubagentLastReport(PersistenceId);
+        var id = PersistenceId;
+        _menu.Open(
+            x,
+            y,
+            DysonSubagentHostLogic.CanViewReport(report),
+            DysonSubagentHostLogic.CanCancelExecution(_state.Status),
+            report,
+            _state.Title,
+            () => Host.StopRosterAgentAsync(id));
     }
 
     internal static (string Url, string ColorClass) ResolveModeIcon(string? agentMode)

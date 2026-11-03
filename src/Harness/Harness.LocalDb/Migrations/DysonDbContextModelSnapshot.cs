@@ -258,6 +258,9 @@ namespace Harness.LocalDb.Migrations
                     b.Property<Guid?>("EventId")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Message")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -755,6 +758,47 @@ namespace Harness.LocalDb.Migrations
                     b.ToTable("session_logs", (string)null);
                 });
 
+            modelBuilder.Entity("DysonHarness.DysonSessionSecretEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Secret")
+                        .IsRequired()
+                        .HasMaxLength(8192)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId", "Key")
+                        .IsUnique();
+
+                    b.HasIndex("SubjectId", "SessionId");
+
+                    b.ToTable("session_secrets", (string)null);
+                });
+
             modelBuilder.Entity("DysonHarness.DysonSessionTodoEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1014,6 +1058,9 @@ namespace Harness.LocalDb.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ReasoningText")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SecureDataRequestJson")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Sequence")
@@ -1351,6 +1398,17 @@ namespace Harness.LocalDb.Migrations
                 {
                     b.HasOne("DysonHarness.DysonSessionEntity", "Session")
                         .WithMany("Logs")
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonSessionSecretEntity", b =>
+                {
+                    b.HasOne("DysonHarness.DysonSessionEntity", "Session")
+                        .WithMany()
                         .HasForeignKey("SessionId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

@@ -31,7 +31,13 @@ public sealed class DysonPendingUserQuestionEntity
     /// <summary>Card title.</summary>
     public string Question { get; set; } = "";
 
-    /// <summary>Choices in card order. Column <c>ChoicesJson</c> (JSON TEXT).</summary>
+    /// <summary>Question (0, default) or SecureData (1). Existing rows are questions.</summary>
+    public DysonPendingUserQuestionKind Kind { get; set; }
+
+    /// <summary>
+    /// Choices in card order. Column <c>ChoicesJson</c> (JSON TEXT). For <see cref="DysonPendingUserQuestionKind.SecureData"/>
+    /// each entry is a compact <c>{"key","description"}</c> JSON string, never a value.
+    /// </summary>
     public List<string> Choices { get; set; } = [];
 
     public bool MultiSelect { get; set; }
@@ -66,4 +72,12 @@ public sealed record DysonPendingUserQuestion(
     bool AllowCustomAnswer,
     int? SubagentId,
     Guid? EventId,
-    DateTime CreatedUtc);
+    DateTime CreatedUtc,
+    DysonPendingUserQuestionKind Kind = DysonPendingUserQuestionKind.Question);
+
+/// <summary>Discriminator for <c>pending_user_questions.Kind</c>.</summary>
+public enum DysonPendingUserQuestionKind
+{
+    Question = 0,
+    SecureData = 1,
+}

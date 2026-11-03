@@ -24,6 +24,7 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonMetaScratchFileEntity> MetaScratchFiles => Set<DysonMetaScratchFileEntity>();
     public DbSet<DysonVoiceSidecarMemoryEntity> VoiceSidecarMemories => Set<DysonVoiceSidecarMemoryEntity>();
     public DbSet<DysonPendingUserQuestionEntity> PendingUserQuestions => Set<DysonPendingUserQuestionEntity>();
+    public DbSet<DysonSessionSecretEntity> SessionSecrets => Set<DysonSessionSecretEntity>();
     public DbSet<DysonSessionEntity> Sessions => Set<DysonSessionEntity>();
     public DbSet<DysonTurnEntity> Turns => Set<DysonTurnEntity>();
     public DbSet<DysonSessionLogEntry> SessionLogs => Set<DysonSessionLogEntry>();
@@ -184,11 +185,28 @@ public sealed class DysonDbContext : DbContext
             e.Property(x => x.SubjectId).IsRequired();
             e.Property(x => x.Message).IsRequired();
             e.Property(x => x.Question).IsRequired();
+            e.Property(x => x.Kind).HasConversion<int>();
             e.Property(x => x.Choices)
                 .HasColumnName("ChoicesJson")
                 .HasConversion(new StringListJsonValueConverter(), StringListJsonValueConverter.Comparer)
                 .HasColumnType("TEXT")
                 .IsRequired();
+            e.HasIndex(x => new { x.SubjectId, x.SessionId });
+            e.HasOne(x => x.Session)
+                .WithMany()
+                .HasForeignKey(x => x.SessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonSessionSecretEntity>(e =>
+        {
+            e.ToTable("session_secrets");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.Key).IsRequired().HasMaxLength(DysonSessionSecretLimits.MaxKeyLength);
+            e.Property(x => x.Description).IsRequired().HasMaxLength(DysonSessionSecretLimits.MaxDescriptionLength);
+            e.Property(x => x.Secret).IsRequired().HasMaxLength(DysonSessionSecretLimits.MaxSecretLength);
+            e.HasIndex(x => new { x.SessionId, x.Key }).IsUnique();
             e.HasIndex(x => new { x.SubjectId, x.SessionId });
             e.HasOne(x => x.Session)
                 .WithMany()

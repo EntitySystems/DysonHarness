@@ -1,5 +1,6 @@
 @namespace Harness.UI.Components.Meta
 @using DysonHarness
+@using Harness.UI.Components.Chat
 @using Harness.UI.Demo
 @using Harness.UI.Markdown
 @inject IJSRuntime Js
@@ -115,6 +116,12 @@
                                 }
                             }
                         </div>
+                    }
+                    @if (item.SecureDataRequest is { } secure)
+                    {
+                        <SecureDataRequestCard RequestId="secure.Id"
+                                               Fields="secure.Fields"
+                                               Outcome="secure.Outcome" />
                     }
                     @if (item.Actions.Count > 0 || item.VisualizationId is not null)
                     {

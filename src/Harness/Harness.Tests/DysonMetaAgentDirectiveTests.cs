@@ -20,6 +20,16 @@ public class DysonMetaAgentDirectiveTests
     }
 
     [Fact]
+    public void Secure_data_lines_are_in_meta_and_drone_directives_only()
+    {
+        const string meta = "Secrets, passwords, API keys, and tokens go through RequestSecureData only.";
+        const string drone = "You cannot ask the user for a password, API key, or token. If you need one, TriggerParentEvent and let the Meta Agent call RequestSecureData.";
+        MustContain(DysonAgentSystemPrompts.MetaAgentDirective, meta, "MetaAgentDirective");
+        MustContain(DysonAgentSystemPrompts.MetaAgentDroneDirective, drone, "MetaAgentDroneDirective");
+        MustNotContain(DysonAgentSystemPrompts.DroneDirective, "RequestSecureData", "DroneDirective");
+    }
+
+    [Fact]
     public void Classic_drone_child_of_meta_agent_drone_gets_worker_mandate_only_there()
     {
         const string heading = "Coordinated worker mandate";

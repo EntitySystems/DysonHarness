@@ -1,0 +1,207 @@
+@namespace Harness.UI.Components.Meta
+@using System.Globalization
+@using Harness.UI.Demo
+@using Harness.UI.Markdown
+@using Microsoft.AspNetCore.Components.Web
+@inject IJSRuntime Js
+
+@if (_open)
+{
+    <div class="meta-roster-menu__backdrop"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="Close"
+         @onkeydown="OnBackdropKeyDown"></div>
+    <div class="meta-roster-menu dyson-pop is-entered"
+         role="menu"
+         aria-label="Agent actions"
+         style="left:@(_left.ToString(CultureInfo.InvariantCulture))px;top:@(_top.ToString(CultureInfo.InvariantCulture))px;"
+         @ref="_menuEl"
+         @onclick:stopPropagation="true">
+        <button type="button"
+                class="meta-roster-menu__item"
+                role="menuitem"
+                aria-disabled="@(_canView ? "false" : "true")"
+                disabled="@(!_canView)"
+                title="@(_canView ? "View the full last report" : "No report yet")"
+                @onclick="OpenReport"
+                @ref="_firstItem">
+            View report
+        </button>
+        <button type="button"
+                class="meta-roster-menu__item"
+                role="menuitem"
+                aria-disabled="@(_canCancel ? "false" : "true")"
+                disabled="@(!_canCancel)"
+                title="@(_canCancel ? "Stop this agent now" : "Already finished")"
+                @onclick="CancelAsync">
+            Cancel execution
+        </button>
+    </div>
+}
+
+@if (_report is not null)
+{
+    <div class="meta-roster-report__backdrop"
+         tabindex="-1"
+         @ref="_reportBackdropEl"
+         @onclick="CloseReport"
+         @onkeydown="OnReportKeyDown">
+        <div class="meta-roster-report"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="meta-roster-report-title"
+             @onclick:stopPropagation="true">
+            <div class="meta-roster-report__header">
+                <h3 id="meta-roster-report-title">@(_reportTitle ?? "Report")</h3>
+                <button type="button"
+                        class="meta-roster-report__close"
+                        aria-label="Close"
+                        @onclick="CloseReport">×</button>
+            </div>
+            <div class="meta-roster-report__body turn-block__body">
+                @MarkdownRenderer.ToHtml(_report)
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _open;
+    private bool _canView;
+    private bool _canCancel;
+    private double _left;
+    private double _top;
+    private double _cursorX;
+    private double _cursorY;
+    private string? _report;
+    private string? _reportTitle;
+    private Func<Task>? _cancel;
+    private ElementReference _backdropEl;
+    private ElementReference _menuEl;
+    private ElementReference _firstItem;
+    private ElementReference _reportBackdropEl;
+    private bool _focusMenu;
+    private bool _focusReport;
+
+    /// <summary>Opens at the cursor. Disabled items stay visible and are not clickable.</summary>
+    public void Open(
+        double cursorX,
+        double cursorY,
+        bool canView,
+        bool canCancel,
+        string? report,
+        string? title,
+        Func<Task> cancel)
+    {
+        _cursorX = cursorX;
+        _cursorY = cursorY;
+        _left = cursorX;
+        _top = cursorY;
+        _canView = canView && !string.IsNullOrWhiteSpace(report);
+        _canCancel = canCancel;
+        _report = string.IsNullOrWhiteSpace(report) ? null : report;
+        _reportTitle = string.IsNullOrWhiteSpace(title) ? "Report" : title.Trim();
+        _cancel = cancel;
+        _open = true;
+        _focusMenu = true;
+    }
+
+    public void Close() => _open = false;
+
+    private void OpenReport()
+    {
+        if (!_canView || string.IsNullOrWhiteSpace(_report))
+            return;
+
+        _open = false;
+        _focusReport = true;
+    }
+
+    private void CloseReport()
+    {
+        _report = null;
+        _focusReport = false;
+    }
+
+    private async Task CancelAsync()
+    {
+        if (!_canCancel || _cancel is null)
+            return;
+
+        _open = false;
+        var cancel = _cancel;
+        _cancel = null;
+        await Task.Run(cancel);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusMenu && _open)
+        {
+            _focusMenu = false;
+            await ClampAsync();
+            try { await _firstItem.FocusAsync(); }
+            catch { /* menu may already be gone */ }
+        }
+
+        if (_focusReport && _report is not null)
+        {
+            _focusReport = false;
+            try { await _reportBackdropEl.FocusAsync(); }
+            catch { /* dialog may already be gone */ }
+        }
+    }
+
+    private async Task ClampAsync()
+    {
+        try
+        {
+            var box = await Js.InvokeAsync<MenuBox>("dysonRosterMenu.measure", _menuEl);
+            if (box is null)
+                return;
+
+            (_left, _top) = DysonSubagentHostLogic.ClampMenuToViewport(
+                _cursorX, _cursorY, box.Width, box.Height, box.ViewWidth, box.ViewHeight);
+            StateHasChanged();
+        }
+        catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException)
+        {
+            // Keep the cursor position if measure fails.
+        }
+    }
+
+    private void OnBackdropKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            Close();
+            return;
+        }
+
+        if (e.Key is "ArrowUp" or "ArrowDown" or "Tab")
+            _ = FocusItemAsync(e.Key == "ArrowUp" || (e.Key == "Tab" && e.ShiftKey) ? -1 : 1);
+    }
+
+    private void OnReportKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            CloseReport();
+    }
+
+    private async Task FocusItemAsync(int delta)
+    {
+        try { await Js.InvokeVoidAsync("dysonRosterMenu.focusItem", _menuEl, delta); }
+        catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException)
+        {
+        }
+    }
+
+    private sealed class MenuBox
+    {
+        public double Width { get; set; }
+        public double Height { get; set; }
+        public double ViewWidth { get; set; }
+        public double ViewHeight { get; set; }
+    }
+}

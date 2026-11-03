@@ -303,6 +303,34 @@ window.dysonStickyHeader = {
 };
 
 /** Stick-to-bottom helpers for `.chat-panel__turns`. Stick flag lives on the element so scroll can clear it synchronously (Blazor @onscroll is too late vs streaming AfterRender). */
+/** Roster context menu: measure for viewport clamp, move focus between items. */
+window.dysonRosterMenu = {
+  measure: function (el) {
+    if (!el) return null;
+    var rect = el.getBoundingClientRect();
+    return {
+      width: rect.width,
+      height: rect.height,
+      viewWidth: window.innerWidth,
+      viewHeight: window.innerHeight
+    };
+  },
+  focusItem: function (menu, delta) {
+    if (!menu) return;
+    var items = menu.querySelectorAll('[role="menuitem"]:not(:disabled)');
+    if (!items.length) return;
+    var current = document.activeElement;
+    var index = -1;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] === current) { index = i; break; }
+    }
+    var next = index < 0
+      ? (delta < 0 ? items.length - 1 : 0)
+      : (index + delta + items.length) % items.length;
+    items[next].focus();
+  }
+};
+
 window.dysonChat = {
   /** Default near-bottom threshold (px). Keep tight so a small upward scroll unsticks. */
   thresholdPx: 32,

@@ -58,6 +58,12 @@ public sealed class DysonTurnEntity
     /// </summary>
     public string? UserQuestionJson { get; set; }
 
+    /// <summary>
+    /// Meta DisplayInfo RequestSecureData card (keys, descriptions, outcome). Never a secret value.
+    /// Null on every other turn.
+    /// </summary>
+    public string? SecureDataRequestJson { get; set; }
+
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }
     public string? CompactToolHistory { get; set; }

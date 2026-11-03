@@ -4019,6 +4019,7 @@ public abstract class DysonAgentSession
                 DysonConversationActionsSerializer.Deserialize(row.ConversationActionsJson));
             turn.VisualizationId = row.VisualizationId;
             turn.UserQuestion = DysonUserQuestionSerializer.Deserialize(row.UserQuestionJson);
+            turn.SecureDataRequest = DysonSecureDataRequestSerializer.Deserialize(row.SecureDataRequestJson);
             DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
             turn.FinalizeIncompleteTools(
                 "Tool call did not complete (cancelled or interrupted).");
@@ -4571,7 +4572,8 @@ public abstract class DysonAgentSession
         string message,
         IReadOnlyList<DysonConversationAction>? actions = null,
         Guid? visualizationId = null,
-        DysonUserQuestion? userQuestion = null)
+        DysonUserQuestion? userQuestion = null,
+        DysonSecureDataRequest? secureDataRequest = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
         var now = DateTime.UtcNow;
@@ -4583,6 +4585,7 @@ public abstract class DysonAgentSession
             CompletedUtc = now,
             VisualizationId = visualizationId,
             UserQuestion = userQuestion,
+            SecureDataRequest = secureDataRequest,
         };
         if (actions is { Count: > 0 })
             turn.RestoreConversationActions(actions);
@@ -4660,6 +4663,77 @@ public abstract class DysonAgentSession
 
         TurnUpdated?.Invoke(this, updated!);
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Locks the RequestSecureData card for <paramref name="requestId"/> with a key-only outcome.
+    /// A second submit sees the outcome and fails. Returns the card as it was before the lock.
+    /// </summary>
+    public Result<DysonSecureDataRequest, string> TryRecordSecureDataOutcome(
+        Guid requestId,
+        DysonSecureDataOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        DysonAgentTurn? updated = null;
+        DysonSecureDataRequest? before = null;
+        lock (_userQuestionGate)
+        {
+            var turn = FindSecureDataTurn(requestId);
+            if (turn?.SecureDataRequest is not { } request)
+                return Result<DysonSecureDataRequest, string>.AsError("RequestSecureData: not found.");
+            if (request.Outcome is not null)
+                return Result<DysonSecureDataRequest, string>.AsError("RequestSecureData: already submitted.");
+
+            before = request;
+            turn.SecureDataRequest = request with { Outcome = outcome };
+            updated = turn;
+        }
+
+        TurnUpdated?.Invoke(this, updated!);
+        return Result<DysonSecureDataRequest, string>.AsValue(before!);
+    }
+
+    /// <summary>Clears the outcome only when it is still <paramref name="outcome"/> (failed send rollback).</summary>
+    public VoidResult<string> TryClearSecureDataOutcome(Guid requestId, DysonSecureDataOutcome outcome)
+    {
+        DysonAgentTurn? updated = null;
+        lock (_userQuestionGate)
+        {
+            var turn = FindSecureDataTurn(requestId);
+            if (turn?.SecureDataRequest is not { Outcome: not null } request)
+                return VoidResult<string>.AsError("RequestSecureData: not found.");
+            // By value, not reference: a re-materialized outcome (TurnUpdated persist / reload) must still unlock.
+            if (request.Outcome.CompletedUtc != outcome.CompletedUtc || request.Outcome.Cancelled != outcome.Cancelled)
+                return VoidResult<string>.AsError("RequestSecureData: outcome changed.");
+
+            turn.SecureDataRequest = request with { Outcome = null };
+            updated = turn;
+        }
+
+        TurnUpdated?.Invoke(this, updated!);
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>The live card for <paramref name="requestId"/>, or null.</summary>
+    public DysonSecureDataRequest? FindSecureDataRequest(Guid requestId)
+    {
+        lock (_userQuestionGate)
+            return FindSecureDataTurn(requestId)?.SecureDataRequest;
+    }
+
+    private DysonAgentTurn? FindSecureDataTurn(Guid requestId)
+    {
+        foreach (var turn in Turns)
+        {
+            if (turn.Kind == DysonAgentTurnKind.DisplayInfo
+                && turn.SecureDataRequest is { } request
+                && request.Id == requestId)
+            {
+                return turn;
+            }
+        }
+
+        return null;
     }
 
     private DysonAgentTurn? FindUserQuestionTurn(Guid questionId)

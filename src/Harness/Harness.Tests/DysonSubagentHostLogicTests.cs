@@ -467,6 +467,40 @@ public class DysonSubagentHostLogicTests
         {
             throw new InvalidOperationException("Model label shows only when the child label differs from the parent.");
         }
+
+        AssertRosterMenuRules();
+    }
+
+    private static void AssertRosterMenuRules()
+    {
+        if (DysonSubagentHostLogic.CanViewReport(null)
+            || DysonSubagentHostLogic.CanViewReport("  ")
+            || !DysonSubagentHostLogic.CanViewReport("Stopped by user.")
+            || !DysonSubagentHostLogic.CanViewReport("done"))
+        {
+            throw new InvalidOperationException("View report is enabled only for a non-empty last report.");
+        }
+
+        if (!DysonSubagentHostLogic.CanCancelExecution(DysonSessionStatus.Active)
+            || DysonSubagentHostLogic.CanCancelExecution(DysonSessionStatus.Completed)
+            || DysonSubagentHostLogic.CanCancelExecution(DysonSessionStatus.Stopped)
+            || DysonSubagentHostLogic.CanCancelExecution(DysonSessionStatus.Failed)
+            || DysonSubagentHostLogic.CanCancelExecution(DysonSessionStatus.Interrupted))
+        {
+            throw new InvalidOperationException("Cancel is enabled only while the session is not terminal.");
+        }
+
+        var inside = DysonSubagentHostLogic.ClampMenuToViewport(20, 30, 100, 40, 800, 600);
+        if (inside.Left != 20 || inside.Top != 30)
+            throw new InvalidOperationException("A menu that fits should stay at the cursor.");
+
+        var flip = DysonSubagentHostLogic.ClampMenuToViewport(790, 590, 100, 40, 800, 600);
+        if (flip.Left != 690 || flip.Top != 550)
+            throw new InvalidOperationException($"Menu near the far edge should flip, got {flip.Left},{flip.Top}.");
+
+        var tiny = DysonSubagentHostLogic.ClampMenuToViewport(0, 0, 500, 500, 100, 80);
+        if (tiny.Left != 8 || tiny.Top != 8)
+            throw new InvalidOperationException($"Oversized menu should pin to the margin, got {tiny.Left},{tiny.Top}.");
     }
 
     private static void AssertHasActiveDescendant()
