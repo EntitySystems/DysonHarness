@@ -68,13 +68,14 @@ sign_developer_id() {
   local entitlements="${CODESIGN_ENTITLEMENTS:-$ROOT/packaging/macos/entitlements.plist}"
   [[ -f "$entitlements" ]] || { echo "Missing entitlements: $entitlements" >&2; exit 1; }
 
-  # Everything in Contents/MacOS is nested code, including managed .dll files and JSON.
-  # Longest path first. `read` keeps the rest of the line, including spaces.
+  # Every file in Contents/MacOS is nested code. Signing the main executable
+  # seals that directory, so it has to be last.
+  local main="$APP/Contents/MacOS/DysonHarness"
   while IFS= read -r -d '' bin; do
-    printf '%08d %s\n' "${#bin}" "$bin"
-  done < <(find "$APP/Contents/MacOS" -type f -print0) | sort -nr | while read -r _len bin; do
+    [[ "$bin" == "$main" ]] && continue
     sign_one "$bin"
-  done
+  done < <(find "$APP/Contents/MacOS" -type f -print0)
+  sign_one "$main"
 
   if [[ -n "${CODESIGN_KEYCHAIN:-}" ]]; then
     codesign --force --timestamp --options runtime \
