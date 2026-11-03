@@ -34,7 +34,10 @@ public static class DysonSecureDataSubmission
         var root = session;
         while (root.Parent is not null)
             root = root.Parent;
-        if (outcome.Stored.Count > 0 && (repo is null || root.PersistenceId == Guid.Empty))
+        if (outcome.Stored.Count > 0
+            && (repo is null
+                || root.PersistenceId == Guid.Empty
+                || !string.Equals(root.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)))
             return Result<DysonSecureDataOutcome, string>.AsError("RequestSecureData: secure storage is not available.");
 
         var locked = session.TryRecordSecureDataOutcome(requestId, outcome);

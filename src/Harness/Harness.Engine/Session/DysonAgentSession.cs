@@ -4702,7 +4702,8 @@ public abstract class DysonAgentSession
             var turn = FindSecureDataTurn(requestId);
             if (turn?.SecureDataRequest is not { Outcome: not null } request)
                 return VoidResult<string>.AsError("RequestSecureData: not found.");
-            if (!ReferenceEquals(request.Outcome, outcome))
+            // By value, not reference: a re-materialized outcome (TurnUpdated persist / reload) must still unlock.
+            if (request.Outcome.CompletedUtc != outcome.CompletedUtc || request.Outcome.Cancelled != outcome.Cancelled)
                 return VoidResult<string>.AsError("RequestSecureData: outcome changed.");
 
             turn.SecureDataRequest = request with { Outcome = null };

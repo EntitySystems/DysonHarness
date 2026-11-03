@@ -294,6 +294,25 @@ public class DysonSessionSecretTests
         }
     }
 
+    [Fact]
+    public void Clear_outcome_matches_by_value_so_a_reloaded_outcome_still_unlocks()
+    {
+        var session = new StubSession(DysonAgentModes.MetaAgent, new DysonAgentSessionConfig(), Guid.NewGuid());
+        var card = session.AppendDisplayInfoTurn("Enter secrets", secureDataRequest: Request("a"));
+        var id = card.SecureDataRequest!.Id;
+        var outcome = new DysonSecureDataOutcome(false, ["a"], [], DateTime.UtcNow);
+        Assert.True(session.TryRecordSecureDataOutcome(id, outcome).IsSuccess);
+
+        var stale = outcome with { CompletedUtc = outcome.CompletedUtc.AddSeconds(-1) };
+        Assert.True(session.TryClearSecureDataOutcome(id, stale).IsError);
+
+        var copy = DysonSecureDataRequestSerializer.Deserialize(
+            DysonSecureDataRequestSerializer.Serialize(card.SecureDataRequest))!.Outcome!;
+        Assert.False(ReferenceEquals(copy, outcome));
+        Assert.True(session.TryClearSecureDataOutcome(id, copy).IsSuccess);
+        Assert.Null(card.SecureDataRequest!.Outcome);
+    }
+
     private static DysonSecureDataRequest Request(params string[] keys) =>
         new(Guid.NewGuid(), keys.Select(k => new DysonSecureDataField(k, "Desc " + k)).ToList(), null);
 
