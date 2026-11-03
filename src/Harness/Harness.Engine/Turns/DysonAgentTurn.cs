@@ -118,6 +118,12 @@ public sealed class DysonAgentTurn
     /// </summary>
     public DysonUserQuestion? UserQuestion { get; set; }
 
+    /// <summary>
+    /// RequestSecureData card on a DisplayInfo bubble (keys, descriptions, outcome). Never a value.
+    /// Null on every other turn.
+    /// </summary>
+    public DysonSecureDataRequest? SecureDataRequest { get; set; }
+
     /// <summary>UTC when this turn began (live create or restored from persistence).</summary>
     public DateTime StartedUtc { get; set; }
 

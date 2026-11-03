@@ -45,63 +45,110 @@
                         @foreach (var row in _rows)
                         {
                             var question = row;
-                            var draft = Draft(question.QuestionGuid);
                             var busy = _busy.Contains(question.QuestionGuid);
-                            <li class="pending-questions__item" @key="question.Id">
-                                <div class="pending-questions__title">@question.Question</div>
-                                @if (!string.IsNullOrWhiteSpace(question.Message))
-                                {
-                                    <div class="pending-questions__message">@question.Message</div>
-                                }
-                                @foreach (var choice in question.Choices)
-                                {
-                                    var label = choice;
-                                    var selected = draft.IsSelected(label);
-                                    <label class="pending-questions__choice">
-                                        @if (question.MultiSelect)
-                                        {
-                                            <input type="checkbox"
-                                                   checked="@selected"
-                                                   disabled="@busy"
-                                                   @onchange="e => ToggleChoice(question, label, e)" />
-                                        }
-                                        else
-                                        {
-                                            <input type="radio"
-                                                   name="@($"pq-{question.QuestionGuid:N}")"
-                                                   checked="@selected"
-                                                   disabled="@busy"
-                                                   @onchange="() => SelectSingle(question, label)" />
-                                        }
-                                        <span>@label</span>
-                                    </label>
-                                }
-                                @if (question.AllowCustomAnswer)
-                                {
-                                    <label class="pending-questions__other">
-                                        <span>Other</span>
-                                        <textarea rows="2"
-                                                  maxlength="2000"
-                                                  disabled="@busy"
-                                                  value="@draft.Custom"
-                                                  @oninput="e => SetCustom(question, e)"></textarea>
-                                    </label>
-                                }
-                                <div class="pending-questions__actions">
+                            if (question.Kind == DysonPendingUserQuestionKind.SecureData)
+                            {
+                                var fields = DecodeSecureFields(question);
+                                var open = _selectedSecureId == question.QuestionGuid;
+                                <li class="pending-questions__item pending-questions__item--secure" @key="question.Id">
                                     <button type="button"
-                                            class="btn pending-questions__answer"
-                                            disabled="@(busy || !CanAnswer(question))"
-                                            @onclick="() => AnswerAsync(question)">Answer</button>
-                                    <button type="button"
-                                            class="btn pending-questions__dismiss"
+                                            class="pending-questions__secure-open"
+                                            aria-expanded="@(open ? "true" : "false")"
                                             disabled="@busy"
-                                            @onclick="() => DismissAsync(question)">Dismiss</button>
-                                </div>
-                                @if (_errors.TryGetValue(question.QuestionGuid, out var rowError))
-                                {
-                                    <div class="pending-questions__error">@rowError</div>
-                                }
-                            </li>
+                                            @onclick="() => SelectSecure(question.QuestionGuid)">
+                                        <span class="pending-questions__badge">
+                                            <img src="icons/eye.svg" alt="" />
+                                            Credentials
+                                        </span>
+                                        <span class="pending-questions__title">@question.Question</span>
+                                    </button>
+                                    <ul class="pending-questions__secure-fields">
+                                        @foreach (var field in fields)
+                                        {
+                                            <li>
+                                                <span class="pending-questions__secure-key">@field.Key</span>
+                                                <span>@field.Description</span>
+                                            </li>
+                                        }
+                                    </ul>
+                                    @if (open)
+                                    {
+                                        <SecureDataRequestCard RequestId="question.QuestionGuid"
+                                                               Fields="fields"
+                                                               Outcome="null"
+                                                               OnCompleted="LoadAsync" />
+                                    }
+                                    <div class="pending-questions__actions">
+                                        <button type="button"
+                                                class="btn pending-questions__dismiss"
+                                                disabled="@busy"
+                                                @onclick="() => DismissAsync(question)">Dismiss</button>
+                                    </div>
+                                    @if (_errors.TryGetValue(question.QuestionGuid, out var secureError))
+                                    {
+                                        <div class="pending-questions__error">@secureError</div>
+                                    }
+                                </li>
+                            }
+                            else
+                            {
+                                var draft = Draft(question.QuestionGuid);
+                                <li class="pending-questions__item" @key="question.Id">
+                                    <div class="pending-questions__title">@question.Question</div>
+                                    @if (!string.IsNullOrWhiteSpace(question.Message))
+                                    {
+                                        <div class="pending-questions__message">@question.Message</div>
+                                    }
+                                    @foreach (var choice in question.Choices)
+                                    {
+                                        var label = choice;
+                                        var selected = draft.IsSelected(label);
+                                        <label class="pending-questions__choice">
+                                            @if (question.MultiSelect)
+                                            {
+                                                <input type="checkbox"
+                                                       checked="@selected"
+                                                       disabled="@busy"
+                                                       @onchange="e => ToggleChoice(question, label, e)" />
+                                            }
+                                            else
+                                            {
+                                                <input type="radio"
+                                                       name="@($"pq-{question.QuestionGuid:N}")"
+                                                       checked="@selected"
+                                                       disabled="@busy"
+                                                       @onchange="() => SelectSingle(question, label)" />
+                                            }
+                                            <span>@label</span>
+                                        </label>
+                                    }
+                                    @if (question.AllowCustomAnswer)
+                                    {
+                                        <label class="pending-questions__other">
+                                            <span>Other</span>
+                                            <textarea rows="2"
+                                                      maxlength="2000"
+                                                      disabled="@busy"
+                                                      value="@draft.Custom"
+                                                      @oninput="e => SetCustom(question, e)"></textarea>
+                                        </label>
+                                    }
+                                    <div class="pending-questions__actions">
+                                        <button type="button"
+                                                class="btn pending-questions__answer"
+                                                disabled="@(busy || !CanAnswer(question))"
+                                                @onclick="() => AnswerAsync(question)">Answer</button>
+                                        <button type="button"
+                                                class="btn pending-questions__dismiss"
+                                                disabled="@busy"
+                                                @onclick="() => DismissAsync(question)">Dismiss</button>
+                                    </div>
+                                    @if (_errors.TryGetValue(question.QuestionGuid, out var rowError))
+                                    {
+                                        <div class="pending-questions__error">@rowError</div>
+                                    }
+                                </li>
+                            }
                         }
                     </ul>
                 }
@@ -126,6 +173,7 @@
     private readonly Dictionary<Guid, QuestionDraft> _drafts = [];
     private readonly HashSet<Guid> _busy = [];
     private readonly Dictionary<Guid, string> _errors = [];
+    private Guid? _selectedSecureId;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -264,6 +312,12 @@
 
     private async Task DismissAsync(DysonPendingUserQuestion row)
     {
+        if (row.Kind == DysonPendingUserQuestionKind.SecureData)
+        {
+            await CancelSecureAsync(row);
+            return;
+        }
+
         if (SessionId is not Guid sessionId || _busy.Contains(row.QuestionGuid))
             return;
 
@@ -282,6 +336,50 @@
                 DysonBusScopes.Session(sessionId),
                 new DysonPendingUserQuestionsChangedEvent(sessionId));
             _drafts.Remove(row.QuestionGuid);
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy.Remove(row.QuestionGuid);
+        }
+    }
+
+    private void SelectSecure(Guid requestId) =>
+        _selectedSecureId = _selectedSecureId == requestId ? null : requestId;
+
+    private static List<DysonSecureDataField> DecodeSecureFields(DysonPendingUserQuestion row)
+    {
+        var fields = new List<DysonSecureDataField>(row.Choices.Count);
+        foreach (var choice in row.Choices)
+        {
+            if (DysonSecureDataRequest.DecodePendingChoice(choice) is { } field)
+                fields.Add(field);
+        }
+
+        return fields;
+    }
+
+    private async Task CancelSecureAsync(DysonPendingUserQuestion row)
+    {
+        if (_busy.Contains(row.QuestionGuid))
+            return;
+
+        _busy.Add(row.QuestionGuid);
+        _errors.Remove(row.QuestionGuid);
+        try
+        {
+            var result = await Host.SubmitSecureDataAsync(
+                row.QuestionGuid,
+                new Dictionary<string, string>(),
+                cancelled: true);
+            if (result.IsError)
+            {
+                _errors[row.QuestionGuid] = result.Error ?? "Could not cancel.";
+                return;
+            }
+
+            if (_selectedSecureId == row.QuestionGuid)
+                _selectedSecureId = null;
             await LoadAsync();
         }
         finally

@@ -227,6 +227,12 @@ public class DysonAgentSessionConfig
     public IDysonPendingUserQuestionRepository? PendingUserQuestions { get; set; }
 
     /// <summary>
+    /// Optional RequestSecureData store (root Meta session rows). Null ⇒ the secure-data tools return
+    /// "not available". Children share this config instance.
+    /// </summary>
+    public IDysonSessionSecretRepository? SessionSecrets { get; set; }
+
+    /// <summary>
     /// Optional workdir-scoped custom MCP host (<c>.dyson/mcp</c>).
     /// When set and <see cref="DysonCustomMcpHost.McpActive"/>, namespaced tools are merged into the catalog.
     /// </summary>

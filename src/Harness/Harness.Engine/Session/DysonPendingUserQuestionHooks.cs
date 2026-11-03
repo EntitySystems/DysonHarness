@@ -7,9 +7,14 @@ namespace DysonHarness;
 public static class DysonPendingUserQuestionHooks
 {
     public static bool IsPendingQuestionTurn(DysonAgentTurn turn) =>
-        turn.Kind == DysonAgentTurnKind.DisplayInfo && turn.UserQuestion is { Answer: null };
+        turn.Kind == DysonAgentTurnKind.DisplayInfo
+        && (turn.UserQuestion is { Answer: null } || turn.SecureDataRequest is { Outcome: null });
 
-    public static async Task<Result<ulong, string>> InsertAsync(
+    /// <summary>
+    /// Inserts a <see cref="DysonPendingUserQuestionKind.SecureData"/> row: title, bubble text, and
+    /// <c>{key, description}</c> entries. No value exists yet and none is ever written here.
+    /// </summary>
+    public static async Task<Result<ulong, string>> InsertSecureDataAsync(
         DysonAgentSession session,
         DysonAgentTurn turn,
         CancellationToken ct = default)
@@ -22,7 +27,51 @@ public static class DysonPendingUserQuestionHooks
             return Result<ulong, string>.AsError("Pending user questions are not configured.");
         if (session.PersistenceId == Guid.Empty)
             return Result<ulong, string>.AsError("Session is not persisted.");
-        if (!IsPendingQuestionTurn(turn) || turn.UserQuestion is not { } question)
+        if (turn.Kind != DysonAgentTurnKind.DisplayInfo || turn.SecureDataRequest is not { Outcome: null } request)
+            return Result<ulong, string>.AsError("Turn is not an open secure data request.");
+
+        var created = await repo.CreateAsync(
+            new DysonPendingUserQuestion(
+                0,
+                session.PersistenceId,
+                turn.Id,
+                request.Id,
+                turn.AssistantText ?? DysonSecureDataRequest.PendingTitle,
+                DysonSecureDataRequest.PendingTitle,
+                request.Fields.Select(DysonSecureDataRequest.EncodePendingChoice).ToList(),
+                MultiSelect: false,
+                AllowCustomAnswer: false,
+                SubagentId: null,
+                EventId: null,
+                DateTime.UtcNow,
+                DysonPendingUserQuestionKind.SecureData),
+            ct).ConfigureAwait(false);
+
+        if (!created.IsError)
+            session.Config.Bus?.Publish(
+                DysonBusScopes.Session(session.PersistenceId),
+                new DysonPendingUserQuestionsChangedEvent(session.PersistenceId));
+
+        return created;
+    }
+
+    public static async Task<Result<ulong, string>> InsertAsync(
+        DysonAgentSession session,
+        DysonAgentTurn turn,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(turn);
+
+        if (turn.SecureDataRequest is not null)
+            return await InsertSecureDataAsync(session, turn, ct).ConfigureAwait(false);
+
+        var repo = session.Config.PendingUserQuestions;
+        if (repo is null)
+            return Result<ulong, string>.AsError("Pending user questions are not configured.");
+        if (session.PersistenceId == Guid.Empty)
+            return Result<ulong, string>.AsError("Session is not persisted.");
+        if (!IsPendingQuestionTurn(turn) || turn.UserQuestion is not { Answer: null } question)
             return Result<ulong, string>.AsError("Turn is not an unanswered question.");
 
         int? subagentId = null;

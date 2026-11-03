@@ -275,6 +275,9 @@ public static class DysonUiWebHost
         // Read version.json before any circuit exists (rules_blazor_circuit).
         _ = DysonAppVersionInfo.Local;
 
+        // Backstop for RequestSecureData temp files a crash left behind.
+        _ = Task.Run(() => DysonSecureDataFiles.SweepStale());
+
         app.Lifetime.ApplicationStopping.Register(() =>
         {
             try
@@ -297,6 +300,7 @@ public static class DysonUiWebHost
                 // ignore shutdown races
             }
 
+            DysonSecureDataFiles.DeleteAllTracked();
             DysonPhononSpeech.StopSidecar();
             DysonCrispSpeech.StopSidecar();
             DysonNemotronSpeech.Stop();

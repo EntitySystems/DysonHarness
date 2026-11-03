@@ -31,6 +31,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonMetaScratchFileRepository? _scratchFiles;
     private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory;
     private readonly IDysonPendingUserQuestionRepository? _pendingUserQuestions;
+    private readonly IDysonSessionSecretRepository? _sessionSecrets;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -152,7 +153,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         FileStorageConnectService? fileStorageConnect = null,
         IDysonMetaScratchFileRepository? scratchFiles = null,
         IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null,
-        IDysonPendingUserQuestionRepository? pendingUserQuestions = null)
+        IDysonPendingUserQuestionRepository? pendingUserQuestions = null,
+        IDysonSessionSecretRepository? sessionSecrets = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -163,6 +165,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _scratchFiles = scratchFiles;
         _voiceSidecarMemory = voiceSidecarMemory;
         _pendingUserQuestions = pendingUserQuestions;
+        _sessionSecrets = sessionSecrets;
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -3666,6 +3669,61 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
+    /// Thin adapter for the RequestSecureData card (inline and in the Questions modal). The engine stores the
+    /// values and formats the answer; <paramref name="values"/> is dropped after this call and never put on a turn.
+    /// A failed send unlocks the card; values already stored stay stored (a resubmit overwrites them).
+    /// </summary>
+    public async Task<VoidResult<string>> SubmitSecureDataAsync(
+        Guid requestId,
+        IReadOnlyDictionary<string, string> values,
+        bool cancelled,
+        CancellationToken cancellationToken = default)
+    {
+        var session = _session;
+        if (session is null)
+            return VoidResult<string>.AsError("No active session.");
+        var sessionId = session.PersistenceId;
+        if (sessionId == Guid.Empty)
+            return VoidResult<string>.AsError("Session is not persisted.");
+
+        // DB work off the circuit (rules_blazor_circuit).
+        var recorded = await Task.Run(
+                () => DysonSecureDataSubmission.RecordAsync(session, requestId, values, cancelled, cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(true);
+        if (recorded.IsError)
+            return VoidResult<string>.AsError(recorded.Error);
+
+        var outcome = recorded.Value;
+        var turn = DysonSecureDataSubmission.CreateAnswerTurn(requestId, outcome);
+        AppendAwaitingUserAnswerReminders(turn, session);
+
+        VoidResult<string> started;
+        if (IsSessionBusy(sessionId) || session.HasAnySummarizingTurn)
+            started = EnqueuePrompt(sessionId, turn);
+        else
+            started = await PromptHarnessTurnOnSessionAsync(session, turn, [], cancellationToken)
+                .ConfigureAwait(true);
+
+        if (started.IsError)
+        {
+            session.TryClearSecureDataOutcome(requestId, outcome);
+            LastError = started.Error;
+            Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return started;
+        }
+
+        var deleted = await DysonPendingUserQuestionHooks.DeleteAnsweredAsync(session, requestId, CancellationToken.None)
+            .ConfigureAwait(true);
+        if (deleted.IsError)
+            session.AppendLog($"Pending secure data row not deleted: {deleted.Error}");
+
+        LastError = null;
+        Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
     /// Consumes buffered Plan-mode Explore completion reports into a
     /// <see cref="DysonAgentTurnKind.BeginBuildPlan"/> turn, then switches to Work.
     /// Busy-rejects when a turn is in flight.
@@ -5506,6 +5564,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             MetaScratchFiles = _scratchFiles,
             VoiceSidecarMemory = _voiceSidecarMemory,
             PendingUserQuestions = _pendingUserQuestions,
+            SessionSecrets = _sessionSecrets,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,

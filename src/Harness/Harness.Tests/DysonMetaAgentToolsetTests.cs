@@ -95,6 +95,25 @@ public class DysonMetaAgentToolsetTests
         Assert.False(pipeline.Tools.ContainsKey("WriteTempFile"));
         Assert.False(pipeline.Tools.ContainsKey("ReadTempFile"));
         Assert.False(pipeline.Tools.ContainsKey("PostUserQuestion"));
+        Assert.False(pipeline.Tools.ContainsKey("RequestSecureData"));
+        Assert.True(pipeline.Tools.ContainsKey("ListSecureDataKeys"));
+        Assert.True(pipeline.Tools.ContainsKey("WriteSecureDataToFile"));
+        Assert.True(pipeline.Tools.ContainsKey("DeleteSecureData"));
+    }
+
+    [Fact]
+    public void Secure_data_tools_are_meta_family_only()
+    {
+        var meta = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent);
+        foreach (var name in new[] { "RequestSecureData", "ListSecureDataKeys", "WriteSecureDataToFile", "DeleteSecureData" })
+            Assert.True(meta.Tools.ContainsKey(name), name);
+
+        foreach (var mode in new[] { DysonAgentModes.Work, DysonAgentModes.Explore, DysonAgentModes.Drone })
+        {
+            var pipeline = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), mode);
+            foreach (var name in new[] { "RequestSecureData", "ListSecureDataKeys", "WriteSecureDataToFile", "DeleteSecureData" })
+                Assert.False(pipeline.Tools.ContainsKey(name), $"{mode}: {name}");
+        }
     }
 
     [Fact]

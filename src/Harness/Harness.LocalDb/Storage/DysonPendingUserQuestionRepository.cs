@@ -113,6 +113,7 @@ public sealed class DysonPendingUserQuestionRepository(
                 QuestionGuid = question.QuestionGuid,
                 Message = message,
                 Question = title,
+                Kind = question.Kind,
                 Choices = StringListJsonValueConverter.Normalize(question.Choices),
                 MultiSelect = question.MultiSelect,
                 AllowCustomAnswer = question.AllowCustomAnswer,
@@ -272,5 +273,6 @@ public sealed class DysonPendingUserQuestionRepository(
             entity.AllowCustomAnswer,
             entity.SubagentId,
             entity.EventId,
-            entity.CreatedUtc);
+            entity.CreatedUtc,
+            entity.Kind);
 }
