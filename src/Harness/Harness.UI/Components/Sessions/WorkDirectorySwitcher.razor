@@ -167,10 +167,19 @@
                     || w.AbsolutePath.Contains(term, StringComparison.OrdinalIgnoreCase));
             }
 
-            return query
-                .OrderBy(w => w.Name, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            return query.ToList();
         }
+    }
+
+    private void MoveToFront(Guid id)
+    {
+        var index = _items.FindIndex(w => w.Id == id);
+        if (index <= 0)
+            return;
+
+        var item = _items[index];
+        _items.RemoveAt(index);
+        _items.Insert(0, item);
     }
 
     protected override async Task OnInitializedAsync() => await RefreshAsync();
@@ -259,7 +268,10 @@
             if (touch.IsError)
                 _error = touch.Error;
             else
+            {
+                MoveToFront(id);
                 await WorkDirectoryService.RefreshGitOriginAsync(id);
+            }
 
             await ActiveWorkDirectoryIdChanged.InvokeAsync(id);
             if (ActiveWorkDirectoryId != id)
@@ -312,7 +324,9 @@
         try
         {
             await RefreshAsync();
-            await WorkDirs.TouchOpenedAsync(create.Value);
+            var touch = await WorkDirs.TouchOpenedAsync(create.Value);
+            if (!touch.IsError)
+                MoveToFront(create.Value);
             await WorkDirectoryService.RefreshGitOriginAsync(create.Value);
             await ActiveWorkDirectoryIdChanged.InvokeAsync(create.Value);
             if (ActiveWorkDirectoryId != create.Value)
