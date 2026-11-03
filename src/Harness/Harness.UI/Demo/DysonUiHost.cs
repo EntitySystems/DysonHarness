@@ -4739,6 +4739,76 @@ public sealed class DysonUiHost : IAsyncDisposable
         };
     }
 
+    /// <summary>
+    /// Full last report for the roster menu. Null when the session is not in the host registry
+    /// or has no report. Not the truncated roster preview.
+    /// </summary>
+    public string? GetSubagentLastReport(Guid persistenceId)
+    {
+        if (persistenceId == Guid.Empty)
+            return null;
+        if (!_sessionsById.TryGetValue(persistenceId, out var session))
+            return null;
+        return string.IsNullOrWhiteSpace(session.LastReportSummary) ? null : session.LastReportSummary;
+    }
+
+    /// <summary>
+    /// Stops one live child (and its descendants) the same way <see cref="StopAllExecution"/>
+    /// stops a focused child: cancel in-flight work, <c>StopSubagentAsync</c>, persist Stopped.
+    /// Does not discard a worktree and does not clear the parent's prompt queue.
+    /// No-op when the id is unknown or already terminal.
+    /// </summary>
+    public async Task StopRosterAgentAsync(Guid persistenceId)
+    {
+        if (persistenceId == Guid.Empty)
+            return;
+        if (!_sessionsById.TryGetValue(persistenceId, out var child))
+            return;
+        if (child.IsTerminal)
+            return;
+
+        MarkUserStoppedTree(child);
+        await StopRosterAgentCoreAsync(child).ConfigureAwait(false);
+        Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.SessionGraph);
+    }
+
+    private async Task StopRosterAgentCoreAsync(DysonAgentSession child)
+    {
+        await StopAllDescendantsAsync(child).ConfigureAwait(false);
+
+        if (child.PersistenceId != Guid.Empty)
+        {
+            ClearPromptQueue(child.PersistenceId);
+            DiscardPendingReports(child.PersistenceId);
+            CancelTaskLifecycleEvaluate(child.PersistenceId);
+            if (IsRuntimeOwned(child.PersistenceId) && TryGetAttachedRuntime(out var runtime))
+                runtime.CancelPrompt(child.PersistenceId);
+            else if (_promptCtsBySession.TryGetValue(child.PersistenceId, out var cts))
+                cts.Cancel();
+        }
+
+        // Parent is in-memory only (AttachChild). Sessions loaded from storage have it null;
+        // the stored id is the same fallback GetSubagentCardState uses.
+        var parent = child.Parent;
+        if (parent is null
+            && ResolveStoredParentId(child) is Guid parentId
+            && _sessionsById.TryGetValue(parentId, out var storedParent))
+        {
+            parent = storedParent;
+        }
+
+        if (parent is not null && child.Id > 0 && !child.IsTerminal)
+        {
+            var stopped = await parent.StopSubagentAsync(child.Id, "Stopped by user.")
+                .ConfigureAwait(false);
+            if (!stopped.IsError)
+                await PersistStoppedSessionAsync(child).ConfigureAwait(false);
+        }
+
+        if (child.PersistenceId != Guid.Empty)
+            DiscardPendingReports(child.PersistenceId);
+    }
+
     /// <summary>Cancels the in-flight <see cref="PromptAsync"/> for the focused session when busy.</summary>
     /// <remarks>Does not clear the per-session prompt queue; draining continues after cancel settles.</remarks>
     public void CancelPrompt()
