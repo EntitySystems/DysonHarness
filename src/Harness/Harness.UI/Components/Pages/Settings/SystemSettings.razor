@@ -48,9 +48,7 @@
             <li class="settings-facts__row">
                 <span class="settings-facts__label">In-app install</span>
                 <span class="settings-facts__value">
-                    @(OperatingSystem.IsWindows() && Local.IsStampedRelease
-                        ? "Available on this Windows build"
-                        : "Unavailable (development or non-Windows)")
+                    @InAppInstallLabel
                 </span>
             </li>
         </ul>
@@ -117,9 +115,16 @@
         if (result.IsInAppInstallEligible)
             return "A newer release is available. The standard update prompt is available.";
 
-        if (!OperatingSystem.IsWindows() || !DysonAppVersionInfo.Local.IsStampedRelease)
-            return "The remote release is available, but in-app installation is unavailable on this development or non-Windows build.";
+        if (!DysonAppUpdateService.IsInAppInstallSupported(DysonAppVersionInfo.Local))
+            return "The remote release is available, but in-app installation is unavailable on this build.";
 
         return "You’re up to date.";
     }
+
+    private static string InAppInstallLabel =>
+        !DysonAppUpdateService.IsInAppInstallSupported(Local)
+            ? "Unavailable (development or unsupported platform)"
+            : OperatingSystem.IsMacOS()
+                ? "Available on this Mac"
+                : "Available on this Windows build";
 }
