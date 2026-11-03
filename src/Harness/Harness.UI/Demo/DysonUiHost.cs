@@ -4729,7 +4729,17 @@ public sealed class DysonUiHost : IAsyncDisposable
                 cts.Cancel();
         }
 
-        if (child.Parent is { } parent && child.Id > 0 && !child.IsTerminal)
+        // Parent is in-memory only (AttachChild). Sessions loaded from storage have it null;
+        // the stored id is the same fallback GetSubagentCardState uses.
+        var parent = child.Parent;
+        if (parent is null
+            && ResolveStoredParentId(child) is Guid parentId
+            && _sessionsById.TryGetValue(parentId, out var storedParent))
+        {
+            parent = storedParent;
+        }
+
+        if (parent is not null && child.Id > 0 && !child.IsTerminal)
         {
             var stopped = await parent.StopSubagentAsync(child.Id, "Stopped by user.")
                 .ConfigureAwait(false);
