@@ -125,7 +125,7 @@ Desktop / CefSharp packaging details: [webview.md](webview.md). MSI authoring li
 
 ## macOS notes
 
-- Prefer the `.pkg`. It installs `DysonHarness.app` into `/Applications` and asks for an administrator password.
+- Prefer the `.pkg`. It installs `DysonHarness.app` into `/Applications` and asks for an administrator password. A preview build is named **Dyson Harness (Preview)** in Finder, the Dock, and the window title. A stable build stays **Dyson Harness**. Both use the same path, `/Applications/DysonHarness.app`.
 - The zip is the same notarized app, for a copy that does not use the installer.
 - Continuous release signs the app with **Developer ID Application** (hardened runtime, `packaging/macos/entitlements.plist`), builds the pkg with **Developer ID Installer**, then notarizes and staples both. The credentials are repository secrets, not files in this repo: `APPLE_TEAM_ID`, `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_API_PRIVATE_KEY`.
 - Pull-request CI and a local `scripts/bundle-macos-app.sh` stay ad-hoc signed. Gatekeeper still asks for a right-click Open on those builds. The macOS publish job fails if any of the secrets above is empty, and that failure blocks the whole continuous release.

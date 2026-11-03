@@ -349,7 +349,7 @@ jobs:
           | **Commit** | \`${GITHUB_SHA}\` (\`${SHORT_SHA}\`) |
           | **Workflow** | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |
 
-          **Windows:** prefer the MSI (\`DysonHarness-${VERSION}-win-x64.msi\`) for a per-user install (Start Menu shortcut + Apps & Features as **Dyson Harness**, manufacturer **Entity Systems**); zip remains portable. VC++ 2022 x64 redistributable required. **Linux:** unzip and run \`Harness.UI\`. **macOS:** install \`DysonHarness-${VERSION}-osx-arm64.pkg\` (Apple Silicon) or \`DysonHarness-${VERSION}-osx-x64.pkg\` (Intel). The package is Developer ID signed and notarized and installs \`DysonHarness.app\` into \`/Applications\`. The zip is that same stapled app. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
+          **Windows:** prefer the MSI (\`DysonHarness-${VERSION}-win-x64.msi\`) for a per-user install (Start Menu shortcut + Apps & Features as **Dyson Harness**, manufacturer **Entity Systems**); zip remains portable. VC++ 2022 x64 redistributable required. **Linux:** unzip and run \`Harness.UI\`. **macOS:** install \`DysonHarness-${VERSION}-osx-arm64.pkg\` (Apple Silicon) or \`DysonHarness-${VERSION}-osx-x64.pkg\` (Intel). The package is Developer ID signed and notarized and installs \`DysonHarness.app\` into \`/Applications\`. Preview builds are named **Dyson Harness (Preview)** in Finder, the Dock, and the window title. The zip is that same stapled app. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
           EOF
           sed -i 's/^          //' "${RUNNER_TEMP}/continuous-notes.md"
 
