@@ -7,7 +7,7 @@ Continuous publishing has two tracks:
 | `master` | `stable` | Full release (not pre-release) |
 | `release-preview` | `preview` | Pre-release (`--prerelease`) |
 
-Every push to either branch publishes self-contained zips (all RIDs) and a Windows **MSI** (`win-x64`) tagged with that run’s CalVer (`YYYY.M.run_number`). Pushes to other branches (for example `dev-bleeding-edge`) do not run continuous release.
+Every push to either branch publishes self-contained zips (all RIDs), a Windows **MSI** (`win-x64`), and signed macOS **packages** (`osx-arm64`, `osx-x64`) tagged with that run’s CalVer (`YYYY.M.run_number`). Pushes to other branches (for example `dev-bleeding-edge`) do not run continuous release.
 
 | RID | Publish project | Entrypoint |
 | --- | --------------- | ---------- |
@@ -32,15 +32,15 @@ The channels are retained independently. For each older selected release, cleanu
 
 - Releases: https://github.com/EntitySystems/DysonHarness/releases
 - Prefer the latest **stable** (non-prerelease) MSI for production installs; preview builds are marked as GitHub pre-releases
-- Every publish output (so every zip and the MSI payload) also contains `LICENSE` and `THIRD-PARTY-NOTICES.md` (MIT attribution for the CLIProxyAPI-derived native xAI provider).
-- Asset names: `DysonHarness-{version}-{rid}.zip` (all RIDs); `DysonHarness-{version}-win-x64.msi` (Windows installer)
+- Every publish output (so every zip, the MSI, and the macOS pkg) also contains `LICENSE` and `THIRD-PARTY-NOTICES.md` (MIT attribution for the CLIProxyAPI-derived native xAI provider).
+- Asset names: `DysonHarness-{version}-{rid}.zip` (all RIDs); `DysonHarness-{version}-win-x64.msi` (Windows installer); `DysonHarness-{version}-osx-arm64.pkg` and `DysonHarness-{version}-osx-x64.pkg` (macOS installers)
 
 | RID | Runner / OS | Notes |
 | --- | ----------- | ----- |
 | `win-x64` | Windows | CEF shell + agent browser (`net10.0-windows`); zip + MSI |
 | `linux-x64` | Linux | Blazor host only (no agent browser) |
-| `osx-arm64` | macOS Apple Silicon | WKWebView shell + agent browser window. Unzip and open `DysonHarness.app`. Ad-hoc signed; Gatekeeper needs right-click Open the first time |
-| `osx-x64` | macOS Intel (cross-published from the Apple Silicon runner, including `swiftc -target x86_64-apple-macos14`) | Same `.app` as arm64 |
+| `osx-arm64` | macOS Apple Silicon | WKWebView shell + agent browser window. Prefer `DysonHarness-{version}-osx-arm64.pkg` (installs to `/Applications`). The zip is the same stapled app |
+| `osx-x64` | macOS Intel (cross-published from the Apple Silicon runner, including `swiftc -target x86_64-apple-macos14`) | Same `.app` and a matching `.pkg` |
 
 Publish uses `--self-contained true` / `-p:SelfContained=true` (runtime included; no separate .NET install).
 
@@ -107,11 +107,11 @@ Patch instructions for [dysonharness.com](https://dysonharness.com) (Website rep
 1. **Windows (recommended):** download `DysonHarness-{version}-win-x64.msi` and install (default is per-user; no elevation). A successful install also starts the app automatically. You can launch again from the Start Menu shortcut **Dyson Harness**, or run `%LocalAppData%\Programs\DysonHarness\DysonHarness.exe`.
 2. **Windows (portable):** download the `win-x64` zip, unzip, and run `DysonHarness.exe` (desktop CEF shell; no separate browser URL needed).
 3. **Linux:** download the zip, unzip, run `Harness.UI`, and open the URL printed in the console (Kestrel default http://localhost:5000; there is no `launchSettings.json` in the publish output) if the browser does not open automatically. Local debug (`dotnet run`, Development) uses http://localhost:5181 instead — see [UI](../ui/README.md).
-4. **macOS:** download the `osx-arm64` or `osx-x64` zip, unzip, and open `DysonHarness.app`. The WKWebView shell binds an ephemeral loopback address, same as the Windows desktop shell. The bundle is ad-hoc signed; Gatekeeper asks for a right-click Open the first time. Details: [webview.md](webview.md).
+4. **macOS:** download `DysonHarness-{version}-osx-arm64.pkg` (Apple Silicon) or `DysonHarness-{version}-osx-x64.pkg` (Intel) and install. The package puts `DysonHarness.app` in `/Applications` and asks for an administrator password. The WKWebView shell binds an ephemeral loopback address, same as the Windows desktop shell. The zip is that same app if you do not want the installer. Details: [webview.md](webview.md).
 
 Builds on `master` and `release-preview` resolve app mode to **Prod** (`DysonProd` app data) via `GITHUB_REF_NAME` in the resolve-app-mode scripts — channel is independent of Dev/Test/Prod. See [storage/models.md](../storage/models.md).
 
-Speech (Settings → Voice) is not in the zip or the MSI, and the release workflow downloads nothing for it. Runtimes and weights are downloaded at install time, per model the user checks, from the URLs and hashes in `packaging/speech/manifest.json`, into `{DysonProd}/speech/{stable|preview}`. Python installs fetch CPython, CPU torch, and the Phonon-2 (Fermion BPS packed) / Pocket TTS / Qwen3-TTS 0.6B Base / Chatterbox Turbo (English only) safetensors weights. GGUF installs fetch transcribe.cpp v0.4.0 plus the Nemotron 3.5 streaming Q5 GGUF, and CrispASR v0.8.43 plus the Phonon 2, Pocket TTS, Qwen3-TTS, and Chatterbox Turbo GGUF weights. Whisper tiny and base fetch the ggml file plus the OpenVINO wheels and FP16 IR at install, not in the zip. That folder is app data, so an MSI upgrade keeps it.
+Speech (Settings → Voice) is not in the zip, the MSI, or the macOS pkg, and the release workflow downloads nothing for it. Runtimes and weights are downloaded at install time, per model the user checks, from the URLs and hashes in `packaging/speech/manifest.json`, into `{DysonProd}/speech/{stable|preview}`. Python installs fetch CPython, CPU torch, and the Phonon-2 (Fermion BPS packed) / Pocket TTS / Qwen3-TTS 0.6B Base / Chatterbox Turbo (English only) safetensors weights. GGUF installs fetch transcribe.cpp v0.4.0 plus the Nemotron 3.5 streaming Q5 GGUF, and CrispASR v0.8.43 plus the Phonon 2, Pocket TTS, Qwen3-TTS, and Chatterbox Turbo GGUF weights. Whisper tiny and base fetch the ggml file plus the OpenVINO wheels and FP16 IR at install, not in the zip. That folder is app data, so an MSI upgrade keeps it.
 
 ## Windows notes
 
@@ -122,3 +122,10 @@ Speech (Settings → Voice) is not in the zip or the MSI, and the release workfl
 - External http(s) links and popups open in the **OS default browser**; the shell CEF view stays on the local Blazor origin.
 
 Desktop / CefSharp packaging details: [webview.md](webview.md). MSI authoring lives under [`packaging/wix/`](../../packaging/wix/).
+
+## macOS notes
+
+- Prefer the `.pkg`. It installs `DysonHarness.app` into `/Applications` and asks for an administrator password.
+- The zip is the same notarized app, for a copy that does not use the installer.
+- Continuous release signs the app with **Developer ID Application** (hardened runtime, `packaging/macos/entitlements.plist`), builds the pkg with **Developer ID Installer**, then notarizes and staples both. The credentials are repository secrets, not files in this repo: `APPLE_TEAM_ID`, `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_API_PRIVATE_KEY`.
+- Pull-request CI and a local `scripts/bundle-macos-app.sh` stay ad-hoc signed. Gatekeeper still asks for a right-click Open on those builds. The macOS publish job fails if any of the secrets above is empty, and that failure blocks the whole continuous release.
