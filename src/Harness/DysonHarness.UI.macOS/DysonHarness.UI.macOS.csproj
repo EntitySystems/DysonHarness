@@ -1,0 +1,70 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DysonHarness</AssemblyName>
+    <RootNamespace>DysonHarness.UI.Mac</RootNamespace>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' AND $([MSBuild]::IsOSPlatform('OSX'))">osx-arm64</RuntimeIdentifier>
+    <!-- Shell hosts Blazor from Harness.UI; no local Razor pages. -->
+    <EnableDefaultContentItems>true</EnableDefaultContentItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Harness.UI\Harness.UI.csproj" />
+    <ProjectReference Include="..\Harness.MacBrowser\Harness.MacBrowser.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <_DysonWriteVersionJsonSh>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\scripts\write-version-json.sh'))</_DysonWriteVersionJsonSh>
+    <_DysonWriteVersionJsonPs1>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\scripts\write-version-json.ps1'))</_DysonWriteVersionJsonPs1>
+  </PropertyGroup>
+
+  <Target Name="GenerateVersionJson" BeforeTargets="AssignTargetPaths">
+    <PropertyGroup>
+      <_DysonVersionJsonPath>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\$(IntermediateOutputPath)version.json'))</_DysonVersionJsonPath>
+      <_DysonVersionJsonDir>$([System.IO.Path]::GetDirectoryName('$(_DysonVersionJsonPath)'))</_DysonVersionJsonDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(_DysonVersionJsonDir)" />
+    <Exec Condition="!$([MSBuild]::IsOSUnixLike())" Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(_DysonWriteVersionJsonPs1)&quot; -OutputPath &quot;$(_DysonVersionJsonPath)&quot; -Version &quot;$(Version)&quot; -InformationalVersion &quot;$(InformationalVersion)&quot; -Rid &quot;$(RuntimeIdentifier)&quot; -Channel &quot;$(DysonReleaseChannel)&quot;" IgnoreExitCode="false" />
+    <Exec Condition="$([MSBuild]::IsOSUnixLike())" Command="bash &quot;$(_DysonWriteVersionJsonSh)&quot; &quot;$(_DysonVersionJsonPath)&quot; &quot;$(Version)&quot; &quot;$(InformationalVersion)&quot; &quot;$(RuntimeIdentifier)&quot; &quot;EntitySystems/DysonHarness&quot; &quot;$(DysonReleaseChannel)&quot;" IgnoreExitCode="false" />
+    <ItemGroup>
+      <None Include="$(_DysonVersionJsonPath)"
+            Link="version.json"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+      <FileWrites Include="$(_DysonVersionJsonPath)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- libDysonWebKit.dylib next to the apphost. osx-x64 cross-publish uses the Intel slice; this Mac builds arm64. -->
+  <Target Name="CompileDysonWebKit" BeforeTargets="AssignTargetPaths" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <PropertyGroup>
+      <_DysonArch Condition="'$(RuntimeIdentifier)' == 'osx-x64'">x86_64</_DysonArch>
+      <_DysonArch Condition="'$(RuntimeIdentifier)' != 'osx-x64'">arm64</_DysonArch>
+      <_DysonWebKitDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\native\macos'))</_DysonWebKitDir>
+      <_DysonRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..'))</_DysonRepoRoot>
+      <_Dylib>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)libDysonWebKit.dylib'))</_Dylib>
+      <_DysonIconPng>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)DysonHarnessIcon.png'))</_DysonIconPng>
+      <_DylibDir>$([System.IO.Path]::GetDirectoryName('$(_Dylib)'))</_DylibDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(_DylibDir)" />
+    <Exec Command="swiftc -emit-library -module-name DysonWebKit -swift-version 5 -target $(_DysonArch)-apple-macos14 -framework AppKit -framework WebKit -o &quot;$(_Dylib)&quot; &quot;$(_DysonWebKitDir)/DysonWebKitBridge.swift&quot; &quot;$(_DysonWebKitDir)/DysonShellWindow.swift&quot; &quot;$(_DysonWebKitDir)/DysonAgentWindow.swift&quot;" />
+    <Exec Command="swift &quot;$(_DysonRepoRoot)/scripts/make-macos-icon.swift&quot; &quot;$(_DysonRepoRoot)/src/Harness/DysonHarness.UI.Windows/Assets/dyson.ico&quot; &quot;$(_DysonIconPng)&quot;" />
+    <ItemGroup>
+      <None Include="$(_Dylib)"
+            Link="libDysonWebKit.dylib"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+      <None Include="$(_DysonIconPng)"
+            Link="DysonHarnessIcon.png"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+      <FileWrites Include="$(_Dylib)" />
+      <FileWrites Include="$(_DysonIconPng)" />
+    </ItemGroup>
+  </Target>
+
+</Project>

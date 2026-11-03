@@ -66,7 +66,8 @@ jobs:
             os: ubuntu-latest
           - rid: osx-arm64
             os: macos-latest
-          # macos-13 retired Dec 2025; cross-publish osx-x64 from arm64 macOS (managed .NET).
+          # macos-13 retired Dec 2025; cross-publish osx-x64 from arm64 macOS.
+          # The macOS shell's Swift dylib is compiled with swiftc -target x86_64-apple-macos14 on that runner.
           - rid: osx-x64
             os: macos-latest
     runs-on: ${{ matrix.os }}
@@ -92,6 +93,8 @@ jobs:
           PROJECT="src/Harness/Harness.UI/Harness.UI.csproj"
           if [[ "${{ matrix.rid }}" == "win-x64" ]]; then
             PROJECT="src/Harness/DysonHarness.UI.Windows/DysonHarness.UI.Windows.csproj"
+          elif [[ "${{ matrix.rid }}" == osx-* ]]; then
+            PROJECT="src/Harness/DysonHarness.UI.macOS/DysonHarness.UI.macOS.csproj"
           fi
           dotnet publish "$PROJECT" \
             -c Release \
@@ -105,6 +108,9 @@ jobs:
             -o "$OUT"
           # MIT attribution for ported CLIProxyAPI code must travel with every copy (zip + MSI payload).
           cp LICENSE THIRD-PARTY-NOTICES.md "$OUT/"
+          if [[ "${{ matrix.rid }}" == osx-* ]]; then
+            bash scripts/bundle-macos-app.sh "$OUT"
+          fi
 
       - name: Zip (Windows)
         if: runner.os == 'Windows'
@@ -219,7 +225,7 @@ jobs:
           | **Commit** | \`${GITHUB_SHA}\` (\`${SHORT_SHA}\`) |
           | **Workflow** | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |
 
-          **Windows:** prefer the MSI (\`DysonHarness-${VERSION}-win-x64.msi\`) for a per-user install (Start Menu shortcut + Apps & Features as **Dyson Harness**, manufacturer **Entity Systems**); zip remains portable. VC++ 2022 x64 redistributable required. **Linux / macOS:** unzip and run \`Harness.UI\`. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
+          **Windows:** prefer the MSI (\`DysonHarness-${VERSION}-win-x64.msi\`) for a per-user install (Start Menu shortcut + Apps & Features as **Dyson Harness**, manufacturer **Entity Systems**); zip remains portable. VC++ 2022 x64 redistributable required. **Linux:** unzip and run \`Harness.UI\`. **macOS:** unzip and open \`DysonHarness.app\` (right-click Open the first time; the bundle is ad-hoc signed). See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
           EOF
           sed -i 's/^          //' "${RUNNER_TEMP}/continuous-notes.md"
 

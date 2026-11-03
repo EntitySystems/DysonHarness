@@ -2,7 +2,7 @@
 
 All Dyson functional code that is not directly tied to a UI layer lives in `Harness.Engine`. Shared contracts and Result types live in `Harness.Abstractions`.
 
-UI assemblies (`Harness.UI`, `DysonHarness.UI.Windows`, `Harness.WindowsBrowser`) only hook onto the engine: bind events, render chrome, adapt platform I/O.
+UI assemblies (`Harness.UI`, `DysonHarness.UI.Windows`, `Harness.WindowsBrowser`, `DysonHarness.UI.macOS`, `Harness.MacBrowser`) only hook onto the engine: bind events, render chrome, adapt platform I/O.
 
 Write engine code as if it may run embedded on a server, headless, or behind another UI. No Blazor circuit, no `DysonUiHost`, no “the focused chat” assumption.
 
@@ -11,7 +11,7 @@ Write engine code as if it may run embedded on a server, headless, or behind ano
 - Razor / CSS / theme
 - Circuit lifetime
 - Composer chrome
-- CefSharp / file pickers
+- CefSharp / WKWebView / file pickers
 - Thin adapters that call engine APIs
 
 ## Not allowed in UI

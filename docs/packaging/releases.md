@@ -12,7 +12,8 @@ Every push to either branch publishes self-contained zips (all RIDs) and a Windo
 | RID | Publish project | Entrypoint |
 | --- | --------------- | ---------- |
 | `win-x64` | `DysonHarness.UI.Windows` | `DysonHarness.exe` (CefSharp WPF shell hosting Blazor in-process) |
-| `linux-x64` / `osx-*` | `Harness.UI` | `Harness.UI` |
+| `linux-x64` | `Harness.UI` | `Harness.UI` |
+| `osx-arm64` / `osx-x64` | `DysonHarness.UI.macOS` | `DysonHarness.app` (WKWebView shell hosting Blazor in-process; agent browser is a second window) |
 
 Pull requests to `master` / `release-preview` and pushes to other branches run tests only (see [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)); they do not publish artifacts. Manual **workflow_dispatch** of continuous release is limited to those two refs.
 
@@ -38,8 +39,8 @@ The channels are retained independently. For each older selected release, cleanu
 | --- | ----------- | ----- |
 | `win-x64` | Windows | CEF shell + agent browser (`net10.0-windows`); zip + MSI |
 | `linux-x64` | Linux | Blazor host only (no agent browser) |
-| `osx-arm64` | macOS Apple Silicon | Blazor host only |
-| `osx-x64` | macOS Intel (cross-published from Apple Silicon runner) | Blazor host only |
+| `osx-arm64` | macOS Apple Silicon | WKWebView shell + agent browser window. Unzip and open `DysonHarness.app`. Ad-hoc signed; Gatekeeper needs right-click Open the first time |
+| `osx-x64` | macOS Intel (cross-published from the Apple Silicon runner, including `swiftc -target x86_64-apple-macos14`) | Same `.app` as arm64 |
 
 Publish uses `--self-contained true` / `-p:SelfContained=true` (runtime included; no separate .NET install).
 
@@ -105,7 +106,8 @@ Patch instructions for [dysonharness.com](https://dysonharness.com) (Website rep
 
 1. **Windows (recommended):** download `DysonHarness-{version}-win-x64.msi` and install (default is per-user; no elevation). A successful install also starts the app automatically. You can launch again from the Start Menu shortcut **Dyson Harness**, or run `%LocalAppData%\Programs\DysonHarness\DysonHarness.exe`.
 2. **Windows (portable):** download the `win-x64` zip, unzip, and run `DysonHarness.exe` (desktop CEF shell; no separate browser URL needed).
-3. **Linux / macOS:** download the zip for your RID, unzip, run `Harness.UI`, and open the URL printed in the console (Kestrel default http://localhost:5000; there is no `launchSettings.json` in the publish output) if the browser does not open automatically. Local debug (`dotnet run`, Development) uses http://localhost:5181 instead — see [UI](../ui/README.md). The Windows MSI shell does not listen on either port; it binds an ephemeral loopback address inside `DysonHarness.exe`.
+3. **Linux:** download the zip, unzip, run `Harness.UI`, and open the URL printed in the console (Kestrel default http://localhost:5000; there is no `launchSettings.json` in the publish output) if the browser does not open automatically. Local debug (`dotnet run`, Development) uses http://localhost:5181 instead — see [UI](../ui/README.md).
+4. **macOS:** download the `osx-arm64` or `osx-x64` zip, unzip, and open `DysonHarness.app`. The WKWebView shell binds an ephemeral loopback address, same as the Windows desktop shell. The bundle is ad-hoc signed; Gatekeeper asks for a right-click Open the first time. Details: [webview.md](webview.md).
 
 Builds on `master` and `release-preview` resolve app mode to **Prod** (`DysonProd` app data) via `GITHUB_REF_NAME` in the resolve-app-mode scripts — channel is independent of Dev/Test/Prod. See [storage/models.md](../storage/models.md).
 
