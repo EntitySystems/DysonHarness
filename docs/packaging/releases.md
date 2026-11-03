@@ -71,26 +71,28 @@ Preview features: `DYSON_PREVIEW` is defined for every project under `src/Harnes
 }
 ```
 
-Unstamped local builds fall back to `1.0.0`, which disables the in-app updater (and omits the sidebar channel badge).
+Unstamped local builds fall back to `1.0.0`, which disables in-app installation (and omits the sidebar channel badge). A manual check can still look up the channel release.
 
-## In-app updater (Windows)
+## In-app updater
 
-The Windows shell checks for a newer build on the **same channel** once per process, shortly after the UI is ready.
+The shell checks for a newer build on the **same channel** once per process, shortly after the UI is ready. Windows installs from the MSI. macOS installs from the `.pkg` that matches `version.json` `rid` (`osx-arm64` or `osx-x64`).
 
-1. `DysonAppVersionInfo` reads `version.json` from `AppContext.BaseDirectory` (assembly `InformationalVersion` as fallback), once at host start (`DysonUiWebHost.Create`). The updater only runs on Windows and only when the CalVer year is ≥ 2026 — dev builds (`1.0.0`) never check. Missing/unknown `channel` defaults to `preview`.
-2. `DysonGitHubReleaseClient` calls `GET /repos/{repo}/releases?per_page=15` and picks the highest-CalVer non-draft release whose `prerelease` flag matches the local channel (`preview` → prerelease only; `stable` → non-prerelease only) and that carries a `*-win-x64.msi` asset. (`/latest` is not used — it only surfaces non-prereleases, so preview builds would never see updates.)
+1. `DysonAppVersionInfo` reads `version.json` from `AppContext.BaseDirectory` (assembly `InformationalVersion` as fallback), once at host start (`DysonUiWebHost.Create`). In-app install runs only when the CalVer year is ≥ 2026, and only on Windows or on macOS when `rid` is `osx-arm64` or `osx-x64`. Dev builds (`1.0.0`) stay lookup-only. Missing/unknown `channel` defaults to `preview`.
+2. `DysonGitHubReleaseClient` calls `GET /repos/{repo}/releases?per_page=15` and picks the highest-CalVer non-draft release whose `prerelease` flag matches the local channel (`preview` → prerelease only; `stable` → non-prerelease only) and that carries this host’s installer asset: `*-win-x64.msi` on Windows, `*-{rid}.pkg` on macOS. (`/latest` is not used — it only surfaces non-prereleases, so preview builds would never see updates.) Hosts that cannot install in-app still look up the MSI asset so a manual check can show a release.
 3. If that tag is strictly newer, `UpdateAvailableModal` prompts with local vs remote version. **Not now** / Escape / backdrop persist the tag in `app_settings` under `ui_update_skipped_version`, so the prompt only returns for a newer release.
-4. **Update** streams the MSI to `%TEMP%` with a byte progress bar (modal locks — no dismiss), then runs `cmd /c ping -n 4 127.0.0.1 >nul & msiexec /i "<msi>"` and calls `Environment.Exit(0)`. The short delay plus process exit releases CEF/WPF file locks before the WiX major upgrade replaces `%LocalAppData%\Programs\DysonHarness`. (`ping` rather than `timeout`: a `WinExe` host has no console and `timeout` aborts without one.) The updater only hands off to msiexec; it does not start the new exe. After a successful install, the MSI launches `DysonHarness.exe`.
+4. **Update** streams the installer to the temp directory with a byte progress bar (modal locks — no dismiss), then exits so the installer can replace the app.
+   - **Windows:** `cmd /c ping -n 4 127.0.0.1 >nul & msiexec /i "<msi>"` and `Environment.Exit(0)`. The short delay plus process exit releases CEF/WPF file locks before the WiX major upgrade replaces `%LocalAppData%\Programs\DysonHarness`. (`ping` rather than `timeout`: a `WinExe` host has no console and `timeout` aborts without one.) The updater only hands off to msiexec; it does not start the new exe. After a successful install, the MSI launches `DysonHarness.exe`.
+   - **macOS:** a detached `nohup` bash helper waits until this process is gone, then runs `installer -pkg "<pkg>" -target /` through an administrator password dialog (`osascript` `do shell script … with administrator privileges`). When that exits 0 it runs `open /Applications/DysonHarness.app`. If the password is cancelled or the install fails, it opens that same path so the current app comes back. The pkg has no postinstall launch, which would start the app twice.
 
 Download or hand-off failures unlock the modal with the message and a **Close** button — the install is never forced. Types live in [`Harness.UI/Services`](../../src/Harness/Harness.UI/Services); parsing Facts are in `DysonAppUpdateTests`.
 
 ### Manual check
 
-**Settings → System** provides a user-invoked **Check for updates** action. It queries the effective repository and channel, then shows the newest matching GitHub Release with a link to that release page. The lookup also works on development and non-Windows hosts, so those builds can inspect the applicable release even though they cannot install it in-app.
+**Settings → System** provides a user-invoked **Check for updates** action. It queries the effective repository and channel, then shows the newest matching GitHub Release with a link to that release page. The lookup also works on development builds and on platforms without an in-app installer, so those builds can inspect the applicable release even though they cannot install it in-app.
 
-In-app MSI installation remains available only when a newer release is found for a stamped Windows build. In that case the existing update prompt supplies the normal download and install flow; the manual check does not introduce a separate installer experience.
+In-app installation is available when a newer release is found for a stamped Windows build, or for a stamped macOS build whose `rid` is `osx-arm64` or `osx-x64`. Settings shows **Available on this Windows build** or **Available on this Mac** in those cases. The existing update prompt supplies the download and install flow; the manual check does not introduce a separate installer experience.
 
-Stable and preview share the same MSI ProductCode / major-upgrade path — operators on one track update within that track; side-by-side stable+preview installs are not supported.
+Stable and preview share the same MSI ProductCode / major-upgrade path — operators on one track update within that track; side-by-side stable+preview installs are not supported. On macOS both channels install to `/Applications/DysonHarness.app` (preview is named **Dyson Harness (Preview)**; stable stays **Dyson Harness**).
 
 ## Website download contract
 
