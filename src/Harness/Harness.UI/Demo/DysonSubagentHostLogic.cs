@@ -303,6 +303,57 @@ public static class DysonSubagentHostLogic
     public static bool ShowNestedModelLabel(string? childLabel, string? parentLabel) =>
         !string.IsNullOrWhiteSpace(childLabel)
         && !string.Equals(childLabel, parentLabel, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Roster "View report" is enabled only when a final report exists.
+    /// <see cref="DysonAgentSession.RosterReportPreview"/> is the truncated list text, not this.
+    /// </summary>
+    public static bool CanViewReport(string? lastReport) =>
+        !string.IsNullOrWhiteSpace(lastReport);
+
+    /// <summary>
+    /// Roster "Cancel execution" is enabled while the session is not terminal.
+    /// Same set as <see cref="DysonAgentSession.IsTerminal"/>: Completed, Stopped, Failed, Interrupted.
+    /// </summary>
+    public static bool CanCancelExecution(DysonSessionStatus status) =>
+        status is not (
+            DysonSessionStatus.Completed
+            or DysonSessionStatus.Stopped
+            or DysonSessionStatus.Failed
+            or DysonSessionStatus.Interrupted);
+
+    /// <summary>
+    /// Keeps a fixed menu inside the viewport. Prefers opening down-right of the cursor;
+    /// flips left or up when that edge would clip. ponytail: one rect, no resize observer —
+    /// a window resize while the menu is open is covered by the close-on-scroll path.
+    /// </summary>
+    public static (double Left, double Top) ClampMenuToViewport(
+        double cursorX,
+        double cursorY,
+        double menuWidth,
+        double menuHeight,
+        double viewportWidth,
+        double viewportHeight,
+        double margin = 8)
+    {
+        var width = Math.Max(0, menuWidth);
+        var height = Math.Max(0, menuHeight);
+        var viewW = Math.Max(0, viewportWidth);
+        var viewH = Math.Max(0, viewportHeight);
+        var pad = Math.Max(0, margin);
+
+        var left = cursorX;
+        if (left + width > viewW - pad)
+            left = cursorX - width;
+        left = Math.Clamp(left, pad, Math.Max(pad, viewW - pad - width));
+
+        var top = cursorY;
+        if (top + height > viewH - pad)
+            top = cursorY - height;
+        top = Math.Clamp(top, pad, Math.Max(pad, viewH - pad - height));
+
+        return (left, top);
+    }
 }
 
 /// <summary>Live snapshot for parent <c>SubagentCard</c> UI.</summary>

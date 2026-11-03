@@ -17,7 +17,11 @@
             data-running="@(_state.IsRunning ? "true" : null)"
             title="@AccessibleName"
             aria-label="@AccessibleName"
-            @onclick="NavigateAsync">
+            @onclick="NavigateAsync"
+            @oncontextmenu="OpenMenu"
+            @oncontextmenu:preventDefault="true"
+            @oncontextmenu:stopPropagation="true"
+            @onkeydown="OnKeyDown">
         <span class="meta-child-row__icon @icon.ColorClass"
               style="--subagent-mode-icon: url('@icon.Url')"
               aria-hidden="true"></span>
@@ -39,6 +43,7 @@
             <span class="subagent-card__spinner meta-child-row__spinner" aria-hidden="true"></span>
         }
     </button>
+    <MetaRosterContextMenu @ref="_menu" />
 }
 
 @code {
@@ -51,6 +56,7 @@
     private DysonSubagentCardState? _state;
     private Guid? _boundPersistenceId;
     private IDisposable? _sub;
+    private MetaRosterContextMenu? _menu;
 
     private string AccessibleName
     {
@@ -182,6 +188,31 @@
 
         await Host.NavigateToSessionAsync(PersistenceId);
         await AfterNavigate.InvokeAsync();
+    }
+
+    private void OpenMenu(MouseEventArgs e) => ShowMenu(e.ClientX, e.ClientY);
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "ContextMenu" || (e.ShiftKey && e.Key == "F10"))
+            ShowMenu(0, 0);
+    }
+
+    private void ShowMenu(double x, double y)
+    {
+        if (_menu is null || _state is null || PersistenceId == Guid.Empty)
+            return;
+
+        var report = Host.GetSubagentLastReport(PersistenceId);
+        var id = PersistenceId;
+        _menu.Open(
+            x,
+            y,
+            DysonSubagentHostLogic.CanViewReport(report),
+            DysonSubagentHostLogic.CanCancelExecution(_state.Status),
+            report,
+            _state.Title,
+            () => Host.StopRosterAgentAsync(id));
     }
 
     private void DisposeSubscriptions()
