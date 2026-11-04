@@ -75,7 +75,7 @@ Boundary: `Harness.WindowsBrowser` only references Abstractions; it never calls 
 - Do not fork session/resume semantics; use `IDysonSessionRepository.GetFullSessionAsync` / restore
 - Keep providers ephemeral; model profiles remain SQLite rows
 - CefSharp NuGet restore supplies CEF binaries; Visual C++ 2022 redistributable is a deployment dependency
-- **Executable RID:** Windows host projects (`DysonHarness.UI.Windows`, and `Harness.UI` when run on Windows) must set `RuntimeIdentifier=win-x64` (and `PlatformTarget=x64`) so CefSharp copies natives (`libcef.dll`, `CefSharp.BrowserSubprocess.exe`, …) next to the exe. A library RID on `Harness.WindowsBrowser` alone is not enough — MSBuild only lays out architecture-specific CEF redistributables for the **host** project.
+- **Executable RID:** Windows host projects default to `RuntimeIdentifier=win-x64` and `PlatformTarget=x64` so CefSharp copies natives (`libcef.dll`, `CefSharp.BrowserSubprocess.exe`, …) next to the exe. A library RID on `Harness.WindowsBrowser` alone is not enough — MSBuild only lays out architecture-specific CEF redistributables for the **host** project. The ARM64 release overrides the host RID with `-r win-arm64` (cross-publish from an x64 runner). CefSharp 149 ships `chromiumembeddedframework.runtime.win-arm64`, so the same publish layout applies. Local `dotnet run` stays x64.
 - **Direct CefSharp package on the exe:** the Windows shell (and `Harness.UI` on Windows) need a `PackageReference` to `CefSharp.Wpf.NETCore` so CefSharp `buildTransitive` targets run (notably `locales\*.pak`). A `ProjectReference` to `Harness.WindowsBrowser` alone does not import those targets into the executable.
 - Reuse `DysonNativeFolderPicker` for work-directory registration (host-process OS dialog; interactive desktop required — not for headless/remote Blazor hosts)
 - STA: shell owns the WPF message loop; Blazor Server stays MTA and marshals agent CEF work via the STA dispatcher
@@ -96,10 +96,10 @@ Boundary: `Harness.WindowsBrowser` only references Abstractions; it never calls 
 | Project | TFM | Role |
 | ------- | --- | ---- |
 | `Harness.Abstractions` | `net10.0` | Result types + browser contracts + `DysonNullBrowserControl` |
-| `Harness.WindowsBrowser` | `net10.0-windows` + WPF + `win-x64` | `DysonCefBrowserControl` + chrome + `DysonCefStaHost`; agent tabs = HwndHost |
+| `Harness.WindowsBrowser` | `net10.0-windows` + WPF + `win-x64` (library default; the host RID wins at publish) | `DysonCefBrowserControl` + chrome + `DysonCefStaHost`; agent tabs = HwndHost |
 | `Harness.Engine` | `net10.0` | MCP catalog + executor → `IDysonBrowserControl` |
 | `Harness.UI` | `net10.0-windows` + `win-x64` on Windows | Blazor host (`DysonUiWebHost`); conditional WindowsBrowser ref + DI singleton |
-| `DysonHarness.UI.Windows` | `net10.0-windows` + WPF + `win-x64` | CEF shell exe (`AssemblyName=DysonHarness`) |
+| `DysonHarness.UI.Windows` | `net10.0-windows` + WPF + `win-x64` (default) / `win-arm64` (`-r`) | CEF shell exe (`AssemblyName=DysonHarness`) |
 | `Harness.MacBrowser` | `net10.0` | `DysonMacBrowserControl` — JSON C ABI over `libDysonWebKit.dylib` |
 | `DysonHarness.UI.macOS` | `net10.0` + `osx-arm64` / `osx-x64` | WKWebView shell exe (`AssemblyName=DysonHarness`), bundled as `DysonHarness.app` |
 

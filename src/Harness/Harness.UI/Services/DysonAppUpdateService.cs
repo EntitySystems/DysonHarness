@@ -173,13 +173,23 @@ public sealed class DysonAppUpdateService(HttpClient http)
         return VoidResult<string>.Success;
     }
 
+    /// <summary>
+    /// Installer asset suffix for this host. macOS uses the stamped <c>version.json</c> rid
+    /// (<c>-osx-arm64.pkg</c> / <c>-osx-x64.pkg</c>). Windows uses the running process architecture:
+    /// an arm64 process looks for <c>-win-arm64.msi</c>, every other Windows process looks for the
+    /// existing <c>-win-x64.msi</c>. An x64 install running under emulation on an ARM device stays on
+    /// the x64 MSI; it does not switch until the user installs the arm64 package.
+    /// </summary>
+    internal static string InstallerAssetSuffix(DysonAppVersionInfo local) =>
+        OperatingSystem.IsMacOS() && DysonGitHubReleaseClient.IsMacPkgRid(local.Rid)
+            ? DysonGitHubReleaseClient.MacPkgAssetSuffix(local.Rid)
+            : DysonGitHubReleaseClient.WindowsMsiAssetSuffixForProcess();
+
     private async Task<Result<DysonGitHubMsiRelease?, string>> FindNewestForHostAsync(
         DysonAppVersionInfo local,
         CancellationToken cancellationToken)
     {
-        var suffix = OperatingSystem.IsMacOS() && DysonGitHubReleaseClient.IsMacPkgRid(local.Rid)
-            ? DysonGitHubReleaseClient.MacPkgAssetSuffix(local.Rid)
-            : DysonGitHubReleaseClient.MsiAssetSuffix;
+        var suffix = InstallerAssetSuffix(local);
         return await _releases
             .FindNewestReleaseAsync(local.EffectiveRepo, local.EffectiveChannel, suffix, cancellationToken)
             .ConfigureAwait(false);

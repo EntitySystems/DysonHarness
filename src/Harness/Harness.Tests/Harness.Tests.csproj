@@ -14,7 +14,8 @@
   <!-- CefSharp natives must sit next to the test host for DysonCefGpuPresentTests. -->
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
-    <PlatformTarget>x64</PlatformTarget>
+    <PlatformTarget Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</PlatformTarget>
+    <PlatformTarget Condition="'$(RuntimeIdentifier)' != 'win-arm64'">x64</PlatformTarget>
     <!-- CefSharp #4662 / NuGet Readme: app.manifest required for Windows 10+ GPU detection -->
     <ApplicationManifest>..\Harness.WindowsBrowser\app.manifest</ApplicationManifest>
   </PropertyGroup>

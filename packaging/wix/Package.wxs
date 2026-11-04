@@ -4,15 +4,15 @@
     Name="Dyson Harness"
     Manufacturer="Entity Systems"
     Version="$(ProductVersion)"
-    UpgradeCode="3887F848-1A76-413B-91F0-04CA3CB459AF"
+    UpgradeCode="$(var.UpgradeCode)"
     Scope="perUserOrMachine"
     UpgradeStrategy="majorUpgrade">
 
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="DysonHarness" />
+      <Directory Id="INSTALLFOLDER" Name="$(var.InstallFolderName)" />
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="AppStartMenuFolder" Name="Dyson Harness" />
+      <Directory Id="AppStartMenuFolder" Name="$(var.StartMenuFolderName)" />
     </StandardDirectory>
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
@@ -25,10 +25,10 @@
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
 
-    <Component Id="StartMenuShortcut" Directory="AppStartMenuFolder" Guid="1E5DB2C9-836C-4DF7-9F4C-A919E74DC731">
+    <Component Id="StartMenuShortcut" Directory="AppStartMenuFolder" Guid="$(var.ShortcutComponentGuid)">
       <Shortcut
         Id="AppStartMenuShortcut"
-        Name="Dyson Harness"
+        Name="$(var.StartMenuFolderName)"
         Target="[INSTALLFOLDER]DysonHarness.exe"
         WorkingDirectory="INSTALLFOLDER"
         Icon="AppIcon.exe" />
@@ -36,7 +36,7 @@
       <RegistryValue
         Root="HKCU"
         Key="Software\Entity Systems\Dyson Harness"
-        Name="Installed"
+        Name="$(var.ShortcutKeyPathName)"
         Type="integer"
         Value="1"
         KeyPath="yes" />
