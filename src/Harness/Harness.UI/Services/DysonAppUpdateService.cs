@@ -35,8 +35,11 @@ public sealed record DysonManualUpdateCheckResult(
 /// </summary>
 public sealed class DysonAppUpdateService(HttpClient http)
 {
-    /// <summary>Installed app the macOS helper reopens after <c>installer</c> finishes or fails.</summary>
-    public const string MacAppPath = "/Applications/DysonHarness.app";
+    /// <summary>Stable install. Preview installs beside it as "Dyson Harness (Preview).app".</summary>
+    public const string MacAppPath = "/Applications/Dyson Harness.app";
+
+    /// <summary>Preview install. The helper reopens the one that matches the local channel.</summary>
+    public const string MacPreviewAppPath = "/Applications/Dyson Harness (Preview).app";
     /// <summary>Progress repaints are throttled so a fast download does not flood the Blazor circuit.</summary>
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(150);
 
@@ -282,6 +285,7 @@ public sealed class DysonAppUpdateService(HttpClient http)
     internal static string BuildMacUpdateScript(string pkgPath)
     {
         var pkg = BashSingleQuote(pkgPath);
+        var app = BashSingleQuote(MacAppPathForChannel(DysonAppVersionInfo.Local.EffectiveChannel));
         var pid = Environment.ProcessId;
         return $$"""
             #!/bin/bash
@@ -297,10 +301,16 @@ public sealed class DysonAppUpdateService(HttpClient http)
               do shell script "installer -pkg " & quoted form of (item 1 of argv) & " -target /" with administrator privileges
             end run
             EOF
-            open {{MacAppPath}}
+            open {{app}}
             rm -f -- "$0"
             """;
     }
+
+    /// <summary>Installed bundle the helper reopens. Preview and stable no longer share a path.</summary>
+    internal static string MacAppPathForChannel(string channel) =>
+        DysonAppVersionInfo.NormalizeChannel(channel) == DysonAppVersionInfo.ChannelPreview
+            ? MacPreviewAppPath
+            : MacAppPath;
 
     private static string BashSingleQuote(string value) =>
         "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";

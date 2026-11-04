@@ -16,6 +16,9 @@ public abstract class DysonAgentSession
     private readonly object _conversationActionsGate = new();
     // ponytail: one lock around question record/clear; upgrade only if answer writes become hot.
     private readonly object _userQuestionGate = new();
+
+    /// <summary>Same lock <see cref="TryRecordUserQuestionAnswer"/> holds. Pending insert copies the live card under it.</summary>
+    internal object UserQuestionGate => _userQuestionGate;
     private readonly Dictionary<string, Func<CancellationToken, Task<Result<string, string>>>> _conversationActions =
         new(StringComparer.Ordinal);
     private readonly List<DysonAgentSession> _subSessions = [];
@@ -4664,6 +4667,185 @@ public abstract class DysonAgentSession
         TurnUpdated?.Invoke(this, updated!);
         return VoidResult<string>.Success;
     }
+
+    /// <summary>
+    /// Replaces an open question card in place. Same id, same turn timestamps.
+    /// A SecureData card with this id is refused and left untouched.
+    /// </summary>
+    public VoidResult<string> TryReplaceUserQuestion(
+        Guid questionId,
+        DysonUserQuestion replacement,
+        string message,
+        IReadOnlyList<DysonConversationAction>? actions)
+    {
+        ArgumentNullException.ThrowIfNull(replacement);
+        if (string.IsNullOrWhiteSpace(message))
+            return VoidResult<string>.AsError("UpdateUserQuestion: message is required.");
+
+        DysonAgentTurn? updated = null;
+        lock (_userQuestionGate)
+        {
+            if (FindSecureDataTurn(questionId) is not null)
+                return VoidResult<string>.AsError(
+                    "UpdateUserQuestion: that id is a secure data request. Use RequestSecureData.");
+
+            var turn = FindUserQuestionTurn(questionId);
+            if (turn?.UserQuestion is not { } question)
+                return VoidResult<string>.AsError("UpdateUserQuestion: not found.");
+            if (question.Answer is not null)
+                return VoidResult<string>.AsError("UpdateUserQuestion: already answered.");
+
+            var card = replacement.Id == questionId
+                ? replacement with { Answer = null }
+                : replacement with { Id = questionId, Answer = null };
+            turn.UserQuestion = card;
+            turn.AssistantText = message.Trim();
+            turn.RestoreConversationActions(actions ?? []);
+            updated = turn;
+        }
+
+        TurnUpdated?.Invoke(this, updated!);
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Withdraws an open question card: the card is cleared and the bubble gains one
+    /// <see cref="DysonUserQuestion.WithdrawnMarker"/> line. Actions stay.
+    /// </summary>
+    public VoidResult<string> TryWithdrawUserQuestion(Guid questionId)
+    {
+        DysonAgentTurn? updated = null;
+        lock (_userQuestionGate)
+        {
+            if (FindSecureDataTurn(questionId) is not null)
+                return VoidResult<string>.AsError(
+                    "DeleteUserQuestion: that id is a secure data request. Use RequestSecureData.");
+
+            var turn = FindUserQuestionTurn(questionId);
+            if (turn?.UserQuestion is not { } question)
+                return VoidResult<string>.AsError("DeleteUserQuestion: not found.");
+            if (question.Answer is not null)
+                return VoidResult<string>.AsError("DeleteUserQuestion: already answered.");
+
+            turn.UserQuestion = null;
+            turn.AssistantText = AppendWithdrawnMarker(turn.AssistantText);
+            updated = turn;
+        }
+
+        TurnUpdated?.Invoke(this, updated!);
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Snapshot of this session's question cards. Pending always; answered and withdrawn only when
+    /// <paramref name="includeAnswered"/>. Does not mutate turns and does not raise <see cref="TurnUpdated"/>.
+    /// A withdrawn card's id is not stored after withdraw, so that row's <see cref="DysonUserQuestionListItem.Id"/>
+    /// is <see cref="Guid.Empty"/>.
+    /// </summary>
+    public IReadOnlyList<DysonUserQuestionListItem> ListUserQuestions(bool includeAnswered)
+    {
+        lock (_userQuestionGate)
+        {
+            var items = new List<DysonUserQuestionListItem>();
+            foreach (var turn in Turns)
+            {
+                if (turn.Kind != DysonAgentTurnKind.DisplayInfo || turn.SecureDataRequest is not null)
+                    continue;
+
+                if (turn.UserQuestion is { } question)
+                {
+                    var pending = question.Answer is null;
+                    if (!pending && !includeAnswered)
+                        continue;
+
+                    items.Add(new DysonUserQuestionListItem(
+                        question.Id,
+                        question.Question,
+                        CollapseListMessage(turn.AssistantText),
+                        question.Choices,
+                        question.MultiSelect,
+                        AsListUtc(turn.StartedUtc),
+                        pending ? DysonUserQuestion.StatePending : DysonUserQuestion.StateAnswered));
+                    continue;
+                }
+
+                if (!includeAnswered || !EndsWithWithdrawnMarker(turn.AssistantText))
+                    continue;
+
+                items.Add(new DysonUserQuestionListItem(
+                    Guid.Empty,
+                    WithdrawnListTitle(turn.AssistantText),
+                    CollapseListMessage(turn.AssistantText),
+                    [],
+                    false,
+                    AsListUtc(turn.StartedUtc),
+                    DysonUserQuestion.StateWithdrawn));
+            }
+
+            items.Sort(static (a, b) =>
+            {
+                var byTime = a.PostedUtc.CompareTo(b.PostedUtc);
+                return byTime != 0 ? byTime : a.Id.CompareTo(b.Id);
+            });
+            return items;
+        }
+    }
+
+    private static string AppendWithdrawnMarker(string? assistantText)
+    {
+        var text = assistantText ?? "";
+        if (text.Length == 0)
+            return DysonUserQuestion.WithdrawnMarker;
+        if (EndsWithWithdrawnMarker(text))
+            return text;
+        return text + "\n\n" + DysonUserQuestion.WithdrawnMarker;
+    }
+
+    private static bool EndsWithWithdrawnMarker(string? assistantText)
+    {
+        var trimmed = assistantText?.TrimEnd() ?? "";
+        return trimmed.EndsWith(DysonUserQuestion.WithdrawnMarker, StringComparison.Ordinal);
+    }
+
+    private static string WithdrawnListTitle(string? assistantText)
+    {
+        if (string.IsNullOrEmpty(assistantText))
+            return "";
+
+        var line = "";
+        foreach (var raw in assistantText.Split('\n'))
+        {
+            var candidate = raw.Trim().TrimEnd('\r');
+            if (candidate.Length == 0)
+                continue;
+            line = candidate;
+            break;
+        }
+
+        return line.Length <= 80 ? line : line[..80];
+    }
+
+    private static string CollapseListMessage(string? assistantText)
+    {
+        if (string.IsNullOrEmpty(assistantText))
+            return "";
+
+        var collapsed = assistantText
+            .Replace("\r\n", " ", StringComparison.Ordinal)
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Trim();
+        while (collapsed.Contains("  ", StringComparison.Ordinal))
+            collapsed = collapsed.Replace("  ", " ", StringComparison.Ordinal);
+        return collapsed.Length <= 140 ? collapsed : collapsed[..140];
+    }
+
+    private static DateTime AsListUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
+    };
 
     /// <summary>
     /// Locks the RequestSecureData card for <paramref name="requestId"/> with a key-only outcome.

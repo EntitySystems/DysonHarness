@@ -35,4 +35,19 @@ public interface IDysonPendingUserQuestionRepository
         Guid questionGuid,
         Guid sessionId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Rewrites the content columns of the question row for this session and card id.
+    /// A missing row is <c>not found.</c> A non-question row is <c>not a question.</c>
+    /// Does not change id, turn, kind, parked event, or <c>CreatedUtc</c>.
+    /// </summary>
+    Task<VoidResult<string>> UpdateByQuestionGuidAsync(
+        Guid questionGuid,
+        Guid sessionId,
+        string message,
+        string question,
+        IReadOnlyList<string> choices,
+        bool multiSelect,
+        bool allowCustomAnswer,
+        CancellationToken cancellationToken = default);
 }

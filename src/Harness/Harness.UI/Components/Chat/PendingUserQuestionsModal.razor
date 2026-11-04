@@ -92,7 +92,7 @@
                             }
                             else
                             {
-                                var draft = Draft(question.QuestionGuid);
+                                var draft = Draft(question.QuestionGuid, question);
                                 <li class="pending-questions__item" @key="question.Id">
                                     <div class="pending-questions__title">@question.Question</div>
                                     @if (!string.IsNullOrWhiteSpace(question.Message))
@@ -227,9 +227,40 @@
 
         _loadError = null;
         _rows = list.Value;
+        foreach (var row in _rows)
+        {
+            if (row.Kind != DysonPendingUserQuestionKind.Question)
+                continue;
+            if (_drafts.TryGetValue(row.QuestionGuid, out var draft)
+                && !DraftMatches(draft, row.Choices, row.MultiSelect, row.AllowCustomAnswer))
+            {
+                _drafts.Remove(row.QuestionGuid);
+            }
+        }
     }
 
-    private QuestionDraft Draft(Guid questionGuid)
+    private static bool DraftMatches(
+        QuestionDraft draft,
+        IReadOnlyList<string> choices,
+        bool multiSelect,
+        bool allowCustomAnswer)
+    {
+        if (draft.MultiSelect != multiSelect || draft.AllowCustomAnswer != allowCustomAnswer)
+            return false;
+        if (draft.Choices.Count != choices.Count)
+            return false;
+        for (var i = 0; i < choices.Count; i++)
+        {
+            if (!string.Equals(draft.Choices[i], choices[i], StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
+    }
+
+    private QuestionDraft Draft(Guid questionGuid) => Draft(questionGuid, null);
+
+    private QuestionDraft Draft(Guid questionGuid, DysonPendingUserQuestion? row)
     {
         if (!_drafts.TryGetValue(questionGuid, out var draft))
         {
@@ -237,12 +268,14 @@
             _drafts[questionGuid] = draft;
         }
 
+        if (row is not null)
+            draft.Remember(row.Choices, row.MultiSelect, row.AllowCustomAnswer);
         return draft;
     }
 
     private bool CanAnswer(DysonPendingUserQuestion row)
     {
-        var draft = Draft(row.QuestionGuid);
+        var draft = Draft(row.QuestionGuid, row);
         var card = new DysonUserQuestion(
             row.QuestionGuid,
             row.Question,
@@ -255,7 +288,7 @@
 
     private void ToggleChoice(DysonPendingUserQuestion row, string choice, ChangeEventArgs e)
     {
-        var draft = Draft(row.QuestionGuid);
+        var draft = Draft(row.QuestionGuid, row);
         if (e.Value is bool on && on)
             draft.Select(choice);
         else
@@ -268,13 +301,13 @@
         if (row.MultiSelect)
             return;
 
-        Draft(row.QuestionGuid).Replace(choice);
+        Draft(row.QuestionGuid, row).Replace(choice);
         _errors.Remove(row.QuestionGuid);
     }
 
     private void SetCustom(DysonPendingUserQuestion row, ChangeEventArgs e)
     {
-        var draft = Draft(row.QuestionGuid);
+        var draft = Draft(row.QuestionGuid, row);
         draft.Custom = e.Value?.ToString() ?? "";
         if (!row.MultiSelect && !string.IsNullOrWhiteSpace(draft.Custom))
             draft.ClearSelected();
@@ -286,7 +319,7 @@
         if (_busy.Contains(row.QuestionGuid) || !CanAnswer(row))
             return;
 
-        var draft = Draft(row.QuestionGuid);
+        var draft = Draft(row.QuestionGuid, row);
         _busy.Add(row.QuestionGuid);
         _errors.Remove(row.QuestionGuid);
         try
@@ -413,6 +446,19 @@
     private sealed class QuestionDraft
     {
         private readonly List<string> _selected = [];
+
+        public IReadOnlyList<string> Choices { get; private set; } = [];
+
+        public bool MultiSelect { get; private set; }
+
+        public bool AllowCustomAnswer { get; private set; }
+
+        public void Remember(IReadOnlyList<string> choices, bool multiSelect, bool allowCustomAnswer)
+        {
+            Choices = choices;
+            MultiSelect = multiSelect;
+            AllowCustomAnswer = allowCustomAnswer;
+        }
 
         public IReadOnlyList<string> Selected => _selected;
 

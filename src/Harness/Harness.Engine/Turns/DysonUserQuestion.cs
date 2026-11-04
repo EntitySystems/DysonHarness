@@ -18,6 +18,13 @@ public sealed record DysonUserQuestion(
 {
     public const int MaxCustomAnswerLength = 2000;
 
+    /// <summary>Trailing bubble line <see cref="DysonAgentSession.TryWithdrawUserQuestion"/> appends. List uses the same text.</summary>
+    public const string WithdrawnMarker = "Withdrawn.";
+
+    public const string StatePending = "pending";
+    public const string StateAnswered = "answered";
+    public const string StateWithdrawn = "withdrawn";
+
     /// <summary>
     /// One rule for the card button and <see cref="DysonAgentSession.TryRecordUserQuestionAnswer"/>.
     /// <paramref name="answeredUtc"/> is stamped by the session at record time.
@@ -168,6 +175,21 @@ public sealed record DysonUserQuestion(
         _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
     };
 }
+
+/// <summary>
+/// One <see cref="DysonAgentSession.ListUserQuestions"/> row. <see cref="PostedUtc"/> is UTC.
+/// <see cref="State"/> is <see cref="DysonUserQuestion.StatePending"/>,
+/// <see cref="DysonUserQuestion.StateAnswered"/>, or <see cref="DysonUserQuestion.StateWithdrawn"/>.
+/// A withdrawn card no longer stores <see cref="DysonUserQuestion.Id"/>, so <see cref="Id"/> is <see cref="Guid.Empty"/>.
+/// </summary>
+public sealed record DysonUserQuestionListItem(
+    Guid Id,
+    string Question,
+    string Message,
+    IReadOnlyList<string> Choices,
+    bool MultiSelect,
+    DateTime PostedUtc,
+    string State);
 
 /// <summary>Recorded card answer. <see cref="AnsweredUtc"/> is UTC, not <see cref="DateTimeOffset"/>.</summary>
 public sealed record DysonUserQuestionAnswer(
