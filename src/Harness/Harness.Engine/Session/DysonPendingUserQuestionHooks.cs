@@ -71,8 +71,17 @@ public static class DysonPendingUserQuestionHooks
             return Result<ulong, string>.AsError("Pending user questions are not configured.");
         if (session.PersistenceId == Guid.Empty)
             return Result<ulong, string>.AsError("Session is not persisted.");
-        if (!IsPendingQuestionTurn(turn) || turn.UserQuestion is not { Answer: null } question)
-            return Result<ulong, string>.AsError("Turn is not an unanswered question.");
+        // Re-read under the question gate. An update that landed before this insert must be copied,
+        // or the row keeps the pre-update card.
+        DysonUserQuestion question;
+        string message;
+        lock (session.UserQuestionGate)
+        {
+            if (!IsPendingQuestionTurn(turn) || turn.UserQuestion is not { Answer: null } live)
+                return Result<ulong, string>.AsError("Turn is not an unanswered question.");
+            question = live;
+            message = turn.AssistantText ?? "";
+        }
 
         int? subagentId = null;
         Guid? eventId = null;
@@ -97,7 +106,7 @@ public static class DysonPendingUserQuestionHooks
                 session.PersistenceId,
                 turn.Id,
                 question.Id,
-                turn.AssistantText ?? "",
+                message,
                 question.Question,
                 question.Choices,
                 question.MultiSelect,

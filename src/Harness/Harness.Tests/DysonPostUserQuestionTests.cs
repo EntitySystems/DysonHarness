@@ -551,6 +551,45 @@ public class DysonPostUserQuestionTests
     }
 
     [Fact]
+    public async Task Delete_refuses_a_secure_data_row_when_the_turn_is_gone()
+    {
+        var (accessor, path) = DysonTempDb.OpenFileAccessor();
+        try
+        {
+            var sessionId = await NewSessionAsync(accessor);
+            var repo = DysonTempDb.PendingUserQuestions(accessor);
+            var (_, executor) = await MetaExecutorAsync(repo, sessionId);
+            var requestId = Guid.NewGuid();
+            var inserted = await repo.CreateAsync(new DysonPendingUserQuestion(
+                0,
+                sessionId,
+                Guid.NewGuid(),
+                requestId,
+                "Enter secrets",
+                DysonSecureDataRequest.PendingTitle,
+                [],
+                false,
+                false,
+                null,
+                null,
+                DateTime.UtcNow,
+                DysonPendingUserQuestionKind.SecureData));
+            Assert.True(inserted.IsSuccess, inserted.IsError ? inserted.Error : null);
+
+            var deleted = await ExecuteNamedAsync(
+                executor, "DeleteUserQuestion", "{\"questionId\":\"" + requestId.ToString("D") + "\"}");
+            Assert.Equal(
+                "DeleteUserQuestion: that id is a secure data request. Use RequestSecureData.",
+                deleted.Content);
+            Assert.Equal(1, (await repo.CountAsync(sessionId)).Value);
+        }
+        finally
+        {
+            DeleteTemp(path);
+        }
+    }
+
+    [Fact]
     public async Task Update_and_delete_and_list_reject_when_not_meta_agent()
     {
         using var http = new HttpClient();

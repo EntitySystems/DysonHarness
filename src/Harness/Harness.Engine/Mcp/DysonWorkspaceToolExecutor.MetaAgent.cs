@@ -861,12 +861,36 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         var withdrawn = _session.TryWithdrawUserQuestion(id);
         if (withdrawn.IsError)
+        {
+            // No live card. Still refuse when the pending row is a credential request, and do not delete it.
+            if (await IsPendingSecureDataAsync(id, cancellationToken).ConfigureAwait(false))
+                return Error(call, "DeleteUserQuestion: that id is a secure data request. Use RequestSecureData.");
             return Error(call, withdrawn.Error);
+        }
 
         await DysonPendingUserQuestionHooks.DeleteAnsweredAsync(_session, id, cancellationToken)
             .ConfigureAwait(false);
 
         return Ok(call, "{\"ok\":true,\"questionId\":\"" + id.ToString("D") + "\"}");
+    }
+
+    private async Task<bool> IsPendingSecureDataAsync(Guid questionId, CancellationToken cancellationToken)
+    {
+        var repo = _session.Config.PendingUserQuestions;
+        if (repo is null || _session.PersistenceId == Guid.Empty)
+            return false;
+
+        var listed = await repo.ListAsync(_session.PersistenceId, cancellationToken).ConfigureAwait(false);
+        if (listed.IsError)
+            return false;
+
+        foreach (var row in listed.Value)
+        {
+            if (row.QuestionGuid == questionId && row.Kind == DysonPendingUserQuestionKind.SecureData)
+                return true;
+        }
+
+        return false;
     }
 
     private static Result<Guid, string> RequireQuestionId(JsonElement root, string toolName)

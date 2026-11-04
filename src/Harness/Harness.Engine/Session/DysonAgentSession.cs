@@ -16,6 +16,9 @@ public abstract class DysonAgentSession
     private readonly object _conversationActionsGate = new();
     // ponytail: one lock around question record/clear; upgrade only if answer writes become hot.
     private readonly object _userQuestionGate = new();
+
+    /// <summary>Same lock <see cref="TryRecordUserQuestionAnswer"/> holds. Pending insert copies the live card under it.</summary>
+    internal object UserQuestionGate => _userQuestionGate;
     private readonly Dictionary<string, Func<CancellationToken, Task<Result<string, string>>>> _conversationActions =
         new(StringComparer.Ordinal);
     private readonly List<DysonAgentSession> _subSessions = [];
