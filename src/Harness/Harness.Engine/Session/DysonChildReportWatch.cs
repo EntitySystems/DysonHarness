@@ -21,6 +21,27 @@ public static class DysonChildReportWatch
     public const string IdleWithoutReportReason =
         "Harness: child session ended without SubmitSubagentReport after 2 reminders.";
 
+    /// <summary>
+    /// Provider-loop failure when a child turn ends without a successful
+    /// <c>SubmitSubagentReport</c>. A harness condition: it becomes a synthetic failed
+    /// report (roster), never a host or runtime error banner.
+    /// </summary>
+    public const string PromptEndedWithoutReportReason =
+        "Child PromptAsync ended without SubmitSubagentReport.";
+
+    /// <summary>
+    /// True for a missing-report condition the harness already turns into a synthetic
+    /// failed report. Hosts and the runtime must not copy these onto a UI error banner.
+    /// </summary>
+    public static bool IsHarnessNoReportError(string? error) =>
+        !string.IsNullOrWhiteSpace(error)
+        && (string.Equals(error.Trim(), PromptEndedWithoutReportReason, StringComparison.Ordinal)
+            || string.Equals(error.Trim(), IdleWithoutReportReason, StringComparison.Ordinal)
+            || string.Equals(
+                error.Trim(),
+                "Child finished without SubmitSubagentReport (no assistant output).",
+                StringComparison.Ordinal));
+
     public const string ApplicationRestartReason = "application restart";
 
     public static DysonChildReportAction Evaluate(

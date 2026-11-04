@@ -166,89 +166,22 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
         DysonBrowserClickRequest request,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        if (!string.IsNullOrWhiteSpace(request.Selector))
-        {
-            var sel = JsonSerializer.Serialize(request.Selector);
-            var button = JsonSerializer.Serialize(request.Button ?? "left");
-            var js = $$"""
-                (() => {
-                  const el = document.querySelector({{sel}});
-                  if (!el) return 'selector not found';
-                  el.dispatchEvent(new MouseEvent('click', {
-                    bubbles: true, cancelable: true, view: window,
-                    button: {{button}} === 'right' ? 2 : ({{button}} === 'middle' ? 1 : 0),
-                    ctrlKey: {{(request.CtrlKey ? "true" : "false")}},
-                    shiftKey: {{(request.ShiftKey ? "true" : "false")}},
-                    altKey: {{(request.AltKey ? "true" : "false")}},
-                    metaKey: {{(request.MetaKey ? "true" : "false")}}
-                  }));
-                  if (typeof el.click === 'function' && {{button}} === 'left') el.click();
-                  return 'ok';
-                })()
-                """;
-            var result = await ExecuteJavaScriptAsync(js, cancellationToken).ConfigureAwait(false);
-            if (result.IsError)
-                return new VoidResult<string>(result.Error);
-            if (!string.Equals(result.Value, "ok", StringComparison.Ordinal))
-                return new VoidResult<string>(result.Value);
-            return VoidResult<string>.Success;
-        }
-
-        if (request.X is double x && request.Y is double y)
-        {
-            var js = $$"""
-                (() => {
-                  const el = document.elementFromPoint({{x.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{y.ToString(System.Globalization.CultureInfo.InvariantCulture)}});
-                  if (!el) return 'no element at coordinates';
-                  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: {{x.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, clientY: {{y.ToString(System.Globalization.CultureInfo.InvariantCulture)}} }));
-                  if (typeof el.click === 'function') el.click();
-                  return 'ok';
-                })()
-                """;
-            var result = await ExecuteJavaScriptAsync(js, cancellationToken).ConfigureAwait(false);
-            if (result.IsError)
-                return new VoidResult<string>(result.Error);
-            if (!string.Equals(result.Value, "ok", StringComparison.Ordinal))
-                return new VoidResult<string>(result.Value);
-            return VoidResult<string>.Success;
-        }
-
-        return new VoidResult<string>("Click requires selector or x/y coordinates.");
+        var script = DysonBrowserDomScripts.Click(request);
+        if (script.IsError)
+            return VoidResult<string>.AsError(script.Error);
+        var result = await ExecuteJavaScriptAsync(script.Value, cancellationToken).ConfigureAwait(false);
+        return DysonBrowserDomScripts.InterpretOk(result);
     }
 
     public async Task<VoidResult<string>> TypeAsync(
         DysonBrowserTypeRequest request,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        if (string.IsNullOrEmpty(request.Text))
-            return new VoidResult<string>("text is required");
-
-        var sel = request.Selector is null ? "null" : JsonSerializer.Serialize(request.Selector);
-        var text = JsonSerializer.Serialize(request.Text);
-        var js = $$"""
-            (() => {
-              const el = {{sel}} ? document.querySelector({{sel}}) : document.activeElement;
-              if (!el) return 'target not found';
-              el.focus();
-              if ({{(request.ClearFirst ? "true" : "false")}} && 'value' in el) el.value = '';
-              if ('value' in el) {
-                el.value = (el.value || '') + {{text}};
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-              } else {
-                el.textContent = (el.textContent || '') + {{text}};
-              }
-              return 'ok';
-            })()
-            """;
-        var result = await ExecuteJavaScriptAsync(js, cancellationToken).ConfigureAwait(false);
-        if (result.IsError)
-            return new VoidResult<string>(result.Error);
-        if (!string.Equals(result.Value, "ok", StringComparison.Ordinal))
-            return new VoidResult<string>(result.Value);
-        return VoidResult<string>.Success;
+        var script = DysonBrowserDomScripts.Type(request);
+        if (script.IsError)
+            return VoidResult<string>.AsError(script.Error);
+        var result = await ExecuteJavaScriptAsync(script.Value, cancellationToken).ConfigureAwait(false);
+        return DysonBrowserDomScripts.InterpretOk(result);
     }
 
     public async Task<VoidResult<string>> FillAsync(
@@ -270,60 +203,22 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
         string selector,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(selector))
-            return new VoidResult<string>("selector is required");
-        var sel = JsonSerializer.Serialize(selector);
-        var js = $$"""
-            (() => {
-              const el = document.querySelector({{sel}});
-              if (!el) return 'selector not found';
-              el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }));
-              el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true, view: window }));
-              return 'ok';
-            })()
-            """;
-        var result = await ExecuteJavaScriptAsync(js, cancellationToken).ConfigureAwait(false);
-        if (result.IsError)
-            return new VoidResult<string>(result.Error);
-        if (!string.Equals(result.Value, "ok", StringComparison.Ordinal))
-            return new VoidResult<string>(result.Value);
-        return VoidResult<string>.Success;
+        var script = DysonBrowserDomScripts.Hover(selector);
+        if (script.IsError)
+            return VoidResult<string>.AsError(script.Error);
+        var result = await ExecuteJavaScriptAsync(script.Value, cancellationToken).ConfigureAwait(false);
+        return DysonBrowserDomScripts.InterpretOk(result);
     }
 
     public async Task<VoidResult<string>> PressKeyAsync(
         DysonBrowserKeyRequest request,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        if (string.IsNullOrWhiteSpace(request.Key))
-            return new VoidResult<string>("key is required");
-
-        var sel = request.Selector is null ? "null" : JsonSerializer.Serialize(request.Selector);
-        var key = JsonSerializer.Serialize(request.Key);
-        var js = $$"""
-            (() => {
-              const el = {{sel}} ? document.querySelector({{sel}}) : document.activeElement || document.body;
-              if (!el) return 'target not found';
-              el.focus();
-              const opts = {
-                key: {{key}}, bubbles: true, cancelable: true,
-                ctrlKey: {{(request.CtrlKey ? "true" : "false")}},
-                shiftKey: {{(request.ShiftKey ? "true" : "false")}},
-                altKey: {{(request.AltKey ? "true" : "false")}},
-                metaKey: {{(request.MetaKey ? "true" : "false")}}
-              };
-              el.dispatchEvent(new KeyboardEvent('keydown', opts));
-              el.dispatchEvent(new KeyboardEvent('keypress', opts));
-              el.dispatchEvent(new KeyboardEvent('keyup', opts));
-              return 'ok';
-            })()
-            """;
-        var result = await ExecuteJavaScriptAsync(js, cancellationToken).ConfigureAwait(false);
-        if (result.IsError)
-            return new VoidResult<string>(result.Error);
-        if (!string.Equals(result.Value, "ok", StringComparison.Ordinal))
-            return new VoidResult<string>(result.Value);
-        return VoidResult<string>.Success;
+        var script = DysonBrowserDomScripts.PressKey(request);
+        if (script.IsError)
+            return VoidResult<string>.AsError(script.Error);
+        var result = await ExecuteJavaScriptAsync(script.Value, cancellationToken).ConfigureAwait(false);
+        return DysonBrowserDomScripts.InterpretOk(result);
     }
 
     public async Task<VoidResult<string>> WaitForSelectorAsync(
@@ -340,7 +235,7 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
         while (Environment.TickCount64 < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var js = $"(document.querySelector({sel}) ? 'ok' : 'missing')";
+            var js = DysonBrowserDomScripts.SelectorProbe(sel);
             var result = await ExecuteJavaScriptAsync(js, cancellationToken).ConfigureAwait(false);
             if (result.IsError)
                 return new VoidResult<string>(result.Error);
@@ -423,7 +318,7 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
     }
 
     public Task<Result<string, string>> GetHtmlAsync(CancellationToken cancellationToken = default) =>
-        ExecuteJavaScriptAsync("document.documentElement.outerHTML", cancellationToken);
+        ExecuteJavaScriptAsync(DysonBrowserDomScripts.OuterHtml, cancellationToken);
 
     public async Task<Result<byte[], string>> TakeScreenshotAsync(
         int? timeoutMs = null,

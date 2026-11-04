@@ -37,6 +37,11 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
             // Code-owned URL; ApiKey stays the dyson-xai:<guid> handle that XaiGrokRequestHandler swaps for the token.
             BaseUrl = XaiGrokClientProfile.ChatProxyBaseUrl;
         }
+        else if (DysonManagedSources.IsOpenAiCodex(ManagedSource))
+        {
+            // Code-owned URL (no /v1). ApiKey stays the dyson-openai-codex:<guid> handle.
+            BaseUrl = OpenAiCodexClientProfile.InferenceBaseUrl;
+        }
     }
 
     /// <summary>Convenience: slug must include <see cref="DysonModelSlugEntity.Provider"/>.</summary>

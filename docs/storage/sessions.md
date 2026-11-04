@@ -51,6 +51,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `ToolStateJson` | Full snapshot of tool calls + results (restore fidelity), plus optional per-round data (camelCase keys; no new column, no migration): `toolRoundCallCounts`; `toolRoundReasoningItems` (raw Responses reasoning items per tool round, index-aligned with the counts, `null` for a round without any); `finalReasoningItems` (the final no-tool round); `reasoningItemsSource` (the `ReasoningSourceTag` that produced them: `ManagedSource`, else the base URL's `scheme://host:port`, else the provider id). The three reasoning keys are omitted when no round has reasoning items, and rows written before they existed restore with none. Replay for finished turns is gated by `preserve_reasoning_traces` and a matching source ([engine README](../engine/README.md)#openai-compatible-provider). Stored encrypted reasoning blobs make these rows larger. Visualization bodies stay here on the render turn |
 | `VisualizationId` | `Guid?`. Set only on a meta `DisplayInfo` post. Null otherwise. The viz body stays in `ToolStateJson` |
 | `UserQuestionJson` | string?. Meta `DisplayInfo` question card (question and answer in one JSON blob). Null on every other turn. `answeredUtc` inside the blob is UTC `DateTime`, not its own column |
+| `SecureDataRequestJson` | string?. Meta `DisplayInfo` `RequestSecureData` card (`DysonSecureDataRequestSerializer`): request id, `{key, description}` fields, and the outcome (`cancelled`, `stored` / `skipped` key lists, `completedUtc` UTC). Never a value. Migration `20261103201328_AddSessionSecrets` |
 | `ToolHistoryOptimized` | bool |
 | `CompactToolHistory` | string? |
 | `CreatedUtc`, `CompletedUtc`? | `DateTime` UTC |
@@ -91,6 +92,41 @@ One private memory document per voice sidecar session. Migration `20261029031944
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 
 Deleting the sidecar session cascades this row. Deleting the root Meta session deletes the sidecar (see below), so the memory goes with it.
+
+### `pending_user_questions`
+
+Unanswered Meta `PostUserQuestion` cards and open `RequestSecureData` cards, one row per card. Migration `20261102015422_AddPendingUserQuestions`. Entity `DysonPendingUserQuestionEntity`; runtime mirror `DysonPendingUserQuestion`. Repository `IDysonPendingUserQuestionRepository` (`CreateAsync`, `ListAsync` oldest first, `CountAsync`, `DeleteAsync`, `DeleteByQuestionGuidAsync`; both deletes treat a missing row as success). The live card stays on `turns.UserQuestionJson`; this table is the pending index the Meta header **Questions** pill and modal read. Answering or dismissing deletes the row; there are no answer columns. No backfill for cards posted before the table existed.
+
+| Column | Notes |
+| ------ | ----- |
+| `Id` | `ulong` on the entity, stored as signed `INTEGER` autoincrement through an `unchecked` long↔ulong converter (EF's negative temporary key round-trips through it before insert, so `checked` would overflow). Insert leaves 0; SQLite assigns 1, 2, 3… Never ordered in SQL |
+| `SubjectId` | string — owning subject; every query filters it |
+| `SessionId` | Guid FK → `sessions`, cascade on delete. Index (`SubjectId`, `SessionId`) |
+| `TurnId` | Guid — the `DisplayInfo` turn. No FK (turns are rewritten) |
+| `Kind` | int `DysonPendingUserQuestionKind`: `Question` (0, default) or `SecureData` (1). Added by `20261103201328_AddSessionSecrets` |
+| `QuestionGuid` | Guid — the card id (`DysonUserQuestion.Id`, or `DysonSecureDataRequest.Id`) |
+| `Message`, `Question` | TEXT — bubble body and card title (`Enter secrets` for SecureData) |
+| `ChoicesJson` | JSON `string[]` via `StringListJsonValueConverter`. For SecureData each entry is a compact `{"key","description"}` object string (`DysonSecureDataRequest.EncodePendingChoice` / `DecodePendingChoice`); never a value |
+| `MultiSelect`, `AllowCustomAnswer` | bool |
+| `SubagentId`, `EventId` | nullable — snapshot of the newest parked (`AwaitingUserAnswer`) parent event at insert time. Audit only; the answer turn still attaches every parked event through the reminder |
+| `CreatedUtc` | `DateTime` UTC |
+
+The row is written off the circuit from the turn-added hooks (`DysonSessionRuntime.OnTurnAdded` for runtime-owned sessions, `DysonUiHost.OnTurnAdded` otherwise) through `DysonPendingUserQuestionHooks.InsertAsync`. A failed insert is logged and the card still shows; that question just does not appear in the modal. Insert and delete publish `DysonPendingUserQuestionsChangedEvent` on the session bus key. `InsertAsync` delegates SecureData turns to `InsertSecureDataAsync`.
+
+### `session_secrets`
+
+Values the user typed into a Meta `RequestSecureData` card. Scoped to the **root Meta session** (Meta Agent Drones read their root's store). Migration `20261103201328_AddSessionSecrets`. Entity `DysonSessionSecretEntity`; limits `DysonSessionSecretLimits` (key `[A-Za-z0-9._-]` 1–64, description 1–200, secret 1–8192). Repository `IDysonSessionSecretRepository` (`UpsertAsync`, `ListKeysAsync` ordinal, `GetAsync`, `DeleteAsync`; missing-row delete is success). Error strings carry the key, never the value.
+
+| Column | Notes |
+| ------ | ----- |
+| `Id` | Guid PK |
+| `SubjectId` | string — owning subject; every query filters it |
+| `SessionId` | Guid FK → `sessions`, cascade on delete. Unique (`SessionId`, `Key`); index (`SubjectId`, `SessionId`) |
+| `Key`, `Description` | TEXT — max 64 / 200 |
+| `Secret` | TEXT, max 8192. **Plaintext in SQLite**, same posture as model API keys and the `app_settings` credential rows ([models.md](models.md#app-settings-app_settings)) |
+| `UpdatedUtc` | `DateTime` UTC |
+
+Values reach a command only through `WriteSecureDataToFile`, which writes the exact UTF-8 bytes (no BOM, no trailing newline) to `{key}-{8hex}.{guid}.dysonsecret` in the OS temp dir (best-effort current-user ACL on Windows). `DysonSecureDataFiles` tracks paths in a process-wide map; `DeleteSecureData` deletes the row and its files, app shutdown deletes every tracked file, and startup sweeps `*.dysonsecret` older than 7 days. Command stdout is not redacted (deferred).
 
 ### `session_logs` (discriminated JSON)
 

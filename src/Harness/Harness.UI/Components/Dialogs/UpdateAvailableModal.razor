@@ -152,7 +152,7 @@
 
     private async Task InstallAsync()
     {
-        // Only returns on failure — the success path launches msiexec and exits the process.
+        // Only returns on failure — the success path starts the installer and exits the process.
         await Updates.DownloadAndInstallAsync();
     }
 

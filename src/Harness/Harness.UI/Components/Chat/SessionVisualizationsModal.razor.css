@@ -2,7 +2,7 @@
    `.turn-visualization__frame, .session-visualizations-modal__frame` base rule stays global. */
 .session-visualizations-modal {
   width: min(980px, 100%);
-  max-height: min(84vh, 760px);
+  height: min(84vh, 760px);
 }
 
 .session-visualizations-modal__title-row {
@@ -28,13 +28,17 @@
 }
 
 .session-visualizations-modal__body {
+  display: flex;
+  flex-direction: column;
   padding: 0;
+  overflow: hidden;
 }
 
 .session-visualizations-modal__layout {
   display: grid;
   grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);
-  min-height: min(64vh, 560px);
+  flex: 1;
+  min-height: 0;
 }
 
 .session-visualizations-modal__list {
@@ -94,7 +98,10 @@
 }
 
 .session-visualizations-modal__preview {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
   padding: var(--sp-4);
   background: var(--surface-sunken);
 }
@@ -106,7 +113,9 @@
 }
 
 .session-visualizations-modal__frame {
-  height: min(58vh, 520px);
+  flex: 1;
+  width: 100%;
+  min-height: 0;
   border: 0;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-1);
@@ -115,6 +124,7 @@
 @media (max-width: 680px) {
   .session-visualizations-modal__layout {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .session-visualizations-modal__list {
@@ -123,6 +133,6 @@
   }
 
   .session-visualizations-modal__frame {
-    height: 45vh;
+    min-height: 45vh;
   }
 }

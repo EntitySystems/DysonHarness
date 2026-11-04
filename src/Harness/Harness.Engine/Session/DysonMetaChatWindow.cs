@@ -101,7 +101,7 @@ public static class DysonMetaChatWindow
             var t = turns[i];
             if (!t.IsExcludedFromContext || t.CompletedUtc is null)
                 continue;
-            if (t.UserQuestion is { Answer: null })
+            if (t.UserQuestion is { Answer: null } || t.SecureDataRequest is { Outcome: null })
                 continue;
             if (shownVisualizations.Count > 0
                 && t.TrackedToolCalls.Any(c => c.Result?.HtmlVisualization?.Id is { } v && shownVisualizations.Contains(v)))

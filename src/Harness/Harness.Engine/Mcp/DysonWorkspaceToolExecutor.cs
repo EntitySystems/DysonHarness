@@ -187,6 +187,10 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "OpenWorkdirsPanel" => await OpenWorkdirsPanelAsync(call).ConfigureAwait(false),
                 "SwitchWorkdir" => await SwitchWorkdirAsync(call, cancellationToken).ConfigureAwait(false),
                 "PostUserQuestion" => PostUserQuestion(call),
+                "RequestSecureData" => RequestSecureData(call),
+                "ListSecureDataKeys" => await ListSecureDataKeysAsync(call, cancellationToken).ConfigureAwait(false),
+                "WriteSecureDataToFile" => await WriteSecureDataToFileAsync(call, cancellationToken).ConfigureAwait(false),
+                "DeleteSecureData" => await DeleteSecureDataAsync(call, cancellationToken).ConfigureAwait(false),
                 "CompactConversation" => CompactConversation(call),
                 "RemoveTodos" => await RemoveTodosAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListPlans" => await ListPlansAsync(call, cancellationToken).ConfigureAwait(false),
@@ -964,11 +968,13 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (submitted.IsError)
             return Error(call, submitted.Error);
 
+        // None from here: the report is accepted in memory; a run cancel must not skip
+        // persisting it or turn the accepted submit into "Tool execution was cancelled.".
         await PersistSessionStatusAsync(
                 _session,
                 _session.Status,
                 summary,
-                cancellationToken)
+                CancellationToken.None)
             .ConfigureAwait(false);
 
         if (_session.Parent is not null
@@ -986,7 +992,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                     Summary: summary,
                     PersistenceId: _session.PersistenceId == Guid.Empty ? null : _session.PersistenceId));
 
-            await _store.AppendLogAsync(interruptLog, cancellationToken).ConfigureAwait(false);
+            await _store.AppendLogAsync(interruptLog, CancellationToken.None).ConfigureAwait(false);
         }
 
         // First accepted handoff soft-closes the tool loop so the model cannot re-Submit this turn.

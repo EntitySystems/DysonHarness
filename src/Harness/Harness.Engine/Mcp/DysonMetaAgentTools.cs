@@ -43,12 +43,14 @@ public static class DysonMetaAgentTools
         "DeleteMetaScratchFile",
         "DeleteNote",
         "DeletePlan",
+        "DeleteSecureData",
         "EditMetaPlan",
         "EditMetaScratchFile",
         "GetOpenRulesConfig",
         "ListMetaAgentDrones",
         "ListNotes",
         "ListPlans",
+        "ListSecureDataKeys",
         "ListTodos",
         "ListWorkdirs",
         "LoadSkill",
@@ -62,6 +64,7 @@ public static class DysonMetaAgentTools
         "ReadTempFile",
         "RemoveTodos",
         "RenderHtmlVisualization",
+        "RequestSecureData",
         "RespondToSubagentEvent",
         "SetPlanStatus",
         "StartAsyncBugReviewAgent",
@@ -73,6 +76,7 @@ public static class DysonMetaAgentTools
         "SwitchWorkdir",
         "UpdateNote",
         "UpdateTodo",
+        "WriteSecureDataToFile",
         "WriteTempFile",
     ];
 
@@ -176,6 +180,9 @@ public static class DysonMetaAgentTools
 
         foreach (var tool in CreateScratchTools())
             pipeline.Tools[tool.Name] = tool;
+
+        foreach (var tool in CreateSecureDataUseTools())
+            pipeline.Tools[tool.Name] = tool;
     }
 
     /// <summary>
@@ -198,6 +205,63 @@ public static class DysonMetaAgentTools
 
         foreach (var tool in CreateScratchTools())
             pipeline.Tools[tool.Name] = tool;
+
+        foreach (var tool in CreateSecureDataUseTools())
+            pipeline.Tools[tool.Name] = tool;
+    }
+
+    private const string SecureDataNeverVerbatim =
+        "Passwords, API keys, tokens, and other credentials are requested with RequestSecureData, never verbatim in chat.";
+
+    /// <summary>List / Write / Delete for stored secrets. Meta Agent and Meta Agent Drone only; reads the root Meta store.</summary>
+    internal static IEnumerable<DysonMcpTool> CreateSecureDataUseTools()
+    {
+        yield return new DysonMcpTool
+        {
+            Name = "ListSecureDataKeys",
+            Description =
+                "List the keys of secrets stored for this Meta session. Returns keys only, never values. " +
+                "To use a secret, call WriteSecureDataToFile and pipe the file. Never echo, cat, or print a secret. " +
+                SecureDataNeverVerbatim,
+            InputSchemaJson = """{ "type": "object", "properties": {} }""",
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "WriteSecureDataToFile",
+            Description =
+                "Write one stored secret to a temp file and return its path. The file bytes are the secret alone, " +
+                "with no added whitespace and no trailing newline. Pipe the file into a command " +
+                "(for example `Get-Content -Raw <path> |`). Never echo, type, cat, or print the secret, " +
+                "and never read the file back into the chat. " +
+                SecureDataNeverVerbatim,
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "key": { "type": "string", "description": "Key of a stored secret (see ListSecureDataKeys)." }
+                  },
+                  "required": ["key"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "DeleteSecureData",
+            Description =
+                "Delete one stored secret and any temp files previously written for that key. " +
+                SecureDataNeverVerbatim,
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "key": { "type": "string", "description": "Key of the secret to delete." }
+                  },
+                  "required": ["key"]
+                }
+                """,
+        };
     }
 
     private static IEnumerable<DysonMcpTool> CreateMetaAgentTools()
@@ -500,6 +564,41 @@ public static class DysonMetaAgentTools
                     }
                   },
                   "required": ["message", "question", "choices"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "RequestSecureData",
+            Description =
+                "Ask the user for secrets through masked fields. You MUST use this tool for passwords, API keys, tokens, " +
+                "and any other credential. Never ask for a secret verbatim in the session: not in chat, not in " +
+                "PostConversationMessage, not in PostUserQuestion, not in AskQuestion, and not in any other tool. " +
+                "Pass one entry per secret: key (a short stable id you will use later) and description (the label the user reads). " +
+                "Does not block and does not return the values. The user submits or cancels; the next turn says which keys " +
+                "were stored and nothing else. To use a stored secret, call WriteSecureDataToFile and pipe that file into the " +
+                "command. Never echo, type, cat, or print the secret.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 8,
+                      "description": "One masked field per entry.",
+                      "items": {
+                        "type": "object",
+                        "required": ["key", "description"],
+                        "properties": {
+                          "key": { "type": "string", "description": "Stable id, 1..64 chars, letters, digits, dot, underscore, hyphen." },
+                          "description": { "type": "string", "description": "Label the user sees. Not the secret." }
+                        }
+                      }
+                    }
+                  },
+                  "required": ["data"]
                 }
                 """,
         };

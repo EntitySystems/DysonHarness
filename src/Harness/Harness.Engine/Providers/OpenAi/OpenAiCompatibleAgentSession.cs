@@ -865,8 +865,6 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             OpenAiCacheFriendlyTranscriptBuilder.IncompleteToolResultContent;
         const string childReportNudge =
             "Harness: plain text does not finish this subagent. Call SubmitSubagentReport now with your findings (or blocker).";
-        const string childReportMissing =
-            "Child PromptAsync ended without SubmitSubagentReport.";
         var maxRounds = ResolveMaxToolRounds();
         var stoppedForCompaction = false;
 
@@ -1152,7 +1150,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     turn.ClearReasoningPreview();
                     turn.FinalizeIncompleteTools(incompleteToolReason);
                     AppendLog("child report gate: missing SubmitSubagentReport after nudge");
-                    return new VoidResult<string>(childReportMissing);
+                    return new VoidResult<string>(DysonChildReportWatch.PromptEndedWithoutReportReason);
                 }
 
                 // Comment arrived during this stream — deliver it next round instead of finalizing.

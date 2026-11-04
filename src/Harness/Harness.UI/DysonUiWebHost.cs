@@ -43,8 +43,9 @@ public static class DysonUiWebHost
         // --no-launch-profile` never reads that file and would otherwise fall back to Kestrel
         // :5000. Development with no explicit URL binds 5181. The installed Windows shell does
         // not use a fixed port: App.xaml.cs passes http://127.0.0.1:0 (ephemeral loopback).
-        // Published linux/osx Harness.UI has no launchSettings and is Production, so it keeps
+        // Published Linux Harness.UI has no launchSettings and is Production, so it keeps
         // the Kestrel default (http://localhost:5000) unless the caller passes a URL.
+        // The macOS desktop shell passes http://127.0.0.1:0, same as the Windows shell.
         // An explicit URL still wins: --urls, ASPNETCORE_URLS, or DysonUiWebHostOptions.Urls.
         if (builder.Environment.IsDevelopment()
             && string.IsNullOrWhiteSpace(options.Urls)
@@ -154,14 +155,30 @@ public static class DysonUiWebHost
         });
         builder.Services.AddSingleton<XaiGrokAuthService>();
         builder.Services.AddTransient<XaiGrokRequestHandler>();
+        // Native ChatGPT Codex: User-Agent override (config Dyson:OpenAiCodex), a plain "openai-codex-oauth"
+        // client for the token endpoint, and OpenAiCodexRequestHandler on the DEFAULT client
+        // (acts only on dyson-openai-codex:<guid> bearers).
+        builder.Services.AddSingleton(
+            builder.Configuration.GetSection(OpenAiCodexClientOptions.SectionName).Get<OpenAiCodexClientOptions>()
+            ?? new OpenAiCodexClientOptions());
+        builder.Services.AddHttpClient("openai-codex-oauth");
+        builder.Services.AddSingleton(sp =>
+        {
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            return new OpenAiCodexOAuthClient(() => factory.CreateClient("openai-codex-oauth"));
+        });
+        builder.Services.AddSingleton<OpenAiCodexAuthService>();
+        builder.Services.AddTransient<OpenAiCodexRequestHandler>();
         builder.Services.AddHttpClient(Microsoft.Extensions.Options.Options.DefaultName)
-            .AddHttpMessageHandler<XaiGrokRequestHandler>();
+            .AddHttpMessageHandler<XaiGrokRequestHandler>()
+            .AddHttpMessageHandler<OpenAiCodexRequestHandler>();
         builder.Services.AddScoped<ManagedInferenceProviderCatalog>();
 #if WINDOWS
         builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
         builder.Services.AddSingleton<IDysonAudioPlayback, DysonWindowsAudioPlayback>();
         builder.Services.AddSingleton<IDysonAudioCapture, DysonWindowsAudioCapture>();
 #endif
+        options.ConfigureServices?.Invoke(builder.Services);
         builder.Services.AddSingleton<IDysonSessionRuntimeScopeFactory, DysonUiSessionRuntimeScopeFactory>();
         builder.Services.AddSingleton<DysonSessionRuntimeRegistry>();
         builder.Services.AddSingleton<DysonMessageBus>();
@@ -255,6 +272,12 @@ public static class DysonUiWebHost
             db.EnsureMigrated();
         }
 
+        // Read version.json before any circuit exists (rules_blazor_circuit).
+        _ = DysonAppVersionInfo.Local;
+
+        // Backstop for RequestSecureData temp files a crash left behind.
+        _ = Task.Run(() => DysonSecureDataFiles.SweepStale());
+
         app.Lifetime.ApplicationStopping.Register(() =>
         {
             try
@@ -277,6 +300,7 @@ public static class DysonUiWebHost
                 // ignore shutdown races
             }
 
+            DysonSecureDataFiles.DeleteAllTracked();
             DysonPhononSpeech.StopSidecar();
             DysonCrispSpeech.StopSidecar();
             DysonNemotronSpeech.Stop();

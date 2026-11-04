@@ -7,7 +7,8 @@ public sealed record DysonSessionWorktreeLocation(string AbsolutePath, string Br
 
 /// <summary>
 /// Forks, copies untracked harness files, merges, and removes a session worktree.
-/// Persistence and host rebind are the caller's job.
+/// Persistence and host rebind are the caller's job, except
+/// <see cref="ResolvePersistedPathAsync"/>, which clears a persisted path whose folder is gone.
 /// </summary>
 public static class DysonSessionWorktree
 {
@@ -113,6 +114,43 @@ public static class DysonSessionWorktree
     }
 
     /// <summary>
+    /// Returns the persisted worktree path when its folder still exists. When it is gone,
+    /// clears WorktreeAbsolutePath/WorktreeBranch in the store and on <paramref name="session"/>
+    /// and returns null. Null/blank path returns null without I/O. The folder probe runs off the caller.
+    /// </summary>
+    public static async Task<Result<string?, string>> ResolvePersistedPathAsync(
+        IDysonSessionRepository sessions,
+        DysonSessionEntity session,
+        CancellationToken cancellationToken = default)
+    {
+        var path = session.WorktreeAbsolutePath;
+        if (string.IsNullOrWhiteSpace(path))
+            return Result<string?, string>.AsValue(null);
+
+        // ponytail: Directory.Exists has no TAP, so this hops once (same ceiling as TryFindRootMostRepoAsync).
+        var exists = await Task.Run(() => Directory.Exists(path)).ConfigureAwait(false);
+        if (exists)
+            return Result<string?, string>.AsValue(path);
+
+        var clear = await sessions.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate
+                {
+                    SessionId = session.Id,
+                    UpdateWorktreeLocation = true,
+                    WorktreeAbsolutePath = null,
+                    WorktreeBranch = null,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (clear.IsError)
+            return Result<string?, string>.AsError(clear.Error);
+
+        session.WorktreeAbsolutePath = null;
+        session.WorktreeBranch = null;
+        return Result<string?, string>.AsValue(null);
+    }
+
+    /// <summary>
     /// Removes the worktree checkout. Leaves the <c>dyson/…</c> branch. Does not persist.
     /// </summary>
     public static async Task<VoidResult<string>> RemoveAsync(
@@ -163,6 +201,13 @@ public static class DysonSessionWorktree
     /// </summary>
     internal static readonly TimeSpan MergeGateWaitTimeout = TimeSpan.FromSeconds(90);
 
+    /// <summary>
+    /// Gate wait for the merge a completed drone report starts. Short so a busy gate never
+    /// holds the submit: the report is recorded as merge pending and retried without a timeout.
+    /// Settable for tests.
+    /// </summary>
+    internal static TimeSpan DroneReportMergeGateWait = TimeSpan.FromSeconds(2);
+
     /// <summary>Prefix on a content-conflict error after <c>git merge --abort</c>.</summary>
     public const string MergeConflictAbortedPrefix = "Merge conflict aborted:";
 
@@ -171,7 +216,9 @@ public static class DysonSessionWorktree
     /// Merge conflicts leave the worktree in place. <paramref name="abortConflict"/> defaults false
     /// (UI merge keeps conflict markers). When true and unmerged paths exist, aborts that merge
     /// before releasing the gate and returns <see cref="MergeConflictAbortedPrefix"/> plus those paths.
-    /// Waiting on <see cref="MergeGates"/> is bounded by <see cref="MergeGateWaitTimeout"/>.
+    /// Waiting on <see cref="MergeGates"/> is bounded by <paramref name="gateWaitTimeout"/>
+    /// (null means <see cref="MergeGateWaitTimeout"/>; <see cref="Timeout.InfiniteTimeSpan"/> waits until free).
+    /// <paramref name="gateWaitCancellation"/> cancels only that wait (returns "Worktree merge cancelled.").
     /// </summary>
     public static async Task<VoidResult<string>> MergeAsync(
         string registeredWorkDirectoryAbsolutePath,
@@ -179,7 +226,9 @@ public static class DysonSessionWorktree
         string branchName,
         bool forceRemoveIfDirty = false,
         bool abortConflict = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TimeSpan? gateWaitTimeout = null,
+        CancellationToken gateWaitCancellation = default)
     {
         var repo = await DysonGitInfo.TryFindRootMostRepoAsync(
                 registeredWorkDirectoryAbsolutePath, cancellationToken)
@@ -191,7 +240,12 @@ public static class DysonSessionWorktree
         var entered = false;
         try
         {
-            entered = await gate.WaitAsync(MergeGateWaitTimeout, cancellationToken).ConfigureAwait(false);
+            // gateWaitCancellation stops only the wait: once inside, the merge is not torn mid-git.
+            using var linked = gateWaitCancellation.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, gateWaitCancellation)
+                : null;
+            entered = await gate.WaitAsync(gateWaitTimeout ?? MergeGateWaitTimeout, linked?.Token ?? cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -200,6 +254,12 @@ public static class DysonSessionWorktree
 
         if (!entered)
             return VoidResult<string>.AsError("Worktree merge timed out waiting for another merge.");
+
+        if (gateWaitCancellation.IsCancellationRequested)
+        {
+            gate.Release();
+            return VoidResult<string>.AsError("Worktree merge cancelled.");
+        }
 
         try
         {

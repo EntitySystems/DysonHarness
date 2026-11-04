@@ -346,6 +346,9 @@ public class XaiGrokManagedInferenceProviderTests
             new XaiGrokAuthService(
                 rig.Store,
                 new XaiOAuthClient(() => new HttpClient())),
+            new OpenAiCodexAuthService(
+                new InMemoryOpenAiCodexCredentialStore(),
+                new OpenAiCodexOAuthClient(() => new HttpClient())),
             DysonFixedLocalSubjectContext.Instance);
         using var _ = c2;
 

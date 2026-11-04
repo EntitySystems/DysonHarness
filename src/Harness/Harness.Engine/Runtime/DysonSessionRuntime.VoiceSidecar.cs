@@ -492,7 +492,9 @@ public sealed partial class DysonSessionRuntime
                 var generation = Volatile.Read(ref _voiceDeliveryGeneration);
                 var delivered = await DeliverVoiceSidecarMessageAsync(message, generation, CancellationToken.None)
                     .ConfigureAwait(false);
-                if (delivered.IsError && !IsPromptControl(delivered))
+                if (delivered.IsError
+                    && !IsPromptControl(delivered)
+                    && !DysonChildReportWatch.IsHarnessNoReportError(delivered.Error))
                     ReportError(delivered.Error);
             }
             catch (Exception ex)
@@ -625,7 +627,7 @@ public sealed partial class DysonSessionRuntime
     {
         if (_voiceTurnResults.TryGetValue(turnId, out var waiter))
             waiter.TrySetResult(result);
-        else if (result.IsError)
+        else if (result.IsError && !DysonChildReportWatch.IsHarnessNoReportError(result.Error))
             ReportError(result.Error);
     }
 

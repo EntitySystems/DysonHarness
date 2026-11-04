@@ -331,6 +331,8 @@ public sealed class OpenAiResponsesClient(HttpClient http)
 
         if (DysonManagedSources.IsXaiGrok(provider.ManagedSource))
             XaiResponsesRequestSanitizer.Apply(body, XaiGrokModelCatalog.Find(provider.Slug));
+        else if (DysonManagedSources.IsOpenAiCodex(provider.ManagedSource))
+            OpenAiCodexRequestSanitizer.Apply(body);
 
         return body;
     }

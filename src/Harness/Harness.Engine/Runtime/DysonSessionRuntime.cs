@@ -1466,6 +1466,10 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
         RefreshRegistryKey(session);
         HookTurn(turn);
         QueuePersist(() => PersistTurnStartedAsync(session, turn));
+        if (session.Config.PendingUserQuestions is not null
+            && session.PersistenceId != Guid.Empty
+            && DysonPendingUserQuestionHooks.IsPendingQuestionTurn(turn))
+            QueuePersist(() => InsertPendingQuestionAsync(session, turn));
         RaiseChanged(DysonRuntimeChangeKind.SessionGraph, session.PersistenceId);
     }
 
@@ -1629,6 +1633,13 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
         }
 
         return -1;
+    }
+
+    private async Task InsertPendingQuestionAsync(DysonAgentSession session, DysonAgentTurn turn)
+    {
+        var inserted = await DysonPendingUserQuestionHooks.InsertAsync(session, turn).ConfigureAwait(false);
+        if (inserted.IsError)
+            ReportError(inserted.Error);
     }
 
     private void QueuePersist(Func<Task> action)

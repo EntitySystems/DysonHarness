@@ -221,6 +221,18 @@ public class DysonAgentSessionConfig
     public IDysonVoiceSidecarMemoryRepository? VoiceSidecarMemory { get; set; }
 
     /// <summary>
+    /// Optional pending-question index. Hosts insert a row when a Meta DisplayInfo question card is
+    /// posted and delete it when answered. Null ⇒ no rows (tests, no DB). Children share this config instance.
+    /// </summary>
+    public IDysonPendingUserQuestionRepository? PendingUserQuestions { get; set; }
+
+    /// <summary>
+    /// Optional RequestSecureData store (root Meta session rows). Null ⇒ the secure-data tools return
+    /// "not available". Children share this config instance.
+    /// </summary>
+    public IDysonSessionSecretRepository? SessionSecrets { get; set; }
+
+    /// <summary>
     /// Optional workdir-scoped custom MCP host (<c>.dyson/mcp</c>).
     /// When set and <see cref="DysonCustomMcpHost.McpActive"/>, namespaced tools are merged into the catalog.
     /// </summary>

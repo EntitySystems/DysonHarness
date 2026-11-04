@@ -7,12 +7,13 @@ Continuous publishing has two tracks:
 | `master` | `stable` | Full release (not pre-release) |
 | `release-preview` | `preview` | Pre-release (`--prerelease`) |
 
-Every push to either branch publishes self-contained zips (all RIDs) and a Windows **MSI** (`win-x64`) tagged with that run’s CalVer (`YYYY.M.run_number`). Pushes to other branches (for example `dev-bleeding-edge`) do not run continuous release.
+Every push to either branch publishes self-contained zips (all RIDs), a Windows **MSI** (`win-x64`), and signed macOS **packages** (`osx-arm64`, `osx-x64`) tagged with that run’s CalVer (`YYYY.M.run_number`). Pushes to other branches (for example `dev-bleeding-edge`) do not run continuous release.
 
 | RID | Publish project | Entrypoint |
 | --- | --------------- | ---------- |
 | `win-x64` | `DysonHarness.UI.Windows` | `DysonHarness.exe` (CefSharp WPF shell hosting Blazor in-process) |
-| `linux-x64` / `osx-*` | `Harness.UI` | `Harness.UI` |
+| `linux-x64` | `Harness.UI` | `Harness.UI` |
+| `osx-arm64` / `osx-x64` | `DysonHarness.UI.macOS` | `DysonHarness.app` (WKWebView shell hosting Blazor in-process; agent browser is a second window) |
 
 Pull requests to `master` / `release-preview` and pushes to other branches run tests only (see [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)); they do not publish artifacts. Manual **workflow_dispatch** of continuous release is limited to those two refs.
 
@@ -31,15 +32,15 @@ The channels are retained independently. For each older selected release, cleanu
 
 - Releases: https://github.com/EntitySystems/DysonHarness/releases
 - Prefer the latest **stable** (non-prerelease) MSI for production installs; preview builds are marked as GitHub pre-releases
-- Every publish output (so every zip and the MSI payload) also contains `LICENSE` and `THIRD-PARTY-NOTICES.md` (MIT attribution for the CLIProxyAPI-derived native xAI provider).
-- Asset names: `DysonHarness-{version}-{rid}.zip` (all RIDs); `DysonHarness-{version}-win-x64.msi` (Windows installer)
+- Every publish output (so every zip, the MSI, and the macOS pkg) also contains `LICENSE` and `THIRD-PARTY-NOTICES.md` (MIT attribution for the CLIProxyAPI-derived native xAI and ChatGPT Codex providers).
+- Asset names: `DysonHarness-{version}-{rid}.zip` (all RIDs); `DysonHarness-{version}-win-x64.msi` (Windows installer); `DysonHarness-{version}-osx-arm64.pkg` and `DysonHarness-{version}-osx-x64.pkg` (macOS installers)
 
 | RID | Runner / OS | Notes |
 | --- | ----------- | ----- |
 | `win-x64` | Windows | CEF shell + agent browser (`net10.0-windows`); zip + MSI |
 | `linux-x64` | Linux | Blazor host only (no agent browser) |
-| `osx-arm64` | macOS Apple Silicon | Blazor host only |
-| `osx-x64` | macOS Intel (cross-published from Apple Silicon runner) | Blazor host only |
+| `osx-arm64` | macOS Apple Silicon | WKWebView shell + agent browser window. Prefer `DysonHarness-{version}-osx-arm64.pkg` (installs to `/Applications`). The zip is the same stapled app |
+| `osx-x64` | macOS Intel (cross-published from the Apple Silicon runner, including `swiftc -target x86_64-apple-macos14`) | Same `.app` and a matching `.pkg` |
 
 Publish uses `--self-contained true` / `-p:SelfContained=true` (runtime included; no separate .NET install).
 
@@ -70,26 +71,28 @@ Preview features: `DYSON_PREVIEW` is defined for every project under `src/Harnes
 }
 ```
 
-Unstamped local builds fall back to `1.0.0`, which disables the in-app updater (and omits the sidebar channel badge).
+Unstamped local builds fall back to `1.0.0`, which disables in-app installation (and omits the sidebar channel badge). A manual check can still look up the channel release.
 
-## In-app updater (Windows)
+## In-app updater
 
-The Windows shell checks for a newer build on the **same channel** once per process, shortly after the UI is ready.
+The shell checks for a newer build on the **same channel** once per process, shortly after the UI is ready. Windows installs from the MSI. macOS installs from the `.pkg` that matches `version.json` `rid` (`osx-arm64` or `osx-x64`).
 
-1. `DysonAppVersionInfo` reads `version.json` from `AppContext.BaseDirectory` (assembly `InformationalVersion` as fallback). The updater only runs on Windows and only when the CalVer year is ≥ 2026 — dev builds (`1.0.0`) never check. Missing/unknown `channel` defaults to `preview`.
-2. `DysonGitHubReleaseClient` calls `GET /repos/{repo}/releases?per_page=15` and picks the highest-CalVer non-draft release whose `prerelease` flag matches the local channel (`preview` → prerelease only; `stable` → non-prerelease only) and that carries a `*-win-x64.msi` asset. (`/latest` is not used — it only surfaces non-prereleases, so preview builds would never see updates.)
+1. `DysonAppVersionInfo` reads `version.json` from `AppContext.BaseDirectory` (assembly `InformationalVersion` as fallback), once at host start (`DysonUiWebHost.Create`). In-app install runs only when the CalVer year is ≥ 2026, and only on Windows or on macOS when `rid` is `osx-arm64` or `osx-x64`. Dev builds (`1.0.0`) stay lookup-only. Missing/unknown `channel` defaults to `preview`.
+2. `DysonGitHubReleaseClient` calls `GET /repos/{repo}/releases?per_page=15` and picks the highest-CalVer non-draft release whose `prerelease` flag matches the local channel (`preview` → prerelease only; `stable` → non-prerelease only) and that carries this host’s installer asset: `*-win-x64.msi` on Windows, `*-{rid}.pkg` on macOS. (`/latest` is not used — it only surfaces non-prereleases, so preview builds would never see updates.) Hosts that cannot install in-app still look up the MSI asset so a manual check can show a release.
 3. If that tag is strictly newer, `UpdateAvailableModal` prompts with local vs remote version. **Not now** / Escape / backdrop persist the tag in `app_settings` under `ui_update_skipped_version`, so the prompt only returns for a newer release.
-4. **Update** streams the MSI to `%TEMP%` with a byte progress bar (modal locks — no dismiss), then runs `cmd /c ping -n 4 127.0.0.1 >nul & msiexec /i "<msi>"` and calls `Environment.Exit(0)`. The short delay plus process exit releases CEF/WPF file locks before the WiX major upgrade replaces `%LocalAppData%\Programs\DysonHarness`. (`ping` rather than `timeout`: a `WinExe` host has no console and `timeout` aborts without one.) The updater only hands off to msiexec; it does not start the new exe. After a successful install, the MSI launches `DysonHarness.exe`.
+4. **Update** streams the installer to the temp directory with a byte progress bar (modal locks — no dismiss), then exits so the installer can replace the app.
+   - **Windows:** `cmd /c ping -n 4 127.0.0.1 >nul & msiexec /i "<msi>"` and `Environment.Exit(0)`. The short delay plus process exit releases CEF/WPF file locks before the WiX major upgrade replaces `%LocalAppData%\Programs\DysonHarness`. (`ping` rather than `timeout`: a `WinExe` host has no console and `timeout` aborts without one.) The updater only hands off to msiexec; it does not start the new exe. After a successful install, the MSI launches `DysonHarness.exe`.
+   - **macOS:** a detached `nohup` bash helper waits until this process is gone, then runs `installer -pkg "<pkg>" -target /` through an administrator password dialog (`osascript` `do shell script … with administrator privileges`). When that exits 0 it runs `open /Applications/DysonHarness.app`. If the password is cancelled or the install fails, it opens that same path so the current app comes back. The pkg has no postinstall launch, which would start the app twice.
 
 Download or hand-off failures unlock the modal with the message and a **Close** button — the install is never forced. Types live in [`Harness.UI/Services`](../../src/Harness/Harness.UI/Services); parsing Facts are in `DysonAppUpdateTests`.
 
 ### Manual check
 
-**Settings → System** provides a user-invoked **Check for updates** action. It queries the effective repository and channel, then shows the newest matching GitHub Release with a link to that release page. The lookup also works on development and non-Windows hosts, so those builds can inspect the applicable release even though they cannot install it in-app.
+**Settings → System** provides a user-invoked **Check for updates** action. It queries the effective repository and channel, then shows the newest matching GitHub Release with a link to that release page. The lookup also works on development builds and on platforms without an in-app installer, so those builds can inspect the applicable release even though they cannot install it in-app.
 
-In-app MSI installation remains available only when a newer release is found for a stamped Windows build. In that case the existing update prompt supplies the normal download and install flow; the manual check does not introduce a separate installer experience.
+In-app installation is available when a newer release is found for a stamped Windows build, or for a stamped macOS build whose `rid` is `osx-arm64` or `osx-x64`. Settings shows **Available on this Windows build** or **Available on this Mac** in those cases. The existing update prompt supplies the download and install flow; the manual check does not introduce a separate installer experience.
 
-Stable and preview share the same MSI ProductCode / major-upgrade path — operators on one track update within that track; side-by-side stable+preview installs are not supported.
+Stable and preview share the same MSI ProductCode / major-upgrade path — operators on one track update within that track; side-by-side stable+preview installs are not supported. On macOS both channels install to `/Applications/DysonHarness.app` (preview is named **Dyson Harness (Preview)**; stable stays **Dyson Harness**).
 
 ## Website download contract
 
@@ -105,11 +108,12 @@ Patch instructions for [dysonharness.com](https://dysonharness.com) (Website rep
 
 1. **Windows (recommended):** download `DysonHarness-{version}-win-x64.msi` and install (default is per-user; no elevation). A successful install also starts the app automatically. You can launch again from the Start Menu shortcut **Dyson Harness**, or run `%LocalAppData%\Programs\DysonHarness\DysonHarness.exe`.
 2. **Windows (portable):** download the `win-x64` zip, unzip, and run `DysonHarness.exe` (desktop CEF shell; no separate browser URL needed).
-3. **Linux / macOS:** download the zip for your RID, unzip, run `Harness.UI`, and open the URL printed in the console (Kestrel default http://localhost:5000; there is no `launchSettings.json` in the publish output) if the browser does not open automatically. Local debug (`dotnet run`, Development) uses http://localhost:5181 instead — see [UI](../ui/README.md). The Windows MSI shell does not listen on either port; it binds an ephemeral loopback address inside `DysonHarness.exe`.
+3. **Linux:** download the zip, unzip, run `Harness.UI`, and open the URL printed in the console (Kestrel default http://localhost:5000; there is no `launchSettings.json` in the publish output) if the browser does not open automatically. Local debug (`dotnet run`, Development) uses http://localhost:5181 instead — see [UI](../ui/README.md).
+4. **macOS:** download `DysonHarness-{version}-osx-arm64.pkg` (Apple Silicon) or `DysonHarness-{version}-osx-x64.pkg` (Intel) and install. The package puts `DysonHarness.app` in `/Applications` and asks for an administrator password. The WKWebView shell binds an ephemeral loopback address, same as the Windows desktop shell. The zip is that same app if you do not want the installer. Details: [webview.md](webview.md).
 
 Builds on `master` and `release-preview` resolve app mode to **Prod** (`DysonProd` app data) via `GITHUB_REF_NAME` in the resolve-app-mode scripts — channel is independent of Dev/Test/Prod. See [storage/models.md](../storage/models.md).
 
-Speech (Settings → Voice) is not in the zip or the MSI, and the release workflow downloads nothing for it. Runtimes and weights are downloaded at install time, per model the user checks, from the URLs and hashes in `packaging/speech/manifest.json`, into `{DysonProd}/speech/{stable|preview}`. Python installs fetch CPython, CPU torch, and the Phonon-2 (Fermion BPS packed) / Pocket TTS / Qwen3-TTS 0.6B Base / Chatterbox Turbo (English only) safetensors weights. GGUF installs fetch transcribe.cpp v0.4.0 plus the Nemotron 3.5 streaming Q5 GGUF, and CrispASR v0.8.43 plus the Phonon 2, Pocket TTS, Qwen3-TTS, and Chatterbox Turbo GGUF weights. Whisper tiny and base fetch the ggml file plus the OpenVINO wheels and FP16 IR at install, not in the zip. That folder is app data, so an MSI upgrade keeps it.
+Speech (Settings → Voice) is not in the zip, the MSI, or the macOS pkg, and the release workflow downloads nothing for it. Runtimes and weights are downloaded at install time, per model the user checks, from the URLs and hashes in `packaging/speech/manifest.json`, into `{DysonProd}/speech/{stable|preview}`. Python installs fetch CPython, CPU torch, and the Phonon-2 (Fermion BPS packed) / Pocket TTS / Qwen3-TTS 0.6B Base / Chatterbox Turbo (English only) safetensors weights. GGUF installs fetch transcribe.cpp v0.4.0 plus the Nemotron 3.5 streaming Q5 GGUF, and CrispASR v0.8.43 plus the Phonon 2, Pocket TTS, Qwen3-TTS, and Chatterbox Turbo GGUF weights. Whisper tiny and base fetch the ggml file plus the OpenVINO wheels and FP16 IR at install, not in the zip. That folder is app data, so an MSI upgrade keeps it.
 
 ## Windows notes
 
@@ -120,3 +124,10 @@ Speech (Settings → Voice) is not in the zip or the MSI, and the release workfl
 - External http(s) links and popups open in the **OS default browser**; the shell CEF view stays on the local Blazor origin.
 
 Desktop / CefSharp packaging details: [webview.md](webview.md). MSI authoring lives under [`packaging/wix/`](../../packaging/wix/).
+
+## macOS notes
+
+- Prefer the `.pkg`. It installs `DysonHarness.app` into `/Applications` and asks for an administrator password. A preview build is named **Dyson Harness (Preview)** in Finder, the Dock, and the window title. A stable build stays **Dyson Harness**. Both use the same path, `/Applications/DysonHarness.app`.
+- The zip is the same notarized app, for a copy that does not use the installer.
+- Continuous release signs the app with **Developer ID Application** (hardened runtime, `packaging/macos/entitlements.plist`), builds the pkg with **Developer ID Installer**, then notarizes and staples both. The credentials are repository secrets, not files in this repo: `APPLE_TEAM_ID`, `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_API_PRIVATE_KEY`.
+- Pull-request CI and a local `scripts/bundle-macos-app.sh` stay ad-hoc signed. Gatekeeper still asks for a right-click Open on those builds. The macOS publish job fails if any of the secrets above is empty, and that failure blocks the whole continuous release.

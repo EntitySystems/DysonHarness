@@ -1,6 +1,6 @@
-# Windows CefSharp host (desktop shell + agent browser)
+# Desktop webview host (Windows CefSharp + macOS WKWebView)
 
-Blazor Interactive Server remains the UI stack. On Windows continuous builds, **`DysonHarness.UI.Windows`** hosts that UI inside a CefSharp WPF window (`DysonHarness.exe`). Agent browser windows share the same CEF lifecycle.
+Blazor Interactive Server remains the UI stack. On Windows continuous builds, **`DysonHarness.UI.Windows`** hosts that UI inside a CefSharp WPF window (`DysonHarness.exe`). On macOS continuous builds, **`DysonHarness.UI.macOS`** hosts it inside a system WKWebView (`DysonHarness.app`). Agent browser windows are separate from the shell on both platforms. The macOS section is below; the rest of this page is the Windows host.
 
 Shipped continuous zips (all RIDs) and Windows MSI: [releases.md](releases.md).
 
@@ -87,7 +87,7 @@ Boundary: `Harness.WindowsBrowser` only references Abstractions; it never calls 
 ## Non-goals
 
 - Custom title-bar UI beyond standard Windows chrome
-- macOS/Linux desktop shells
+- Linux desktop shell
 - Full CDP parity (rich network waterfall, DOM highlight, cookie store UI)
 - Committing Cef redistributables beyond NuGet restore
 
@@ -100,3 +100,27 @@ Boundary: `Harness.WindowsBrowser` only references Abstractions; it never calls 
 | `Harness.Engine` | `net10.0` | MCP catalog + executor → `IDysonBrowserControl` |
 | `Harness.UI` | `net10.0-windows` + `win-x64` on Windows | Blazor host (`DysonUiWebHost`); conditional WindowsBrowser ref + DI singleton |
 | `DysonHarness.UI.Windows` | `net10.0-windows` + WPF + `win-x64` | CEF shell exe (`AssemblyName=DysonHarness`) |
+| `Harness.MacBrowser` | `net10.0` | `DysonMacBrowserControl` — JSON C ABI over `libDysonWebKit.dylib` |
+| `DysonHarness.UI.macOS` | `net10.0` + `osx-arm64` / `osx-x64` | WKWebView shell exe (`AssemblyName=DysonHarness`), bundled as `DysonHarness.app` |
+
+## macOS WKWebView host
+
+`DysonHarness.UI.macOS` is a `Microsoft.NET.Sdk.Web` exe. It starts `DysonUiWebHost` on `http://127.0.0.1:0` (HTTPS redirection skipped) and loads that URL in a shell `WKWebView`. `DysonUiWebHostOptions.ConfigureServices` registers `DysonMacBrowserControl`. The shell does not reference WebKit; `Harness.MacBrowser` talks to `src/native/macos` through `libDysonWebKit.dylib`.
+
+```bash
+dotnet run --project src/Harness/DysonHarness.UI.macOS
+```
+
+That builds the dylib with `swiftc -target arm64-apple-macos14` (or `x86_64-apple-macos14` when `-r osx-x64`) and opens the shell. Browser-based Blazor is still `dotnet run --project src/Harness/Harness.UI` on port 5181. Do not stop a running `DysonHarness` to free that port.
+
+A second NSWindow is the agent browser (`OpenBrowser` and the header **Open Browser** action). It implements `IDysonBrowserWindow` / `IDysonBrowserTab`. DOM clicks, typing, hover, and keys use `DysonBrowserDomScripts` (the same strings as the Cef tab). Screenshots are `WKWebView.takeSnapshot` PNGs; the executor still compresses to JPEG. Console lines come from a document-start user script. The network log is main-frame `didFinish` / `didFail` only.
+
+Agent tabs use a persistent `WKWebsiteDataStore(forIdentifier:)` so their cookies and cache stay off the shell's default store. `ClearBrowserCache` removes disk, memory, fetch, and offline-app cache on that store, then reloads agent tabs. Cookies and site storage stay. The shell is not reloaded.
+
+The agent `WKUIDelegate` grants media capture (camera, microphone, camera+microphone), geolocation on macOS 27+, and file-open panels. JavaScript `alert` / `confirm` / `prompt` complete immediately (`confirm` is true) so a dialog cannot hang a tool. `window.open` becomes a tab. The shell window does not grant those prompts: it keeps the loopback origin and sends other `http(s)` to `NSWorkspace`.
+
+The Dock and Finder icon is the white Dyson mark on black (`CFBundleIconFile` `DysonHarness.icns`, built by `scripts/bundle-macos-app.sh` from `DysonHarness.UI.Windows/Assets/dyson.ico`). The host leaves that bundle icon alone. Setting `NSApp.applicationIconImage` would replace the Dock tile with the unmasked square. The shell window title and the startup alert use `CFBundleDisplayName`. A preview package sets that, and `CFBundleName`, to **Dyson Harness (Preview)**. Stable stays **Dyson Harness**.
+
+`ponytail:` ceilings: no WebUSB, WebSerial, WebBluetooth, or WebMIDI (no public WKWebView API). Device-orientation permission is unavailable on macOS. Display capture is not a `WKMediaCaptureType`. WebGPU is whatever the OS WebKit ships. The first camera, microphone, or location use still shows the macOS TCC dialog. Info.plist usage strings do not skip it. Minimum system version is macOS 14. Pull-request CI and a local `scripts/bundle-macos-app.sh` ad-hoc sign the bundle. Continuous release sets `CODESIGN_IDENTITY` and signs with Developer ID Application, hardened runtime, and [`packaging/macos/entitlements.plist`](../../packaging/macos/entitlements.plist), then notarizes the app and a `/Applications` `.pkg` (Developer ID Installer). See [releases.md](releases.md).
+
+Single instance: `flock` on `{app support}/{mode}/dyson-mac.lock`. A second launch activates `com.entitysystems.dysonharness` and exits. Snip raises `SnipCaptured`; `DysonUiHost` already queues that into the composer.

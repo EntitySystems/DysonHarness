@@ -1,0 +1,171 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Demo
+@inject DysonUiHost Host
+
+<div class="secure-data @(Done ? "secure-data--done" : null)">
+    @if (Done)
+    {
+        <div class="secure-data__outcome">@OutcomeText</div>
+    }
+    else
+    {
+        @foreach (var field in Fields)
+        {
+            var key = field.Key;
+            var shown = IsShown(key);
+            <div class="secure-data__field" @key="key">
+                <label class="secure-data__label">
+                    <span>@field.Description</span>
+                    <span class="secure-data__key">@key</span>
+                </label>
+                <div class="secure-data__row">
+                    <input type="@(shown ? "text" : "password")"
+                           class="secure-data__input"
+                           autocomplete="off"
+                           spellcheck="false"
+                           data-key="@key"
+                           value="@Value(key)"
+                           disabled="@_sending"
+                           @oninput="e => SetValue(key, e)" />
+                    <button type="button"
+                            class="secure-data__eye"
+                            aria-label="@(shown ? "Hide secret" : "Show secret")"
+                            aria-pressed="@(shown ? "true" : "false")"
+                            disabled="@_sending"
+                            @onclick="() => Toggle(key)">
+                        <img src="@(shown ? "icons/eye-off.svg" : "icons/eye.svg")" alt="" />
+                    </button>
+                </div>
+            </div>
+        }
+        <div class="secure-data__actions">
+            <button type="button"
+                    class="btn secure-data__submit"
+                    disabled="@_sending"
+                    @onclick="SubmitAsync">Submit</button>
+            <button type="button"
+                    class="btn secure-data__cancel"
+                    disabled="@_sending"
+                    @onclick="CancelAsync">Cancel</button>
+        </div>
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="secure-data__error">@_error</div>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public Guid RequestId { get; set; }
+
+    [Parameter] public IReadOnlyList<DysonSecureDataField> Fields { get; set; } = [];
+
+    /// <summary>Null while the request is open. A value removes the inputs.</summary>
+    [Parameter] public DysonSecureDataOutcome? Outcome { get; set; }
+
+    [Parameter] public EventCallback OnCompleted { get; set; }
+
+    private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, bool> _shown = new(StringComparer.Ordinal);
+    private bool _sending;
+    private bool _localCancelled;
+    private List<string>? _localStored;
+    private List<string>? _localSkipped;
+    private string? _error;
+
+    private bool Done => Outcome is not null || _localStored is not null;
+
+    private string OutcomeText
+    {
+        get
+        {
+            var outcome = Outcome;
+            if (outcome is null)
+            {
+                if (_localCancelled)
+                    return "Cancelled";
+                var localStored = _localStored is { Count: > 0 } ? string.Join(", ", _localStored) : "none";
+                var text = $"Stored: {localStored}";
+                if (_localSkipped is { Count: > 0 })
+                    text += $"  Skipped: {string.Join(", ", _localSkipped)}";
+                return text;
+            }
+
+            if (outcome.Cancelled)
+                return "Cancelled";
+            var stored = outcome.Stored.Count == 0 ? "none" : string.Join(", ", outcome.Stored);
+            var line = $"Stored: {stored}";
+            if (outcome.Skipped.Count > 0)
+                line += $"  Skipped: {string.Join(", ", outcome.Skipped)}";
+            return line;
+        }
+    }
+
+    private string Value(string key) =>
+        _values.TryGetValue(key, out var value) ? value : "";
+
+    private bool IsShown(string key) =>
+        _shown.TryGetValue(key, out var shown) && shown;
+
+    private void SetValue(string key, ChangeEventArgs e) =>
+        _values[key] = e.Value?.ToString() ?? "";
+
+    private void Toggle(string key) =>
+        _shown[key] = !IsShown(key);
+
+    private Task SubmitAsync() => SendAsync(cancelled: false);
+
+    private Task CancelAsync() => SendAsync(cancelled: true);
+
+    private async Task SendAsync(bool cancelled)
+    {
+        if (_sending || Done)
+            return;
+
+        _sending = true;
+        _error = null;
+        try
+        {
+            IReadOnlyDictionary<string, string> values = cancelled
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                : new Dictionary<string, string>(_values, StringComparer.Ordinal);
+            var result = await Host.SubmitSecureDataAsync(RequestId, values, cancelled);
+            if (result.IsError)
+            {
+                _error = result.Error ?? "Could not submit secrets.";
+                return;
+            }
+
+            if (cancelled)
+            {
+                _localCancelled = true;
+                _localStored = [];
+                _localSkipped = Fields.Select(f => f.Key).ToList();
+            }
+            else
+            {
+                var stored = new List<string>();
+                var skipped = new List<string>();
+                foreach (var field in Fields)
+                {
+                    if (_values.TryGetValue(field.Key, out var value) && !string.IsNullOrWhiteSpace(value))
+                        stored.Add(field.Key);
+                    else
+                        skipped.Add(field.Key);
+                }
+
+                _localStored = stored;
+                _localSkipped = skipped;
+            }
+
+            _values.Clear();
+            _shown.Clear();
+            await OnCompleted.InvokeAsync();
+        }
+        finally
+        {
+            _sending = false;
+        }
+    }
+}

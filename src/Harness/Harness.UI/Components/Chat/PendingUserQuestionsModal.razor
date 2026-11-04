@@ -1,0 +1,456 @@
+@namespace Harness.UI.Components.Chat
+@using Microsoft.AspNetCore.Components.Web
+@using DysonHarness
+@implements IDisposable
+@inject IDysonPendingUserQuestionRepository PendingQuestions
+@inject DysonUiHost Host
+@inject DysonMessageBus Bus
+
+<DysonTransition Item="IsOpen" ExitMs="140" RestoreFocus="true"
+                 OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="confirm-dialog-backdrop dyson-fade-scale @ctx.StateClass"
+         role="presentation"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+         @onkeydown="args => { if (!ctx.IsExiting) OnKeyDown(args); }">
+        <div class="confirm-dialog pending-questions-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="pending-questions-modal-title"
+             @onclick:stopPropagation="true">
+            <div class="confirm-dialog__header">
+                <div class="pending-questions-modal__title-row">
+                    <h3 id="pending-questions-modal-title">Questions</h3>
+                    <span class="pending-questions-modal__counts">@_rows.Count pending</span>
+                </div>
+                <button type="button"
+                        class="btn btn-ghost pending-questions-modal__close"
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+                        aria-label="Close">×</button>
+            </div>
+
+            <div class="confirm-dialog__body pending-questions-modal__body">
+                @if (!string.IsNullOrEmpty(_loadError))
+                {
+                    <p class="pending-questions__error">@_loadError</p>
+                }
+                else if (_rows.Count == 0)
+                {
+                    <p class="pending-questions__empty">No pending questions.</p>
+                }
+                else
+                {
+                    <ul class="pending-questions__list">
+                        @foreach (var row in _rows)
+                        {
+                            var question = row;
+                            var busy = _busy.Contains(question.QuestionGuid);
+                            if (question.Kind == DysonPendingUserQuestionKind.SecureData)
+                            {
+                                var fields = DecodeSecureFields(question);
+                                var open = _selectedSecureId == question.QuestionGuid;
+                                <li class="pending-questions__item pending-questions__item--secure" @key="question.Id">
+                                    <button type="button"
+                                            class="pending-questions__secure-open"
+                                            aria-expanded="@(open ? "true" : "false")"
+                                            disabled="@busy"
+                                            @onclick="() => SelectSecure(question.QuestionGuid)">
+                                        <span class="pending-questions__badge">
+                                            <img src="icons/eye.svg" alt="" />
+                                            Credentials
+                                        </span>
+                                        <span class="pending-questions__title">@question.Question</span>
+                                    </button>
+                                    <ul class="pending-questions__secure-fields">
+                                        @foreach (var field in fields)
+                                        {
+                                            <li>
+                                                <span class="pending-questions__secure-key">@field.Key</span>
+                                                <span>@field.Description</span>
+                                            </li>
+                                        }
+                                    </ul>
+                                    @if (open)
+                                    {
+                                        <SecureDataRequestCard RequestId="question.QuestionGuid"
+                                                               Fields="fields"
+                                                               Outcome="null"
+                                                               OnCompleted="LoadAsync" />
+                                    }
+                                    <div class="pending-questions__actions">
+                                        <button type="button"
+                                                class="btn pending-questions__dismiss"
+                                                disabled="@busy"
+                                                @onclick="() => DismissAsync(question)">Dismiss</button>
+                                    </div>
+                                    @if (_errors.TryGetValue(question.QuestionGuid, out var secureError))
+                                    {
+                                        <div class="pending-questions__error">@secureError</div>
+                                    }
+                                </li>
+                            }
+                            else
+                            {
+                                var draft = Draft(question.QuestionGuid);
+                                <li class="pending-questions__item" @key="question.Id">
+                                    <div class="pending-questions__title">@question.Question</div>
+                                    @if (!string.IsNullOrWhiteSpace(question.Message))
+                                    {
+                                        <div class="pending-questions__message">@question.Message</div>
+                                    }
+                                    @foreach (var choice in question.Choices)
+                                    {
+                                        var label = choice;
+                                        var selected = draft.IsSelected(label);
+                                        <label class="pending-questions__choice">
+                                            @if (question.MultiSelect)
+                                            {
+                                                <input type="checkbox"
+                                                       checked="@selected"
+                                                       disabled="@busy"
+                                                       @onchange="e => ToggleChoice(question, label, e)" />
+                                            }
+                                            else
+                                            {
+                                                <input type="radio"
+                                                       name="@($"pq-{question.QuestionGuid:N}")"
+                                                       checked="@selected"
+                                                       disabled="@busy"
+                                                       @onchange="() => SelectSingle(question, label)" />
+                                            }
+                                            <span>@label</span>
+                                        </label>
+                                    }
+                                    @if (question.AllowCustomAnswer)
+                                    {
+                                        <label class="pending-questions__other">
+                                            <span>Other</span>
+                                            <textarea rows="2"
+                                                      maxlength="2000"
+                                                      disabled="@busy"
+                                                      value="@draft.Custom"
+                                                      @oninput="e => SetCustom(question, e)"></textarea>
+                                        </label>
+                                    }
+                                    <div class="pending-questions__actions">
+                                        <button type="button"
+                                                class="btn pending-questions__answer"
+                                                disabled="@(busy || !CanAnswer(question))"
+                                                @onclick="() => AnswerAsync(question)">Answer</button>
+                                        <button type="button"
+                                                class="btn pending-questions__dismiss"
+                                                disabled="@busy"
+                                                @onclick="() => DismissAsync(question)">Dismiss</button>
+                                    </div>
+                                    @if (_errors.TryGetValue(question.QuestionGuid, out var rowError))
+                                    {
+                                        <div class="pending-questions__error">@rowError</div>
+                                    }
+                                </li>
+                            }
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    </div>
+</DysonTransition>
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+
+    [Parameter] public Guid? SessionId { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private ElementReference _backdropEl;
+    private bool _wasOpen;
+    private Guid? _subscribedSessionId;
+    private IDisposable? _sub;
+    private IReadOnlyList<DysonPendingUserQuestion> _rows = [];
+    private string? _loadError;
+    private readonly Dictionary<Guid, QuestionDraft> _drafts = [];
+    private readonly HashSet<Guid> _busy = [];
+    private readonly Dictionary<Guid, string> _errors = [];
+    private Guid? _selectedSecureId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        BindSubscription();
+        if (IsOpen && !_wasOpen)
+            await LoadAsync();
+        _wasOpen = IsOpen;
+    }
+
+    private void BindSubscription()
+    {
+        if (_subscribedSessionId == SessionId)
+            return;
+
+        DisposeSubscription();
+        _subscribedSessionId = SessionId;
+        if (SessionId is not Guid id || id == Guid.Empty)
+            return;
+
+        var sub = Bus.Subscribe<DysonPendingUserQuestionsChangedEvent>(
+            DysonBusScopes.Session(id),
+            OnQuestionsChanged);
+        if (sub.IsSuccess)
+            _sub = sub.Value;
+    }
+
+    private void OnQuestionsChanged(DysonPendingUserQuestionsChangedEvent evt) => _ = InvokeAsync(async () =>
+    {
+        if (!IsOpen || SessionId is not Guid id || evt.SessionId != id)
+            return;
+
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private async Task LoadAsync()
+    {
+        if (SessionId is not Guid id || id == Guid.Empty)
+        {
+            _rows = [];
+            _loadError = null;
+            return;
+        }
+
+        var list = await PendingQuestions.ListAsync(id);
+        if (list.IsError)
+        {
+            _loadError = list.Error;
+            return;
+        }
+
+        _loadError = null;
+        _rows = list.Value;
+    }
+
+    private QuestionDraft Draft(Guid questionGuid)
+    {
+        if (!_drafts.TryGetValue(questionGuid, out var draft))
+        {
+            draft = new QuestionDraft();
+            _drafts[questionGuid] = draft;
+        }
+
+        return draft;
+    }
+
+    private bool CanAnswer(DysonPendingUserQuestion row)
+    {
+        var draft = Draft(row.QuestionGuid);
+        var card = new DysonUserQuestion(
+            row.QuestionGuid,
+            row.Question,
+            row.Choices,
+            row.MultiSelect,
+            row.AllowCustomAnswer,
+            Answer: null);
+        return DysonUserQuestion.ValidateAnswer(card, draft.Selected, draft.Custom, DateTime.UtcNow).IsSuccess;
+    }
+
+    private void ToggleChoice(DysonPendingUserQuestion row, string choice, ChangeEventArgs e)
+    {
+        var draft = Draft(row.QuestionGuid);
+        if (e.Value is bool on && on)
+            draft.Select(choice);
+        else
+            draft.Deselect(choice);
+        _errors.Remove(row.QuestionGuid);
+    }
+
+    private void SelectSingle(DysonPendingUserQuestion row, string choice)
+    {
+        if (row.MultiSelect)
+            return;
+
+        Draft(row.QuestionGuid).Replace(choice);
+        _errors.Remove(row.QuestionGuid);
+    }
+
+    private void SetCustom(DysonPendingUserQuestion row, ChangeEventArgs e)
+    {
+        var draft = Draft(row.QuestionGuid);
+        draft.Custom = e.Value?.ToString() ?? "";
+        if (!row.MultiSelect && !string.IsNullOrWhiteSpace(draft.Custom))
+            draft.ClearSelected();
+        _errors.Remove(row.QuestionGuid);
+    }
+
+    private async Task AnswerAsync(DysonPendingUserQuestion row)
+    {
+        if (_busy.Contains(row.QuestionGuid) || !CanAnswer(row))
+            return;
+
+        var draft = Draft(row.QuestionGuid);
+        _busy.Add(row.QuestionGuid);
+        _errors.Remove(row.QuestionGuid);
+        try
+        {
+            var result = await Host.SubmitMetaUserQuestionAnswerAsync(
+                row.QuestionGuid,
+                draft.Selected.ToArray(),
+                draft.Custom);
+            if (result.IsError)
+            {
+                _errors[row.QuestionGuid] = result.Error ?? "Could not answer.";
+                return;
+            }
+
+            _drafts.Remove(row.QuestionGuid);
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy.Remove(row.QuestionGuid);
+        }
+    }
+
+    private async Task DismissAsync(DysonPendingUserQuestion row)
+    {
+        if (row.Kind == DysonPendingUserQuestionKind.SecureData)
+        {
+            await CancelSecureAsync(row);
+            return;
+        }
+
+        if (SessionId is not Guid sessionId || _busy.Contains(row.QuestionGuid))
+            return;
+
+        _busy.Add(row.QuestionGuid);
+        _errors.Remove(row.QuestionGuid);
+        try
+        {
+            var deleted = await PendingQuestions.DeleteAsync(row.Id, sessionId);
+            if (deleted.IsError)
+            {
+                _errors[row.QuestionGuid] = deleted.Error ?? "Could not dismiss.";
+                return;
+            }
+
+            Bus.Publish(
+                DysonBusScopes.Session(sessionId),
+                new DysonPendingUserQuestionsChangedEvent(sessionId));
+            _drafts.Remove(row.QuestionGuid);
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy.Remove(row.QuestionGuid);
+        }
+    }
+
+    private void SelectSecure(Guid requestId) =>
+        _selectedSecureId = _selectedSecureId == requestId ? null : requestId;
+
+    private static List<DysonSecureDataField> DecodeSecureFields(DysonPendingUserQuestion row)
+    {
+        var fields = new List<DysonSecureDataField>(row.Choices.Count);
+        foreach (var choice in row.Choices)
+        {
+            if (DysonSecureDataRequest.DecodePendingChoice(choice) is { } field)
+                fields.Add(field);
+        }
+
+        return fields;
+    }
+
+    private async Task CancelSecureAsync(DysonPendingUserQuestion row)
+    {
+        if (_busy.Contains(row.QuestionGuid))
+            return;
+
+        _busy.Add(row.QuestionGuid);
+        _errors.Remove(row.QuestionGuid);
+        try
+        {
+            var result = await Host.SubmitSecureDataAsync(
+                row.QuestionGuid,
+                new Dictionary<string, string>(),
+                cancelled: true);
+            if (result.IsError)
+            {
+                _errors[row.QuestionGuid] = result.Error ?? "Could not cancel.";
+                return;
+            }
+
+            if (_selectedSecureId == row.QuestionGuid)
+                _selectedSecureId = null;
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy.Remove(row.QuestionGuid);
+        }
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private async Task FocusBackdropAsync()
+    {
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
+    }
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+
+    private void DisposeSubscription()
+    {
+        _sub?.Dispose();
+        _sub = null;
+    }
+
+    public void Dispose() => DisposeSubscription();
+
+    private sealed class QuestionDraft
+    {
+        private readonly List<string> _selected = [];
+
+        public IReadOnlyList<string> Selected => _selected;
+
+        public string Custom { get; set; } = "";
+
+        public bool IsSelected(string choice)
+        {
+            foreach (var item in _selected)
+            {
+                if (string.Equals(item, choice, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
+        }
+
+        public void Select(string choice)
+        {
+            if (!IsSelected(choice))
+                _selected.Add(choice);
+        }
+
+        public void Deselect(string choice)
+        {
+            for (var i = _selected.Count - 1; i >= 0; i--)
+            {
+                if (string.Equals(_selected[i], choice, StringComparison.Ordinal))
+                    _selected.RemoveAt(i);
+            }
+        }
+
+        public void Replace(string choice)
+        {
+            _selected.Clear();
+            _selected.Add(choice);
+            Custom = "";
+        }
+
+        public void ClearSelected() => _selected.Clear();
+    }
+}

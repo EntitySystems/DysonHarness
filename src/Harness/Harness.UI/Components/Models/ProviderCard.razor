@@ -52,9 +52,36 @@
         }
     }
 
+    @if (IsOpenAiCodex)
+    {
+        <div class="list-item__meta">
+            @if (CodexSummary is { Connected: true } codex)
+            {
+                <text>Signed in@(string.IsNullOrWhiteSpace(codex.Email) ? "" : $" as {codex.Email}")</text>
+            }
+            else
+            {
+                <text>Not signed in</text>
+            }
+        </div>
+
+        @if (AuthPending && !string.IsNullOrWhiteSpace(PendingAuthUrl))
+        {
+            <div class="provider-card__device">
+                <div class="list-item__meta">Finish sign-in in the browser…</div>
+                <a href="@PendingAuthUrl" target="_blank" rel="noopener">Open the ChatGPT sign-in page</a>
+            </div>
+        }
+    }
+
     @if (IsLegacyGrok)
     {
         <div class="list-item__meta">Legacy CLIProxy route (deprecated). Native Grok needs no CLIProxy binary.</div>
+    }
+
+    @if (IsLegacyCodex)
+    {
+        <div class="list-item__meta">Legacy CLIProxy route. Switch to native ChatGPT Codex.</div>
     }
 
     @if (IsCliProxy && !CliProxyInstalled)
@@ -149,7 +176,7 @@
             <button type="button" class="btn btn--sm" @onclick="OnUpdateApiKey">Update API key</button>
             <button type="button" class="btn btn-ghost btn--sm" @onclick="OnDelete">Delete</button>
         }
-        else if (IsXaiGrok)
+        else if (IsXaiGrok || IsOpenAiCodex)
         {
             @if (AuthPending)
             {
@@ -169,7 +196,7 @@
                 @(VerifyBusy ? "Verifying…" : "Verify / Refresh models")
             </button>
             <button type="button" class="btn btn-ghost btn--sm"
-                    @onclick="OnDisconnect">Sign out</button>
+                    @onclick="OnDisconnect">@(IsOpenAiCodex ? "Disconnect" : "Sign out")</button>
             <button type="button" class="btn btn-ghost btn--sm"
                     @onclick="OnDelete">Delete</button>
         }
@@ -200,6 +227,11 @@
             {
                 <button type="button" class="btn btn--sm"
                         @onclick="OnSwitchToNative">Switch to native Grok</button>
+            }
+            @if (IsLegacyCodex)
+            {
+                <button type="button" class="btn btn--sm"
+                        @onclick="OnSwitchToNativeCodex">Switch to native ChatGPT Codex</button>
             }
             <button type="button" class="btn btn-ghost btn--sm"
                     @onclick="OnDisconnect">Disconnect</button>
@@ -278,15 +310,26 @@
     /// <summary>Native xAI/Grok OAuth chrome (device-code panel, sign out); no CLIProxy involved.</summary>
     public bool IsXaiGrok => DysonManagedSources.IsXaiGrok(Provider.ManagedSource);
 
+    /// <summary>Native ChatGPT Codex OAuth chrome (authorize link, disconnect); no CLIProxy involved.</summary>
+    public bool IsOpenAiCodex => DysonManagedSources.IsOpenAiCodex(Provider.ManagedSource);
+
     /// <summary>Native xAI account facts (email, client version); null when unknown.</summary>
     [Parameter] public XaiGrokAccountSummary? XaiSummary { get; set; }
+
+    /// <summary>Native ChatGPT account email; null when unknown.</summary>
+    [Parameter] public OpenAiCodexAccountSummary? CodexSummary { get; set; }
 
     [Parameter] public EventCallback OnCancelConnect { get; set; }
 
     /// <summary>Legacy <c>cliproxy-grok</c> card: offers the in-place switch to native Grok.</summary>
     public bool IsLegacyGrok => string.Equals(Provider.ManagedSource, DysonManagedSources.CliProxyGrok, StringComparison.Ordinal);
 
+    /// <summary>Legacy <c>cliproxy-codex</c> card: offers the in-place switch to native ChatGPT Codex.</summary>
+    public bool IsLegacyCodex => string.Equals(Provider.ManagedSource, DysonManagedSources.CliProxyCodex, StringComparison.Ordinal);
+
     [Parameter] public EventCallback OnSwitchToNative { get; set; }
+
+    [Parameter] public EventCallback OnSwitchToNativeCodex { get; set; }
 
     /// <summary>Direct API-key managed provider (OpenRouter / OrcaRouter).</summary>
     public bool IsDirectManaged => DysonManagedSources.IsDirectManaged(Provider.ManagedSource);

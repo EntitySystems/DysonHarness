@@ -3112,7 +3112,7 @@ code, .mono {
 }
 
 .turn-visualization__frame {
-  height: clamp(360px, 42vw, 480px);
+  min-height: clamp(360px, 42vw, 480px);
 }
 
 /* .session-visualizations-modal* lives in Components/Chat/SessionVisualizationsModal.razor.css. */

@@ -239,6 +239,20 @@ public static class DysonAppSettingKeys
     /// </summary>
     public const string XaiGrokConsentAccepted = "xai_grok_consent_accepted";
 
+    /// <summary>
+    /// Key prefix for native ChatGPT Codex OAuth credentials: <c>openai_codex_credential:&lt;guid&gt;</c>.
+    /// One row per credential; <c>Value</c> is the plaintext JSON of <c>OpenAiCodexCredential</c> (same plaintext-local
+    /// stance as provider ApiKey / <see cref="FileStorageS3"/>). Looked up by credential handle
+    /// (<c>IDysonOpenAiCodexCredentialStore</c>), never by subject. Never log the value.
+    /// </summary>
+    public const string OpenAiCodexCredentialPrefix = "openai_codex_credential:";
+
+    /// <summary>
+    /// <c>"true"</c> once this subject accepted the native ChatGPT Codex sign-in notice (public Codex CLI client id,
+    /// Codex CLI headers to chatgpt.com, plaintext token storage). Missing ⇒ Connect is refused until accepted.
+    /// </summary>
+    public const string OpenAiCodexConsentAccepted = "openai_codex_consent_accepted";
+
     /// <summary>Preferred speech-to-text <c>speech_models.RuntimeId</c>. Missing ⇒ the single installed Input row.</summary>
     public const string SpeechInputModelId = "speech_input_model_id";
 

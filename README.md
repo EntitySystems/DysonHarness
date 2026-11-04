@@ -104,7 +104,7 @@ That is the debug UI on **http://localhost:5181** (`Properties/launchSettings.js
 
 Open the app, then **Settings → Models**.
 
-**Downloads:** self-contained builds for Windows, Linux, and macOS are on [GitHub Releases](https://github.com/EntitySystems/DysonHarness/releases). On Windows, use the MSI installer or the zip (`DysonHarness.exe`). Details: [releases](docs/packaging/releases.md).
+**Downloads:** self-contained builds for Windows, Linux, and macOS are on [GitHub Releases](https://github.com/EntitySystems/DysonHarness/releases). On Windows, use the MSI installer or the zip (`DysonHarness.exe`). On macOS, use the signed `.pkg` (installs `DysonHarness.app` to `/Applications`) or the zip. Details: [releases](docs/packaging/releases.md).
 
 A terminal client for the same engine, without the graphical app, is planned and not built.
 

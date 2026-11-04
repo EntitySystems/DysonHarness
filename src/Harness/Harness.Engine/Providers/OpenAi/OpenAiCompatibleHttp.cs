@@ -38,6 +38,13 @@ public static class OpenAiCompatibleHttp
         }
 
         raw = raw.TrimEnd('/');
+        // ChatGPT Codex backend is not an OpenAI /vN root. Appending /v1 would POST …/codex/v1/responses.
+        if (raw.Equals(OpenAiCodexClientProfile.InferenceBaseUrl, StringComparison.OrdinalIgnoreCase)
+            || raw.StartsWith(OpenAiCodexClientProfile.InferenceBaseUrl + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            return raw;
+        }
+
         // Keep existing /vN roots (OpenAI /v1, Z.AI /v4, …); only invent /v1 when absent.
         if (!System.Text.RegularExpressions.Regex.IsMatch(
                 raw,

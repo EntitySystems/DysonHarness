@@ -30,6 +30,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonPlanRepository _plans;
     private readonly IDysonMetaScratchFileRepository? _scratchFiles;
     private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory;
+    private readonly IDysonPendingUserQuestionRepository? _pendingUserQuestions;
+    private readonly IDysonSessionSecretRepository? _sessionSecrets;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -150,7 +152,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonSessionEventPublisher? sessionEvents = null,
         FileStorageConnectService? fileStorageConnect = null,
         IDysonMetaScratchFileRepository? scratchFiles = null,
-        IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null)
+        IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null,
+        IDysonPendingUserQuestionRepository? pendingUserQuestions = null,
+        IDysonSessionSecretRepository? sessionSecrets = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -160,6 +164,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         _plans = plans ?? throw new ArgumentNullException(nameof(plans));
         _scratchFiles = scratchFiles;
         _voiceSidecarMemory = voiceSidecarMemory;
+        _pendingUserQuestions = pendingUserQuestions;
+        _sessionSecrets = sessionSecrets;
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -2625,177 +2631,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
         || path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Opens an absolute file path with the OS default application.</summary>
-    public VoidResult<string> OpenFileInDefaultEditor(string absolutePath)
-    {
-        if (string.IsNullOrWhiteSpace(absolutePath))
-            return VoidResult<string>.AsError("Path is empty.");
-
-        string fullPath;
-        try
-        {
-            fullPath = Path.GetFullPath(absolutePath.Trim());
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Invalid path: {ex.Message}");
-        }
-
-        if (!File.Exists(fullPath))
-            return VoidResult<string>.AsError("File does not exist.");
-
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = fullPath,
-                    UseShellExecute = true,
-                });
-            }
-            else if (OperatingSystem.IsMacOS())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "open",
-                    ArgumentList = { fullPath },
-                    UseShellExecute = false,
-                });
-            }
-            else
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "xdg-open",
-                    ArgumentList = { fullPath },
-                    UseShellExecute = false,
-                });
-            }
-
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Failed to open file: {ex.Message}");
-        }
-    }
-
-    /// <summary>Opens an absolute folder path in the OS file manager (Explorer / Finder / xdg-open).</summary>
-    public VoidResult<string> OpenFolderInFileManager(string absolutePath)
-    {
-        if (string.IsNullOrWhiteSpace(absolutePath))
-            return VoidResult<string>.AsError("Path is empty.");
-
-        string fullPath;
-        try
-        {
-            fullPath = Path.GetFullPath(absolutePath.Trim());
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Invalid path: {ex.Message}");
-        }
-
-        if (!Directory.Exists(fullPath))
-            return VoidResult<string>.AsError("Directory does not exist.");
-
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "explorer.exe",
-                    ArgumentList = { fullPath },
-                    UseShellExecute = true,
-                });
-            }
-            else if (OperatingSystem.IsMacOS())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "open",
-                    ArgumentList = { fullPath },
-                    UseShellExecute = false,
-                });
-            }
-            else
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "xdg-open",
-                    ArgumentList = { fullPath },
-                    UseShellExecute = false,
-                });
-            }
-
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Failed to open folder: {ex.Message}");
-        }
-    }
-
-    /// <summary>Opens an http(s) URL in the OS default browser (not the in-app WebView).</summary>
-    public VoidResult<string> OpenUrlInDefaultBrowser(string url)
-    {
-        if (string.IsNullOrWhiteSpace(url))
-            return VoidResult<string>.AsError("URL is empty.");
-
-        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-        {
-            return VoidResult<string>.AsError("Only http/https URLs are allowed.");
-        }
-
-        var absolute = uri.AbsoluteUri;
-
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = absolute,
-                    UseShellExecute = true,
-                });
-            }
-            else if (OperatingSystem.IsMacOS())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "open",
-                    ArgumentList = { absolute },
-                    UseShellExecute = false,
-                });
-            }
-            else
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "xdg-open",
-                    ArgumentList = { absolute },
-                    UseShellExecute = false,
-                });
-            }
-
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Failed to open URL: {ex.Message}");
-        }
-    }
-
     /// <summary>JS bridge for chat/markdown http(s) link clicks.</summary>
     [JSInvokable]
-    public Task OpenExternalChatUrlAsync(string url)
-    {
-        OpenUrlInDefaultBrowser(url);
-        return Task.CompletedTask;
-    }
+    public Task OpenExternalChatUrlAsync(string url) => DysonOsLauncher.OpenUrlAsync(url);
 
     public void CloseFileViewer()
     {
@@ -3744,7 +3582,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return Result<string, string>.AsValue("");
             case DysonBuiltInConversationKind.OpenUrl:
             {
-                var opened = OpenUrlInDefaultBrowser(intent.PathOrUrl ?? "");
+                var opened = await DysonOsLauncher.OpenUrlAsync(intent.PathOrUrl ?? "")
+                    .ConfigureAwait(true);
                 return opened.IsError
                     ? Result<string, string>.AsError(opened.Error)
                     : Result<string, string>.AsValue("");
@@ -3791,7 +3630,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             return VoidResult<string>.AsError("PostUserQuestion: not found.");
         }
 
-        var turn = DysonAgentSession.CreateNormalTurn(DysonUserQuestion.FormatVisibleInstruction(question));
+        var pendingId = await DysonPendingUserQuestionHooks.FindPendingIdAsync(session, questionId, cancellationToken)
+            .ConfigureAwait(true);
+        var turn = DysonAgentSession.CreateNormalTurn(DysonUserQuestion.FormatAnswerPrompt(question, pendingId));
         turn.HiddenInstruction = DysonUserQuestion.FormatHiddenInstruction(question);
         AppendAwaitingUserAnswerReminders(turn, session);
 
@@ -3816,6 +3657,66 @@ public sealed class DysonUiHost : IAsyncDisposable
             Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return started;
         }
+
+        var deleted = await DysonPendingUserQuestionHooks.DeleteAnsweredAsync(session, questionId, CancellationToken.None)
+            .ConfigureAwait(true);
+        if (deleted.IsError)
+            session.AppendLog($"Pending question row not deleted: {deleted.Error}");
+
+        LastError = null;
+        Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Thin adapter for the RequestSecureData card (inline and in the Questions modal). The engine stores the
+    /// values and formats the answer; <paramref name="values"/> is dropped after this call and never put on a turn.
+    /// A failed send unlocks the card; values already stored stay stored (a resubmit overwrites them).
+    /// </summary>
+    public async Task<VoidResult<string>> SubmitSecureDataAsync(
+        Guid requestId,
+        IReadOnlyDictionary<string, string> values,
+        bool cancelled,
+        CancellationToken cancellationToken = default)
+    {
+        var session = _session;
+        if (session is null)
+            return VoidResult<string>.AsError("No active session.");
+        var sessionId = session.PersistenceId;
+        if (sessionId == Guid.Empty)
+            return VoidResult<string>.AsError("Session is not persisted.");
+
+        // DB work off the circuit (rules_blazor_circuit).
+        var recorded = await Task.Run(
+                () => DysonSecureDataSubmission.RecordAsync(session, requestId, values, cancelled, cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(true);
+        if (recorded.IsError)
+            return VoidResult<string>.AsError(recorded.Error);
+
+        var outcome = recorded.Value;
+        var turn = DysonSecureDataSubmission.CreateAnswerTurn(requestId, outcome);
+        AppendAwaitingUserAnswerReminders(turn, session);
+
+        VoidResult<string> started;
+        if (IsSessionBusy(sessionId) || session.HasAnySummarizingTurn)
+            started = EnqueuePrompt(sessionId, turn);
+        else
+            started = await PromptHarnessTurnOnSessionAsync(session, turn, [], cancellationToken)
+                .ConfigureAwait(true);
+
+        if (started.IsError)
+        {
+            session.TryClearSecureDataOutcome(requestId, outcome);
+            LastError = started.Error;
+            Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return started;
+        }
+
+        var deleted = await DysonPendingUserQuestionHooks.DeleteAnsweredAsync(session, requestId, CancellationToken.None)
+            .ConfigureAwait(true);
+        if (deleted.IsError)
+            session.AppendLog($"Pending secure data row not deleted: {deleted.Error}");
 
         LastError = null;
         Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
@@ -4838,6 +4739,76 @@ public sealed class DysonUiHost : IAsyncDisposable
         };
     }
 
+    /// <summary>
+    /// Full last report for the roster menu. Null when the session is not in the host registry
+    /// or has no report. Not the truncated roster preview.
+    /// </summary>
+    public string? GetSubagentLastReport(Guid persistenceId)
+    {
+        if (persistenceId == Guid.Empty)
+            return null;
+        if (!_sessionsById.TryGetValue(persistenceId, out var session))
+            return null;
+        return string.IsNullOrWhiteSpace(session.LastReportSummary) ? null : session.LastReportSummary;
+    }
+
+    /// <summary>
+    /// Stops one live child (and its descendants) the same way <see cref="StopAllExecution"/>
+    /// stops a focused child: cancel in-flight work, <c>StopSubagentAsync</c>, persist Stopped.
+    /// Does not discard a worktree and does not clear the parent's prompt queue.
+    /// No-op when the id is unknown or already terminal.
+    /// </summary>
+    public async Task StopRosterAgentAsync(Guid persistenceId)
+    {
+        if (persistenceId == Guid.Empty)
+            return;
+        if (!_sessionsById.TryGetValue(persistenceId, out var child))
+            return;
+        if (child.IsTerminal)
+            return;
+
+        MarkUserStoppedTree(child);
+        await StopRosterAgentCoreAsync(child).ConfigureAwait(false);
+        Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.SessionGraph);
+    }
+
+    private async Task StopRosterAgentCoreAsync(DysonAgentSession child)
+    {
+        await StopAllDescendantsAsync(child).ConfigureAwait(false);
+
+        if (child.PersistenceId != Guid.Empty)
+        {
+            ClearPromptQueue(child.PersistenceId);
+            DiscardPendingReports(child.PersistenceId);
+            CancelTaskLifecycleEvaluate(child.PersistenceId);
+            if (IsRuntimeOwned(child.PersistenceId) && TryGetAttachedRuntime(out var runtime))
+                runtime.CancelPrompt(child.PersistenceId);
+            else if (_promptCtsBySession.TryGetValue(child.PersistenceId, out var cts))
+                cts.Cancel();
+        }
+
+        // Parent is in-memory only (AttachChild). Sessions loaded from storage have it null;
+        // the stored id is the same fallback GetSubagentCardState uses.
+        var parent = child.Parent;
+        if (parent is null
+            && ResolveStoredParentId(child) is Guid parentId
+            && _sessionsById.TryGetValue(parentId, out var storedParent))
+        {
+            parent = storedParent;
+        }
+
+        if (parent is not null && child.Id > 0 && !child.IsTerminal)
+        {
+            var stopped = await parent.StopSubagentAsync(child.Id, "Stopped by user.")
+                .ConfigureAwait(false);
+            if (!stopped.IsError)
+                await PersistStoppedSessionAsync(child).ConfigureAwait(false);
+        }
+
+        if (child.PersistenceId != Guid.Empty)
+            DiscardPendingReports(child.PersistenceId);
+    }
+
     /// <summary>Cancels the in-flight <see cref="PromptAsync"/> for the focused session when busy.</summary>
     /// <remarks>Does not clear the per-session prompt queue; draining continues after cancel settles.</remarks>
     public void CancelPrompt()
@@ -5338,31 +5309,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             registeredPath = wd.Value.AbsolutePath;
             workPath = registeredPath;
             workDirectoryName = wd.Value.Name;
-            if (!string.IsNullOrWhiteSpace(full.Value.Session.WorktreeAbsolutePath))
-            {
-                if (Directory.Exists(full.Value.Session.WorktreeAbsolutePath))
-                {
-                    workPath = full.Value.Session.WorktreeAbsolutePath;
-                }
-                else
-                {
-                    var clear = await _sessions.UpdateSessionMetaAsync(
-                            new DysonSessionMetaUpdate
-                            {
-                                SessionId = sessionId,
-                                UpdateWorktreeLocation = true,
-                                WorktreeAbsolutePath = null,
-                                WorktreeBranch = null,
-                            },
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    if (clear.IsError)
-                        return Result<LoadedSession, string>.AsError(clear.Error);
-
-                    full.Value.Session.WorktreeAbsolutePath = null;
-                    full.Value.Session.WorktreeBranch = null;
-                }
-            }
+            var worktree = await DysonSessionWorktree.ResolvePersistedPathAsync(
+                    _sessions, full.Value.Session, cancellationToken)
+                .ConfigureAwait(false);
+            if (worktree.IsError)
+                return Result<LoadedSession, string>.AsError(worktree.Error);
+            if (worktree.Value is { } wt)
+                workPath = wt;
         }
 
         DysonUiThemeSnapshot? inheritedUiTheme = null;
@@ -5680,6 +5633,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             Bus = Bus,
             MetaScratchFiles = _scratchFiles,
             VoiceSidecarMemory = _voiceSidecarMemory,
+            PendingUserQuestions = _pendingUserQuestions,
+            SessionSecrets = _sessionSecrets,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,
@@ -8341,7 +8296,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                 CancellationToken.None)
             .ConfigureAwait(false);
 
-        if (result.IsError && ActiveSessionId == sessionId)
+        if (result.IsError
+            && ActiveSessionId == sessionId
+            && !DysonChildReportWatch.IsHarnessNoReportError(result.Error))
             LastError = result.Error;
 
         Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Error);
@@ -8525,6 +8482,16 @@ public sealed class DysonUiHost : IAsyncDisposable
         await PersistTurnCompletedAsync(session, turn, CancellationToken.None).ConfigureAwait(false);
     }
 
+    private async Task InsertPendingQuestionAsync(DysonAgentSession session, DysonAgentTurn turn)
+    {
+        if (session.Config.PendingUserQuestions is null || session.PersistenceId == Guid.Empty)
+            return;
+
+        var inserted = await DysonPendingUserQuestionHooks.InsertAsync(session, turn).ConfigureAwait(false);
+        if (inserted.IsError)
+            session.AppendLog($"Pending question row not saved: {inserted.Error}");
+    }
+
     private void OnTurnAdded(object? sender, DysonAgentTurn turn)
     {
         if (sender is not DysonAgentSession session)
@@ -8533,7 +8500,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         RefreshRegistryKey(session);
         HookTurn(turn);
         if (!IsRuntimeOwned(session))
+        {
             _ = PersistTurnStartedAsync(session, turn);
+            if (DysonPendingUserQuestionHooks.IsPendingQuestionTurn(turn))
+                _ = Task.Run(() => InsertPendingQuestionAsync(session, turn));
+        }
+
         Notify(DysonHostChangeKind.Transcript);
     }
 

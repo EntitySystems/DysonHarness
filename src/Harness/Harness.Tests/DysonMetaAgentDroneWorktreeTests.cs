@@ -554,6 +554,114 @@ public class DysonMetaAgentDroneWorktreeTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Busy_gate_records_completed_report_and_retries_merge(bool reopenBeforeRelease)
+    {
+        var parent = CreateTempDir();
+        var repo = Path.Combine(parent, "repo");
+        Directory.CreateDirectory(repo);
+        SemaphoreSlim? gate = null;
+        var held = false;
+        var previousWait = DysonSessionWorktree.DroneReportMergeGateWait;
+        try
+        {
+            GitInit(repo);
+            WriteAllLf(Path.Combine(repo, "file.txt"), "base\n");
+            RunGitOrThrow(repo, ["add", "-A"]);
+            RunGitOrThrow(repo, ["commit", "-m", "init"]);
+
+            var droneId = Guid.NewGuid();
+            var ensured = await DysonSessionWorktree.EnsureAsync(repo, droneId);
+            Assert.True(ensured.IsSuccess, ensured.IsError ? ensured.Error : null);
+            var wt = ensured.Value.AbsolutePath;
+            WriteAllLf(Path.Combine(wt, "file.txt"), "from-drone\n");
+            RunGitOrThrow(wt, ["add", "-A"]);
+            RunGitOrThrow(wt, ["commit", "-m", "drone"]);
+
+            var parentSession = new StubSession(DysonAgentModes.MetaAgent);
+            var drone = new StubSession(DysonAgentModes.MetaAgentDrone);
+            drone.SetPersistenceIdForTest(droneId);
+            drone.WorktreeEnabled = true;
+            drone.WorktreeAbsolutePath = wt;
+            drone.WorktreeBranch = ensured.Value.Branch;
+            drone.RegisteredWorkDirectoryAbsolutePath = repo;
+            parentSession.RegisterForTest(drone);
+
+            var root = await DysonGitInfo.TryFindRootMostRepoAsync(repo);
+            Assert.True(root.IsSuccess, root.IsError ? root.Error : null);
+            gate = DysonSessionWorktree.MergeGates.GetOrAdd(root.Value, static _ => new SemaphoreSlim(1, 1));
+            Assert.True(await gate.WaitAsync(0));
+            held = true;
+            DysonSessionWorktree.DroneReportMergeGateWait = TimeSpan.FromMilliseconds(200);
+
+            var submitted = await drone.SubmitSubagentReportAsync("done");
+            Assert.True(submitted.IsSuccess, submitted.IsError ? submitted.Error : null);
+            Assert.Equal(DysonSessionStatus.Completed, drone.Status);
+            Assert.Contains("Worktree merge pending", drone.LastReportSummary, StringComparison.Ordinal);
+            Assert.True(parentSession.TryDequeueInterrupt(out var interrupt));
+            Assert.Equal(DysonAgentInterruptKind.SubagentCompleted, interrupt.Kind);
+            Assert.Equal("base\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
+
+            // Longer than the drone-report wait: the retry must wait on the gate, not give up.
+            await Task.Delay(1000);
+            Assert.Equal("base\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
+
+            if (reopenBeforeRelease)
+            {
+                // A reopened drone is working again: the stale retry must not merge or flip it.
+                Assert.True(drone.TryReopenForNewParentTask());
+                gate.Release();
+                held = false;
+                await Task.Delay(1000);
+                Assert.Equal(DysonSessionStatus.Active, drone.Status);
+                Assert.Equal(wt, drone.WorktreeAbsolutePath);
+                Assert.Equal("base\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
+                Assert.False(parentSession.TryDequeueInterrupt(out _));
+                return;
+            }
+
+            gate.Release();
+            held = false;
+
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (drone.WorktreeAbsolutePath is not null && DateTime.UtcNow < deadline)
+                await Task.Delay(100);
+
+            Assert.Null(drone.WorktreeAbsolutePath);
+            Assert.Equal("from-drone\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
+            Assert.Equal(DysonSessionStatus.Completed, drone.Status);
+            deadline = DateTime.UtcNow.AddSeconds(5);
+            while (drone.LastReportSummary!.Contains("Worktree merge pending", StringComparison.Ordinal)
+                   && DateTime.UtcNow < deadline)
+                await Task.Delay(50);
+            Assert.Contains("merged.", drone.LastReportSummary, StringComparison.Ordinal);
+            Assert.False(parentSession.TryDequeueInterrupt(out _));
+        }
+        finally
+        {
+            DysonSessionWorktree.DroneReportMergeGateWait = previousWait;
+            if (held)
+                gate!.Release();
+            await CleanupWorktrees(repo);
+            DeleteQuiet(parent);
+        }
+    }
+
+    [Fact]
+    public void Harness_no_report_errors_are_not_host_errors()
+    {
+        Assert.True(DysonChildReportWatch.IsHarnessNoReportError(
+            DysonChildReportWatch.PromptEndedWithoutReportReason));
+        Assert.True(DysonChildReportWatch.IsHarnessNoReportError(
+            DysonChildReportWatch.IdleWithoutReportReason));
+        Assert.True(DysonChildReportWatch.IsHarnessNoReportError(
+            "Child finished without SubmitSubagentReport (no assistant output)."));
+        Assert.False(DysonChildReportWatch.IsHarnessNoReportError("git failed"));
+        Assert.False(DysonChildReportWatch.IsHarnessNoReportError(null));
+    }
+
     private sealed class StubProvider : DysonAgentProvider;
 
     private sealed class StubSession(string mode) : DysonAgentSession(
