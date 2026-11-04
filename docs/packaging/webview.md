@@ -1,6 +1,6 @@
 # Desktop webview host (Windows CefSharp + macOS WKWebView)
 
-Blazor Interactive Server remains the UI stack. On Windows continuous builds, **`DysonHarness.UI.Windows`** hosts that UI inside a CefSharp WPF window (`DysonHarness.exe`). On macOS continuous builds, **`DysonHarness.UI.macOS`** hosts it inside a system WKWebView (`DysonHarness.app`). Agent browser windows are separate from the shell on both platforms. The macOS section is below; the rest of this page is the Windows host.
+Blazor Interactive Server remains the UI stack. On Windows continuous builds, **`DysonHarness.UI.Windows`** hosts that UI inside a CefSharp WPF window (`DysonHarness.exe`). On macOS continuous builds, **`DysonHarness.UI.macOS`** hosts it inside a system WKWebView (`Dyson Harness.app`; preview builds are `Dyson Harness (Preview).app`). Agent browser windows are separate from the shell on both platforms. The macOS section is below; the rest of this page is the Windows host.
 
 Shipped continuous zips (all RIDs) and Windows MSI: [releases.md](releases.md).
 
@@ -101,7 +101,7 @@ Boundary: `Harness.WindowsBrowser` only references Abstractions; it never calls 
 | `Harness.UI` | `net10.0-windows` + `win-x64` on Windows | Blazor host (`DysonUiWebHost`); conditional WindowsBrowser ref + DI singleton |
 | `DysonHarness.UI.Windows` | `net10.0-windows` + WPF + `win-x64` (default) / `win-arm64` (`-r`) | CEF shell exe (`AssemblyName=DysonHarness`) |
 | `Harness.MacBrowser` | `net10.0` | `DysonMacBrowserControl` — JSON C ABI over `libDysonWebKit.dylib` |
-| `DysonHarness.UI.macOS` | `net10.0` + `osx-arm64` / `osx-x64` | WKWebView shell exe (`AssemblyName=DysonHarness`), bundled as `DysonHarness.app` |
+| `DysonHarness.UI.macOS` | `net10.0` + `osx-arm64` / `osx-x64` | WKWebView shell exe (`AssemblyName=DysonHarness`), bundled as `Dyson Harness.app` (preview: `Dyson Harness (Preview).app`) |
 
 ## macOS WKWebView host
 
@@ -119,7 +119,7 @@ Agent tabs use a persistent `WKWebsiteDataStore(forIdentifier:)` so their cookie
 
 The agent `WKUIDelegate` grants media capture (camera, microphone, camera+microphone), geolocation on macOS 27+, and file-open panels. JavaScript `alert` / `confirm` / `prompt` complete immediately (`confirm` is true) so a dialog cannot hang a tool. `window.open` becomes a tab. The shell window does not grant those prompts: it keeps the loopback origin and sends other `http(s)` to `NSWorkspace`.
 
-The Dock and Finder icon is the white Dyson mark on black (`CFBundleIconFile` `DysonHarness.icns`, built by `scripts/bundle-macos-app.sh` from `DysonHarness.UI.Windows/Assets/dyson.ico`). The host leaves that bundle icon alone. Setting `NSApp.applicationIconImage` would replace the Dock tile with the unmasked square. The shell window title and the startup alert use `CFBundleDisplayName`. A preview package sets that, and `CFBundleName`, to **Dyson Harness (Preview)**. Stable stays **Dyson Harness**.
+The Dock and Finder icon is the white Dyson mark on black (`CFBundleIconFile` `DysonHarness.icns`, built by `scripts/bundle-macos-app.sh` from `DysonHarness.UI.Windows/Assets/dyson.ico`). The host leaves that bundle icon alone. Setting `NSApp.applicationIconImage` would replace the Dock tile with the unmasked square. The shell window title and the startup alert use `CFBundleDisplayName`. The bundle file name matches it, because Finder, Launchpad and Spotlight display the file name: stable is `Dyson Harness.app`, preview is `Dyson Harness (Preview).app`. `CFBundleName` and `CFBundleDisplayName` are **Dyson Harness** or **Dyson Harness (Preview)**. The bundle id stays `com.entitysystems.dysonharness`.
 
 `ponytail:` ceilings: no WebUSB, WebSerial, WebBluetooth, or WebMIDI (no public WKWebView API). Device-orientation permission is unavailable on macOS. Display capture is not a `WKMediaCaptureType`. WebGPU is whatever the OS WebKit ships. The first camera, microphone, or location use still shows the macOS TCC dialog. Info.plist usage strings do not skip it. Minimum system version is macOS 14. Pull-request CI and a local `scripts/bundle-macos-app.sh` ad-hoc sign the bundle. Continuous release sets `CODESIGN_IDENTITY` and signs with Developer ID Application, hardened runtime, and [`packaging/macos/entitlements.plist`](../../packaging/macos/entitlements.plist), then notarizes the app and a `/Applications` `.pkg` (Developer ID Installer). See [releases.md](releases.md).
 

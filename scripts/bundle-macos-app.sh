@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wrap a DysonHarness.UI.macOS publish directory as DysonHarness.app and sign it.
+# Wrap a DysonHarness.UI.macOS publish directory as "Dyson Harness.app" and sign it.
 # The publish directory is replaced by a folder that contains only the app bundle.
 #
 # No CODESIGN_IDENTITY: ad-hoc signature (local builds and pull-request CI).
@@ -7,14 +7,17 @@
 #   CODESIGN_KEYCHAIN      optional keychain path
 #   CODESIGN_ENTITLEMENTS  defaults to packaging/macos/entitlements.plist
 #   VERSION                CalVer stamped into Info.plist when set
-#   CHANNEL                preview stamps the app name "Dyson Harness (Preview)"
+#   CHANNEL                preview names the bundle "Dyson Harness (Preview).app"
 set -euo pipefail
 
 PUBLISH="${1:?publish directory}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PLIST="$ROOT/src/native/macos/Info.plist"
 STAGE="$(mktemp -d)"
-APP="$PUBLISH/DysonHarness.app"
+# Finder, Launchpad and Spotlight show the .app file name, not CFBundleDisplayName.
+APP_NAME="Dyson Harness"
+[[ "${CHANNEL:-}" == "preview" ]] && APP_NAME="Dyson Harness (Preview)"
+APP="$PUBLISH/$APP_NAME.app"
 
 cleanup() { rm -rf "$STAGE"; }
 trap cleanup EXIT
@@ -29,10 +32,9 @@ if [[ -n "${VERSION:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$APP/Contents/Info.plist"
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" "$APP/Contents/Info.plist"
 fi
-if [[ "${CHANNEL:-}" == "preview" ]]; then
-  /usr/libexec/PlistBuddy -c "Set :CFBundleName Dyson Harness (Preview)" "$APP/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Dyson Harness (Preview)" "$APP/Contents/Info.plist"
-fi
+# Always stamp the file name. The template's "Dyson Harness" is the stable default.
+/usr/libexec/PlistBuddy -c "Set :CFBundleName ${APP_NAME}" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${APP_NAME}" "$APP/Contents/Info.plist"
 
 LOGO="$ROOT/src/Harness/DysonHarness.UI.Windows/Assets/dyson.ico"
 MASTER="$STAGE/DysonHarnessIcon.png"
