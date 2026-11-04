@@ -553,23 +553,23 @@ public sealed partial class DysonWorkspaceToolExecutor
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
             var root = doc.RootElement;
-            var message = RequirePostField(root, "message");
+            var message = RequirePostField(root, "message", "PostUserQuestion");
             if (message.IsError)
                 return Error(call, message.Error);
 
-            var question = RequirePostField(root, "question");
+            var question = RequirePostField(root, "question", "PostUserQuestion");
             if (question.IsError)
                 return Error(call, question.Error);
 
-            var choices = ParseUserQuestionChoices(root);
+            var choices = ParseUserQuestionChoices(root, "PostUserQuestion");
             if (choices.IsError)
                 return Error(call, choices.Error);
 
-            var multiSelect = OptionalPostBool(root, "multiSelect", defaultValue: false);
+            var multiSelect = OptionalPostBool(root, "multiSelect", defaultValue: false, "PostUserQuestion");
             if (multiSelect.IsError)
                 return Error(call, multiSelect.Error);
 
-            var allowCustom = OptionalPostBool(root, "allowCustomAnswer", defaultValue: true);
+            var allowCustom = OptionalPostBool(root, "allowCustomAnswer", defaultValue: true, "PostUserQuestion");
             if (allowCustom.IsError)
                 return Error(call, allowCustom.Error);
 
@@ -598,38 +598,47 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
     }
 
-    private static Result<string, string> RequirePostField(JsonElement root, string name)
+    private static Result<string, string> RequirePostField(
+        JsonElement root,
+        string name,
+        string toolName = "PostUserQuestion")
     {
         if (!root.TryGetProperty(name, out var prop) || prop.ValueKind != JsonValueKind.String)
-            return Result<string, string>.AsError($"PostUserQuestion: {name} is required.");
+            return Result<string, string>.AsError($"{toolName}: {name} is required.");
 
         var value = prop.GetString()?.Trim() ?? "";
         if (value.Length == 0)
-            return Result<string, string>.AsError($"PostUserQuestion: {name} is required.");
+            return Result<string, string>.AsError($"{toolName}: {name} is required.");
 
         return Result<string, string>.AsValue(value);
     }
 
-    private static Result<bool, string> OptionalPostBool(JsonElement root, string name, bool defaultValue)
+    private static Result<bool, string> OptionalPostBool(
+        JsonElement root,
+        string name,
+        bool defaultValue,
+        string toolName = "PostUserQuestion")
     {
         if (!root.TryGetProperty(name, out var prop) || prop.ValueKind == JsonValueKind.Null)
             return Result<bool, string>.AsValue(defaultValue);
         if (prop.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-            return Result<bool, string>.AsError($"PostUserQuestion: {name} must be a boolean.");
+            return Result<bool, string>.AsError($"{toolName}: {name} must be a boolean.");
 
         return Result<bool, string>.AsValue(prop.GetBoolean());
     }
 
-    private static Result<List<string>, string> ParseUserQuestionChoices(JsonElement root)
+    private static Result<List<string>, string> ParseUserQuestionChoices(
+        JsonElement root,
+        string toolName = "PostUserQuestion")
     {
         if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind == JsonValueKind.Null)
-            return Result<List<string>, string>.AsError("PostUserQuestion: choices are required.");
+            return Result<List<string>, string>.AsError($"{toolName}: choices are required.");
         if (choices.ValueKind != JsonValueKind.Array)
-            return Result<List<string>, string>.AsError("PostUserQuestion: choices must be an array.");
+            return Result<List<string>, string>.AsError($"{toolName}: choices must be an array.");
         if (choices.GetArrayLength() < 2)
-            return Result<List<string>, string>.AsError("PostUserQuestion: choices require at least 2.");
+            return Result<List<string>, string>.AsError($"{toolName}: choices require at least 2.");
         if (choices.GetArrayLength() > MaxUserQuestionChoices)
-            return Result<List<string>, string>.AsError("PostUserQuestion: choices cannot exceed 12.");
+            return Result<List<string>, string>.AsError($"{toolName}: choices cannot exceed 12.");
 
         var list = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -637,11 +646,11 @@ public sealed partial class DysonWorkspaceToolExecutor
         foreach (var item in choices.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(item.GetString()))
-                return Result<List<string>, string>.AsError($"PostUserQuestion: choices[{index}] is required.");
+                return Result<List<string>, string>.AsError($"{toolName}: choices[{index}] is required.");
 
             var trimmed = item.GetString()!.Trim();
             if (!seen.Add(trimmed))
-                return Result<List<string>, string>.AsError("PostUserQuestion: choices must be unique.");
+                return Result<List<string>, string>.AsError($"{toolName}: choices must be unique.");
 
             list.Add(trimmed);
             index++;
@@ -694,6 +703,183 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         return Result<List<DysonConversationAction>, string>.AsValue(list);
+    }
+
+    private const int MaxListedUserQuestions = 50;
+
+    private DysonToolCallResult ListUserQuestions(DysonToolCall call)
+    {
+        var denied = RejectUnlessMetaAgent(call, "ListUserQuestions");
+        if (denied is not null)
+            return denied;
+
+        var includeAnswered = false;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return Error(call, "ListUserQuestions: invalid JSON arguments.");
+            if (root.TryGetProperty("includeAnswered", out var flag) && flag.ValueKind != JsonValueKind.Null)
+            {
+                if (flag.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    return Error(call, "ListUserQuestions: includeAnswered must be a boolean.");
+                includeAnswered = flag.GetBoolean();
+            }
+        }
+        catch (JsonException)
+        {
+            return Error(call, "ListUserQuestions: invalid JSON arguments.");
+        }
+
+        var items = _session.ListUserQuestions(includeAnswered);
+        if (items.Count == 0)
+            return Ok(call, """{"questions":[]}""");
+
+        var truncated = items.Count > MaxListedUserQuestions;
+        var shown = truncated ? items.Take(MaxListedUserQuestions).ToList() : items;
+        var payload = new
+        {
+            questions = shown.Select(static item => new
+            {
+                questionId = item.Id.ToString("D"),
+                question = item.Question,
+                message = item.Message,
+                choices = item.Choices,
+                multiSelect = item.MultiSelect,
+                postedUtc = item.PostedUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+                state = item.State,
+            }),
+            truncated,
+        };
+        return Ok(call, JsonSerializer.Serialize(payload));
+    }
+
+    private async Task<DysonToolCallResult> UpdateUserQuestionAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "UpdateUserQuestion");
+        if (denied is not null)
+            return denied;
+
+        Guid id;
+        string message;
+        string title;
+        List<string> choices;
+        bool multiSelect;
+        bool allowCustom;
+        List<DysonConversationAction> actions;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var root = doc.RootElement;
+            var parsedId = RequireQuestionId(root, "UpdateUserQuestion");
+            if (parsedId.IsError)
+                return Error(call, parsedId.Error);
+
+            var parsedMessage = RequirePostField(root, "message", "UpdateUserQuestion");
+            if (parsedMessage.IsError)
+                return Error(call, parsedMessage.Error);
+
+            var parsedTitle = RequirePostField(root, "question", "UpdateUserQuestion");
+            if (parsedTitle.IsError)
+                return Error(call, parsedTitle.Error);
+
+            var parsedChoices = ParseUserQuestionChoices(root, "UpdateUserQuestion");
+            if (parsedChoices.IsError)
+                return Error(call, parsedChoices.Error);
+
+            var parsedMulti = OptionalPostBool(root, "multiSelect", defaultValue: false, "UpdateUserQuestion");
+            if (parsedMulti.IsError)
+                return Error(call, parsedMulti.Error);
+
+            var parsedCustom = OptionalPostBool(root, "allowCustomAnswer", defaultValue: true, "UpdateUserQuestion");
+            if (parsedCustom.IsError)
+                return Error(call, parsedCustom.Error);
+
+            var parsedActions = ParseConversationActions(root, "UpdateUserQuestion");
+            if (parsedActions.IsError)
+                return Error(call, parsedActions.Error);
+
+            id = parsedId.Value;
+            message = parsedMessage.Value;
+            title = parsedTitle.Value;
+            choices = parsedChoices.Value;
+            multiSelect = parsedMulti.Value;
+            allowCustom = parsedCustom.Value;
+            actions = parsedActions.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "UpdateUserQuestion: invalid JSON arguments.");
+        }
+
+        var card = new DysonUserQuestion(id, title, choices, multiSelect, allowCustom, Answer: null);
+        var replaced = _session.TryReplaceUserQuestion(
+            id,
+            card,
+            message,
+            actions.Count == 0 ? null : actions);
+        if (replaced.IsError)
+            return Error(call, replaced.Error);
+
+        await DysonPendingUserQuestionHooks.UpdateAsync(
+            _session,
+            id,
+            message,
+            title,
+            choices,
+            multiSelect,
+            allowCustom,
+            cancellationToken).ConfigureAwait(false);
+
+        return Ok(call, "{\"ok\":true,\"questionId\":\"" + id.ToString("D") + "\"}");
+    }
+
+    private async Task<DysonToolCallResult> DeleteUserQuestionAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "DeleteUserQuestion");
+        if (denied is not null)
+            return denied;
+
+        Guid id;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var parsedId = RequireQuestionId(doc.RootElement, "DeleteUserQuestion");
+            if (parsedId.IsError)
+                return Error(call, parsedId.Error);
+            id = parsedId.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "DeleteUserQuestion: invalid JSON arguments.");
+        }
+
+        var withdrawn = _session.TryWithdrawUserQuestion(id);
+        if (withdrawn.IsError)
+            return Error(call, withdrawn.Error);
+
+        await DysonPendingUserQuestionHooks.DeleteAnsweredAsync(_session, id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Ok(call, "{\"ok\":true,\"questionId\":\"" + id.ToString("D") + "\"}");
+    }
+
+    private static Result<Guid, string> RequireQuestionId(JsonElement root, string toolName)
+    {
+        if (!root.TryGetProperty("questionId", out var prop)
+            || prop.ValueKind != JsonValueKind.String
+            || !Guid.TryParse(prop.GetString(), out var id)
+            || id == Guid.Empty)
+        {
+            return Result<Guid, string>.AsError($"{toolName}: questionId is required.");
+        }
+
+        return Result<Guid, string>.AsValue(id);
     }
 
     private static Result<Guid?, string> ParseVisualizationId(JsonElement root)

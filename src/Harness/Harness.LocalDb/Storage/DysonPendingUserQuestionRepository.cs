@@ -88,6 +88,43 @@ public sealed class DysonPendingUserQuestionRepository(
             cancellationToken);
     }
 
+    public Task<VoidResult<string>> UpdateByQuestionGuidAsync(
+        Guid questionGuid,
+        Guid sessionId,
+        string message,
+        string question,
+        IReadOnlyList<string> choices,
+        bool multiSelect,
+        bool allowCustomAnswer,
+        CancellationToken cancellationToken = default)
+    {
+        if (sessionId == Guid.Empty)
+            return Task.FromResult(VoidResult<string>.AsError("Session id is required."));
+
+        var trimmedMessage = message?.Trim() ?? "";
+        if (trimmedMessage.Length == 0)
+            return Task.FromResult(VoidResult<string>.AsError("Message is required."));
+
+        var title = question?.Trim() ?? "";
+        if (title.Length == 0)
+            return Task.FromResult(VoidResult<string>.AsError("Question is required."));
+
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync(
+            (db, ct) => UpdateByQuestionGuidCoreAsync(
+                db,
+                subjectId,
+                questionGuid,
+                sessionId,
+                trimmedMessage,
+                title,
+                choices,
+                multiSelect,
+                allowCustomAnswer,
+                ct),
+            cancellationToken);
+    }
+
     private static async Task<Result<ulong, string>> CreateCoreAsync(
         DysonDbContext db,
         string subjectId,
@@ -247,6 +284,48 @@ public sealed class DysonPendingUserQuestionRepository(
         catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return VoidResult<string>.AsError($"Failed to delete pending user question: {ex.Message}");
+        }
+    }
+
+    private static async Task<VoidResult<string>> UpdateByQuestionGuidCoreAsync(
+        DysonDbContext db,
+        string subjectId,
+        Guid questionGuid,
+        Guid sessionId,
+        string message,
+        string title,
+        IReadOnlyList<string> choices,
+        bool multiSelect,
+        bool allowCustomAnswer,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var owned = await SessionOwnedAsync(db, subjectId, sessionId, cancellationToken)
+                .ConfigureAwait(false);
+            if (!owned)
+                return VoidResult<string>.AsError($"Session '{sessionId}' not found.");
+
+            var row = await db.PendingUserQuestions
+                .Where(x => x.SubjectId == subjectId && x.SessionId == sessionId && x.QuestionGuid == questionGuid)
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (row is null)
+                return VoidResult<string>.AsError("not found.");
+            if (row.Kind != DysonPendingUserQuestionKind.Question)
+                return VoidResult<string>.AsError("not a question.");
+
+            row.Message = message;
+            row.Question = title;
+            row.Choices = StringListJsonValueConverter.Normalize(choices);
+            row.MultiSelect = multiSelect;
+            row.AllowCustomAnswer = allowCustomAnswer;
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return VoidResult<string>.AsError($"Failed to update pending user question: {ex.Message}");
         }
     }
 

@@ -58,7 +58,7 @@
                     @if (item.UserQuestion is { } question)
                     {
                         var locked = question.Answer is not null;
-                        var draft = Draft(question.Id);
+                        var draft = DraftFor(question);
                         var busy = _questionBusy.Contains(question.Id);
                         <div class="meta-chat__question">
                             <div class="meta-chat__question-title">@question.Question</div>
@@ -211,20 +211,41 @@
             _actionResults.Remove(key);
     }
 
-    private QuestionDraft Draft(Guid questionId)
+    private QuestionDraft DraftFor(DysonUserQuestion question)
     {
-        if (!_drafts.TryGetValue(questionId, out var draft))
+        if (_drafts.TryGetValue(question.Id, out var draft)
+            && DraftMatches(draft, question.Choices, question.MultiSelect, question.AllowCustomAnswer))
         {
-            draft = new QuestionDraft();
-            _drafts[questionId] = draft;
+            return draft;
         }
 
+        draft = new QuestionDraft(question.Choices, question.MultiSelect, question.AllowCustomAnswer);
+        _drafts[question.Id] = draft;
         return draft;
+    }
+
+    private static bool DraftMatches(
+        QuestionDraft draft,
+        IReadOnlyList<string> choices,
+        bool multiSelect,
+        bool allowCustomAnswer)
+    {
+        if (draft.MultiSelect != multiSelect || draft.AllowCustomAnswer != allowCustomAnswer)
+            return false;
+        if (draft.Choices.Count != choices.Count)
+            return false;
+        for (var i = 0; i < choices.Count; i++)
+        {
+            if (!string.Equals(draft.Choices[i], choices[i], StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
     }
 
     private bool CanSubmit(DysonUserQuestion question)
     {
-        var draft = Draft(question.Id);
+        var draft = DraftFor(question);
         return DysonUserQuestion.ValidateAnswer(
             question,
             draft.Selected,
@@ -237,7 +258,7 @@
         if (question.Answer is not null)
             return;
 
-        var draft = Draft(question.Id);
+        var draft = DraftFor(question);
         if (e.Value is bool on && on)
             draft.Select(choice);
         else
@@ -250,7 +271,7 @@
         if (question.Answer is not null || question.MultiSelect)
             return;
 
-        Draft(question.Id).Replace(choice);
+        DraftFor(question).Replace(choice);
         _questionErrors.Remove(question.Id);
     }
 
@@ -259,7 +280,7 @@
         if (question.Answer is not null)
             return;
 
-        var draft = Draft(question.Id);
+        var draft = DraftFor(question);
         draft.Custom = e.Value?.ToString() ?? "";
         if (!question.MultiSelect && !string.IsNullOrWhiteSpace(draft.Custom))
             draft.ClearSelected();
@@ -271,7 +292,7 @@
         if (question.Answer is not null || _questionBusy.Contains(question.Id) || !CanSubmit(question))
             return;
 
-        var draft = Draft(question.Id);
+        var draft = DraftFor(question);
         _questionBusy.Add(question.Id);
         _questionErrors.Remove(question.Id);
         try
@@ -290,6 +311,19 @@
     private sealed class QuestionDraft
     {
         private readonly List<string> _selected = [];
+
+        public QuestionDraft(IReadOnlyList<string> choices, bool multiSelect, bool allowCustomAnswer)
+        {
+            Choices = choices;
+            MultiSelect = multiSelect;
+            AllowCustomAnswer = allowCustomAnswer;
+        }
+
+        public IReadOnlyList<string> Choices { get; }
+
+        public bool MultiSelect { get; }
+
+        public bool AllowCustomAnswer { get; }
 
         public IReadOnlyList<string> Selected => _selected;
 

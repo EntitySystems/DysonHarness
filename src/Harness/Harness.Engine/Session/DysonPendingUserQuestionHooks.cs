@@ -115,6 +115,44 @@ public static class DysonPendingUserQuestionHooks
         return created;
     }
 
+    /// <summary>
+    /// Rewrites the pending question row and publishes <see cref="DysonPendingUserQuestionsChangedEvent"/>
+    /// on success. A null repository or an unpersisted session is success and does not publish.
+    /// A repository error is returned and does not publish.
+    /// </summary>
+    public static async Task<VoidResult<string>> UpdateAsync(
+        DysonAgentSession session,
+        Guid questionGuid,
+        string message,
+        string question,
+        IReadOnlyList<string> choices,
+        bool multiSelect,
+        bool allowCustomAnswer,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        var repo = session.Config.PendingUserQuestions;
+        if (repo is null || session.PersistenceId == Guid.Empty)
+            return VoidResult<string>.Success;
+
+        var updated = await repo.UpdateByQuestionGuidAsync(
+            questionGuid,
+            session.PersistenceId,
+            message,
+            question,
+            choices,
+            multiSelect,
+            allowCustomAnswer,
+            ct).ConfigureAwait(false);
+        if (updated.IsError)
+            return updated;
+
+        session.Config.Bus?.Publish(
+            DysonBusScopes.Session(session.PersistenceId),
+            new DysonPendingUserQuestionsChangedEvent(session.PersistenceId));
+        return VoidResult<string>.Success;
+    }
+
     public static async Task<ulong?> FindPendingIdAsync(
         DysonAgentSession session,
         Guid questionGuid,
