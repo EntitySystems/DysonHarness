@@ -81,4 +81,4 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/bundle-macos-app.sh artifacts/macos
-          codesign --verify --deep --strict artifacts/macos/DysonHarness.app
+          codesign --verify --deep --strict "artifacts/macos/Dyson Harness.app"

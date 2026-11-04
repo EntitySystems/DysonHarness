@@ -362,7 +362,7 @@ public class DysonAppUpdateTests
         Assert.Contains("quoted form of (item 1 of argv)", script, StringComparison.Ordinal);
         Assert.Contains("with administrator privileges", script, StringComparison.Ordinal);
         var installAt = script.IndexOf("do shell script", StringComparison.Ordinal);
-        var openAt = script.IndexOf("open /Applications/DysonHarness.app", StringComparison.Ordinal);
+        var openAt = script.IndexOf("open '/Applications/Dyson Harness (Preview).app'", StringComparison.Ordinal);
         Assert.True(installAt >= 0 && openAt > installAt);
         Assert.DoesNotContain("set -e", script, StringComparison.Ordinal);
 

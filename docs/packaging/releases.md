@@ -14,7 +14,7 @@ Every push to either branch publishes self-contained zips (all RIDs), Windows **
 | `win-x64` | `DysonHarness.UI.Windows` | `DysonHarness.exe` (CefSharp WPF shell hosting Blazor in-process) |
 | `win-arm64` | `DysonHarness.UI.Windows` | Same shell, cross-published for Windows ARM64 |
 | `linux-x64` | `Harness.UI` | `Harness.UI` |
-| `osx-arm64` / `osx-x64` | `DysonHarness.UI.macOS` | `DysonHarness.app` (WKWebView shell hosting Blazor in-process; agent browser is a second window) |
+| `osx-arm64` / `osx-x64` | `DysonHarness.UI.macOS` | `Dyson Harness.app` (preview: `Dyson Harness (Preview).app`). WKWebView shell hosting Blazor in-process; agent browser is a second window |
 
 Pull requests to `master` / `release-preview` and pushes to other branches run tests only (see [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)); they do not publish artifacts. Manual **workflow_dispatch** of continuous release is limited to those two refs.
 
@@ -84,7 +84,7 @@ The shell checks for a newer build on the **same channel** once per process, sho
 3. If that tag is strictly newer, `UpdateAvailableModal` prompts with local vs remote version. **Not now** / Escape / backdrop persist the tag in `app_settings` under `ui_update_skipped_version`, so the prompt only returns for a newer release.
 4. **Update** streams the installer to the temp directory with a byte progress bar (modal locks — no dismiss), then exits so the installer can replace the app.
    - **Windows:** `cmd /c ping -n 4 127.0.0.1 >nul & msiexec /i "<msi>"` and `Environment.Exit(0)`. The short delay plus process exit releases CEF/WPF file locks before the WiX major upgrade replaces `%LocalAppData%\Programs\DysonHarness`. (`ping` rather than `timeout`: a `WinExe` host has no console and `timeout` aborts without one.) The updater only hands off to msiexec; it does not start the new exe. After a successful install, the MSI launches `DysonHarness.exe`.
-   - **macOS:** a detached `nohup` bash helper waits until this process is gone, then runs `installer -pkg "<pkg>" -target /` through an administrator password dialog (`osascript` `do shell script … with administrator privileges`). When that exits 0 it runs `open /Applications/DysonHarness.app`. If the password is cancelled or the install fails, it opens that same path so the current app comes back. The pkg has no postinstall launch, which would start the app twice.
+   - **macOS:** a detached `nohup` bash helper waits until this process is gone, then runs `installer -pkg "<pkg>" -target /` through an administrator password dialog (`osascript` `do shell script … with administrator privileges`). When that exits it runs `open` on the bundle for this build's channel: `/Applications/Dyson Harness.app` (stable) or `/Applications/Dyson Harness (Preview).app` (preview). A cancelled or failed install opens that same path so the current app comes back. The pkg has no postinstall launch, which would start the app twice.
 
 Download or hand-off failures unlock the modal with the message and a **Close** button — the install is never forced. Types live in [`Harness.UI/Services`](../../src/Harness/Harness.UI/Services); parsing Facts are in `DysonAppUpdateTests`.
 
@@ -94,7 +94,7 @@ Download or hand-off failures unlock the modal with the message and a **Close** 
 
 In-app installation is available when a newer release is found for a stamped Windows build, or for a stamped macOS build whose `rid` is `osx-arm64` or `osx-x64`. Settings shows **Available on this Windows build** or **Available on this Mac** in those cases. The existing update prompt supplies the download and install flow; the manual check does not introduce a separate installer experience.
 
-Stable and preview share the same MSI ProductCode / major-upgrade path — operators on one track update within that track; side-by-side stable+preview installs are not supported. On macOS both channels install to `/Applications/DysonHarness.app` (preview is named **Dyson Harness (Preview)**; stable stays **Dyson Harness**).
+Stable and preview share the same MSI ProductCode / major-upgrade path — operators on one track update within that track; side-by-side stable+preview installs are not supported. On macOS the two channels install side by side: stable to `/Applications/Dyson Harness.app`, preview to `/Applications/Dyson Harness (Preview).app`. They keep one bundle id (`com.entitysystems.dysonharness`) and one app-data folder. The first pkg install after this change deletes the old `/Applications/DysonHarness.app` and nothing under `~/Library`.
 
 ## Website download contract
 
@@ -112,7 +112,7 @@ Patch instructions for [dysonharness.com](https://dysonharness.com) (Website rep
 2. **Windows ARM64:** download `DysonHarness-{version}-win-arm64.msi`. It is a separate product (its own upgrade code) and installs to `%LocalAppData%\Programs\DysonHarness-arm64`. It does not upgrade or remove an x64 install. An x64 install left running under emulation on an ARM device keeps updating from the x64 MSI.
 3. **Windows (portable):** download the `win-x64` or `win-arm64` zip, unzip, and run `DysonHarness.exe` (desktop CEF shell; no separate browser URL needed).
 4. **Linux:** download the zip, unzip, run `Harness.UI`, and open the URL printed in the console (Kestrel default http://localhost:5000; there is no `launchSettings.json` in the publish output) if the browser does not open automatically. Local debug (`dotnet run`, Development) uses http://localhost:5181 instead — see [UI](../ui/README.md).
-5. **macOS:** download `DysonHarness-{version}-osx-arm64.pkg` (Apple Silicon) or `DysonHarness-{version}-osx-x64.pkg` (Intel) and install. The package puts `DysonHarness.app` in `/Applications` and asks for an administrator password. The WKWebView shell binds an ephemeral loopback address, same as the Windows desktop shell. The zip is that same app if you do not want the installer. Details: [webview.md](webview.md).
+5. **macOS:** download `DysonHarness-{version}-osx-arm64.pkg` (Apple Silicon) or `DysonHarness-{version}-osx-x64.pkg` (Intel) and install. A stable package puts **Dyson Harness** in `/Applications`; a preview package puts **Dyson Harness (Preview)** there. Both ask for an administrator password. The WKWebView shell binds an ephemeral loopback address, same as the Windows desktop shell. The zip is that same app if you do not want the installer. Details: [webview.md](webview.md).
 
 Builds on `master` and `release-preview` resolve app mode to **Prod** (`DysonProd` app data) via `GITHUB_REF_NAME` in the resolve-app-mode scripts — channel is independent of Dev/Test/Prod. See [storage/models.md](../storage/models.md).
 
@@ -132,7 +132,7 @@ Desktop / CefSharp packaging details: [webview.md](webview.md). MSI authoring li
 
 ## macOS notes
 
-- Prefer the `.pkg`. It installs `DysonHarness.app` into `/Applications` and asks for an administrator password. A preview build is named **Dyson Harness (Preview)** in Finder, the Dock, and the window title. A stable build stays **Dyson Harness**. Both use the same path, `/Applications/DysonHarness.app`.
+- Prefer the `.pkg`. It installs into `/Applications` and asks for an administrator password. Finder, Launchpad, Spotlight, the Dock and the menu bar show the bundle's file name: **Dyson Harness** on stable (`/Applications/Dyson Harness.app`) and **Dyson Harness (Preview)** on preview (`/Applications/Dyson Harness (Preview).app`). `CFBundleName` and `CFBundleDisplayName` match that name. The bundle id stays `com.entitysystems.dysonharness` and the executable stays `DysonHarness`. The pkg's postinstall removes a leftover `/Applications/DysonHarness.app` from before this rename; it does not touch app data. The zip contains the same renamed app. Release asset names are unchanged.
 - The zip is the same notarized app, for a copy that does not use the installer.
 - Continuous release signs the app with **Developer ID Application** (hardened runtime, `packaging/macos/entitlements.plist`), builds the pkg with **Developer ID Installer**, then notarizes and staples both. The credentials are repository secrets, not files in this repo: `APPLE_TEAM_ID`, `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_API_PRIVATE_KEY`.
 - Pull-request CI and a local `scripts/bundle-macos-app.sh` stay ad-hoc signed. Gatekeeper still asks for a right-click Open on those builds. The macOS publish job fails if any of the secrets above is empty, and that failure blocks the whole continuous release.
