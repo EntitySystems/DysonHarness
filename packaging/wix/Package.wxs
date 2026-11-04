@@ -36,7 +36,7 @@
       <RegistryValue
         Root="HKCU"
         Key="Software\Entity Systems\Dyson Harness"
-        Name="Installed"
+        Name="$(var.ShortcutKeyPathName)"
         Type="integer"
         Value="1"
         KeyPath="yes" />

@@ -21,7 +21,10 @@
     <ShortcutComponentGuid Condition="'$(InstallerArch)' != 'arm64'">1E5DB2C9-836C-4DF7-9F4C-A919E74DC731</ShortcutComponentGuid>
     <StartMenuFolderName Condition="'$(InstallerArch)' == 'arm64'">Dyson Harness (ARM64)</StartMenuFolderName>
     <StartMenuFolderName Condition="'$(InstallerArch)' != 'arm64'">Dyson Harness</StartMenuFolderName>
-    <DefineConstants>ProductVersion=$(ProductVersion);UpgradeCode=$(UpgradeCode);InstallFolderName=$(InstallFolderName);ShortcutComponentGuid=$(ShortcutComponentGuid);StartMenuFolderName=$(StartMenuFolderName)</DefineConstants>
+    <!-- Keypath of the shortcut component. Two products must not share one registry value. -->
+    <ShortcutKeyPathName Condition="'$(InstallerArch)' == 'arm64'">InstalledArm64</ShortcutKeyPathName>
+    <ShortcutKeyPathName Condition="'$(InstallerArch)' != 'arm64'">Installed</ShortcutKeyPathName>
+    <DefineConstants>ProductVersion=$(ProductVersion);UpgradeCode=$(UpgradeCode);InstallFolderName=$(InstallFolderName);ShortcutComponentGuid=$(ShortcutComponentGuid);StartMenuFolderName=$(StartMenuFolderName);ShortcutKeyPathName=$(ShortcutKeyPathName)</DefineConstants>
     <DefaultCompressionLevel>high</DefaultCompressionLevel>
   </PropertyGroup>
   <ItemGroup>
