@@ -62,6 +62,9 @@ jobs:
         include:
           - rid: win-x64
             os: windows-latest
+          # Cross-published from the x64 Windows runner. CefSharp ships chromiumembeddedframework.runtime.win-arm64.
+          - rid: win-arm64
+            os: windows-latest
           - rid: linux-x64
             os: ubuntu-latest
           - rid: osx-arm64
@@ -91,7 +94,7 @@ jobs:
           OUT="artifacts/publish/${{ matrix.rid }}"
           mkdir -p "$OUT"
           PROJECT="src/Harness/Harness.UI/Harness.UI.csproj"
-          if [[ "${{ matrix.rid }}" == "win-x64" ]]; then
+          if [[ "${{ matrix.rid }}" == win-* ]]; then
             PROJECT="src/Harness/DysonHarness.UI.Windows/DysonHarness.UI.Windows.csproj"
           elif [[ "${{ matrix.rid }}" == osx-* ]]; then
             PROJECT="src/Harness/DysonHarness.UI.macOS/DysonHarness.UI.macOS.csproj"
@@ -223,25 +226,28 @@ jobs:
             (cd "artifacts/publish/${RID}" && zip -r "../../${ZIP_NAME}" .)
           fi
 
-      - name: Build MSI (win-x64)
-        if: matrix.rid == 'win-x64'
+      - name: Build MSI (Windows)
+        if: startsWith(matrix.rid, 'win-')
         shell: pwsh
         run: |
-          $publishDir = (Resolve-Path "artifacts/publish/win-x64").Path
+          $rid = "${{ matrix.rid }}"
+          $arch = $rid.Substring(4)
+          $publishDir = (Resolve-Path "artifacts/publish/$rid").Path
           # MSI ProductVersion requires major < 256; map CalVer YYYY.M.N → (YYYY%100).M.N
           $parts = $env:VERSION -split '\.'
           if ($parts.Count -lt 3) { throw "Unexpected VERSION '$env:VERSION' (want YYYY.M.N)" }
           $msiProductVersion = "{0}.{1}.{2}" -f ([int]$parts[0] % 100), [int]$parts[1], [int]$parts[2]
-          Write-Host "CalVer=$env:VERSION MSI ProductVersion=$msiProductVersion channel=$env:CHANNEL"
+          Write-Host "CalVer=$env:VERSION MSI ProductVersion=$msiProductVersion channel=$env:CHANNEL arch=$arch"
           dotnet build packaging/wix/DysonHarness.Installer.wixproj -c Release `
             -p:Version=$env:VERSION `
             -p:ProductVersion=$msiProductVersion `
+            -p:InstallerArch=$arch `
             -p:PublishDir=$publishDir
           if ($LASTEXITCODE -ne 0) { throw "WiX MSI build failed with exit $LASTEXITCODE" }
-          $msi = Get-ChildItem -Path packaging/wix/bin -Recurse -Filter "DysonHarness-$env:VERSION-win-x64.msi" |
+          $msi = Get-ChildItem -Path packaging/wix/bin -Recurse -Filter "DysonHarness-$env:VERSION-$rid.msi" |
             Select-Object -First 1
           if (-not $msi) {
-            throw "MSI not found under packaging/wix/bin for version $env:VERSION"
+            throw "MSI not found under packaging/wix/bin for version $env:VERSION rid $rid"
           }
           Copy-Item $msi.FullName "artifacts/$($msi.Name)" -Force
           Write-Host "Copied MSI to artifacts/$($msi.Name)"
@@ -349,7 +355,7 @@ jobs:
           | **Commit** | \`${GITHUB_SHA}\` (\`${SHORT_SHA}\`) |
           | **Workflow** | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |
 
-          **Windows:** prefer the MSI (\`DysonHarness-${VERSION}-win-x64.msi\`) for a per-user install (Start Menu shortcut + Apps & Features as **Dyson Harness**, manufacturer **Entity Systems**); zip remains portable. VC++ 2022 x64 redistributable required. **Linux:** unzip and run \`Harness.UI\`. **macOS:** install \`DysonHarness-${VERSION}-osx-arm64.pkg\` (Apple Silicon) or \`DysonHarness-${VERSION}-osx-x64.pkg\` (Intel). The package is Developer ID signed and notarized and installs \`DysonHarness.app\` into \`/Applications\`. Preview builds are named **Dyson Harness (Preview)** in Finder, the Dock, and the window title. The zip is that same stapled app. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
+          **Windows:** prefer the MSI for a per-user install (Start Menu shortcut + Apps & Features as **Dyson Harness**, manufacturer **Entity Systems**). \`DysonHarness-${VERSION}-win-x64.msi\` is the existing x64 install. \`DysonHarness-${VERSION}-win-arm64.msi\` is a separate ARM64 install (its own upgrade code and \`%LocalAppData%\\Programs\\DysonHarness-arm64\`). Zips remain portable. Each MSI needs the matching VC++ 2022 redistributable (x64 or ARM64). An x64 install running under emulation on an ARM device stays on the x64 MSI. **Linux:** unzip and run \`Harness.UI\`. **macOS:** install \`DysonHarness-${VERSION}-osx-arm64.pkg\` (Apple Silicon) or \`DysonHarness-${VERSION}-osx-x64.pkg\` (Intel). The package is Developer ID signed and notarized and installs \`DysonHarness.app\` into \`/Applications\`. Preview builds are named **Dyson Harness (Preview)** in Finder, the Dock, and the window title. The zip is that same stapled app. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
           EOF
           sed -i 's/^          //' "${RUNNER_TEMP}/continuous-notes.md"
 
@@ -371,8 +377,8 @@ jobs:
           zip_count="$(gh release view "${VERSION}" --json assets --jq '[.assets[] | select(.name | endswith(".zip"))] | length')"
           msi_count="$(gh release view "${VERSION}" --json assets --jq '[.assets[] | select(.name | endswith(".msi"))] | length')"
           pkg_count="$(gh release view "${VERSION}" --json assets --jq '[.assets[] | select(.name | endswith(".pkg"))] | length')"
-          if [[ "${zip_count}" -ne 4 ]] || [[ "${msi_count}" -ne 1 ]] || [[ "${pkg_count}" -ne 2 ]]; then
-            echo "Expected 4 zips + 1 MSI + 2 pkgs, found ${zip_count} zips + ${msi_count} MSI + ${pkg_count} pkgs" >&2
+          if [[ "${zip_count}" -ne 5 ]] || [[ "${msi_count}" -ne 2 ]] || [[ "${pkg_count}" -ne 2 ]]; then
+            echo "Expected 5 zips + 2 MSIs + 2 pkgs, found ${zip_count} zips + ${msi_count} MSI + ${pkg_count} pkgs" >&2
             exit 1
           fi
 

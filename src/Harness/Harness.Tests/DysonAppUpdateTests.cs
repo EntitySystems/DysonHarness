@@ -280,6 +280,79 @@ public class DysonAppUpdateTests
     }
 
     [Fact]
+    public void WindowsMsiAssetSuffix_Arm64IsDistinctAndEverythingElseStaysX64()
+    {
+        Assert.Equal("-win-arm64.msi", DysonGitHubReleaseClient.WindowsMsiAssetSuffix("win-arm64"));
+        Assert.Equal("-win-arm64.msi", DysonGitHubReleaseClient.WindowsMsiAssetSuffix("WIN-ARM64"));
+        Assert.Equal(DysonGitHubReleaseClient.MsiAssetSuffix, DysonGitHubReleaseClient.WindowsMsiAssetSuffix("win-x64"));
+        Assert.Equal(DysonGitHubReleaseClient.MsiAssetSuffix, DysonGitHubReleaseClient.WindowsMsiAssetSuffix(null));
+        Assert.Equal(DysonGitHubReleaseClient.MsiAssetSuffix, DysonGitHubReleaseClient.WindowsMsiAssetSuffix(""));
+        Assert.Equal("-win-x64.msi", DysonGitHubReleaseClient.MsiAssetSuffix);
+    }
+
+    [Fact]
+    public void InstallerAssetSuffix_WindowsFollowsProcessArchitectureNotStampedRid()
+    {
+        var stampedArm = new DysonAppVersionInfo { Version = "2026.8.142", Rid = "win-arm64" };
+        var stampedX64 = new DysonAppVersionInfo { Version = "2026.8.142", Rid = "win-x64" };
+        var expected = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
+            == System.Runtime.InteropServices.Architecture.Arm64
+            ? "-win-arm64.msi"
+            : "-win-x64.msi";
+
+        if (OperatingSystem.IsMacOS())
+            return;
+
+        // Both stamped rids resolve the same way: the running process decides, so an x64
+        // build under emulation on an ARM device keeps the x64 MSI.
+        Assert.Equal(expected, DysonAppUpdateService.InstallerAssetSuffix(stampedArm));
+        Assert.Equal(expected, DysonAppUpdateService.InstallerAssetSuffix(stampedX64));
+    }
+
+    [Fact]
+    public void SelectNewestRelease_WindowsArm64MsiIgnoresX64Msi()
+    {
+        const string json = """
+            [
+              {
+                "tag_name": "2026.11.168",
+                "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.11.168",
+                "draft": false,
+                "prerelease": true,
+                "assets": [
+                  { "name": "DysonHarness-2026.11.168-win-x64.msi",
+                    "browser_download_url": "https://example.invalid/x64.msi", "size": 9 }
+                ]
+              },
+              {
+                "tag_name": "2026.11.167",
+                "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.11.167",
+                "draft": false,
+                "prerelease": true,
+                "assets": [
+                  { "name": "DysonHarness-2026.11.167-win-x64.msi",
+                    "browser_download_url": "https://example.invalid/old-x64.msi", "size": 8 },
+                  { "name": "DysonHarness-2026.11.167-win-arm64.msi",
+                    "browser_download_url": "https://example.invalid/arm64.msi", "size": 7 }
+                ]
+              }
+            ]
+            """;
+
+        var arm = DysonGitHubReleaseClient.SelectNewestRelease(
+            json, "preview", DysonGitHubReleaseClient.WindowsMsiAssetSuffix("win-arm64"));
+        Assert.NotNull(arm);
+        Assert.Equal("2026.11.167", arm.TagName);
+        Assert.Equal("DysonHarness-2026.11.167-win-arm64.msi", arm.AssetName);
+        Assert.Equal("https://example.invalid/arm64.msi", arm.DownloadUrl);
+
+        var x64 = DysonGitHubReleaseClient.SelectNewestMsiRelease(json, "preview");
+        Assert.NotNull(x64);
+        Assert.Equal("2026.11.168", x64.TagName);
+        Assert.Equal("DysonHarness-2026.11.168-win-x64.msi", x64.AssetName);
+    }
+
+    [Fact]
     public void MacUpdateScript_ReopensApplicationsAppWhenInstallerFails()
     {
         var script = DysonAppUpdateService.BuildMacUpdateScript("/tmp/Dyson Harness's pkg.pkg");

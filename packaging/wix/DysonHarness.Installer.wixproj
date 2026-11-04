@@ -1,13 +1,21 @@
 <Project Sdk="WixToolset.Sdk/5.0.2">
   <PropertyGroup>
     <OutputType>Package</OutputType>
-    <InstallerPlatform>x64</InstallerPlatform>
+    <!-- x64 (default) or arm64. The two MSIs do not share an UpgradeCode. -->
+    <InstallerArch Condition="'$(InstallerArch)' == ''">x64</InstallerArch>
+    <InstallerPlatform>$(InstallerArch)</InstallerPlatform>
     <!-- Version = CalVer for OutputName; ProductVersion = MSI-safe (major under 256). -->
     <Version Condition="'$(Version)' == ''">0.0.0</Version>
     <ProductVersion Condition="'$(ProductVersion)' == ''">$(Version)</ProductVersion>
-    <OutputName>DysonHarness-$(Version)-win-x64</OutputName>
-    <PublishDir Condition="'$(PublishDir)' == ''">..\..\artifacts\publish\win-x64</PublishDir>
-    <DefineConstants>ProductVersion=$(ProductVersion)</DefineConstants>
+    <OutputName>DysonHarness-$(Version)-win-$(InstallerArch)</OutputName>
+    <PublishDir Condition="'$(PublishDir)' == ''">..\..\artifacts\publish\win-$(InstallerArch)</PublishDir>
+    <!-- x64 keeps the original UpgradeCode so existing installs still major-upgrade in place.
+         arm64 uses a second code and a second install folder so the two packages never remove each other. -->
+    <UpgradeCode Condition="'$(InstallerArch)' == 'arm64'">7C4E1B92-6D30-4F8A-A5E2-19B0C6D47F31</UpgradeCode>
+    <UpgradeCode Condition="'$(InstallerArch)' != 'arm64'">3887F848-1A76-413B-91F0-04CA3CB459AF</UpgradeCode>
+    <InstallFolderName Condition="'$(InstallerArch)' == 'arm64'">DysonHarness-arm64</InstallFolderName>
+    <InstallFolderName Condition="'$(InstallerArch)' != 'arm64'">DysonHarness</InstallFolderName>
+    <DefineConstants>ProductVersion=$(ProductVersion);UpgradeCode=$(UpgradeCode);InstallFolderName=$(InstallFolderName)</DefineConstants>
     <DefaultCompressionLevel>high</DefaultCompressionLevel>
   </PropertyGroup>
   <ItemGroup>

@@ -9,7 +9,9 @@
     <AssemblyName>DysonHarness</AssemblyName>
     <RootNamespace>DysonHarness.UI.Windows</RootNamespace>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
-    <PlatformTarget>x64</PlatformTarget>
+    <!-- Follow the publish RID. A hard-coded x64 fails NETSDK1032 on -r win-arm64. -->
+    <PlatformTarget Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</PlatformTarget>
+    <PlatformTarget Condition="'$(RuntimeIdentifier)' != 'win-arm64'">x64</PlatformTarget>
     <SelfContained Condition="'$(SelfContained)' == ''">false</SelfContained>
     <ApplicationIcon>Assets\dyson.ico</ApplicationIcon>
     <ApplicationManifest>..\Harness.WindowsBrowser\app.manifest</ApplicationManifest>

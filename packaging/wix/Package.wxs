@@ -4,12 +4,12 @@
     Name="Dyson Harness"
     Manufacturer="Entity Systems"
     Version="$(ProductVersion)"
-    UpgradeCode="3887F848-1A76-413B-91F0-04CA3CB459AF"
+    UpgradeCode="$(var.UpgradeCode)"
     Scope="perUserOrMachine"
     UpgradeStrategy="majorUpgrade">
 
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="DysonHarness" />
+      <Directory Id="INSTALLFOLDER" Name="$(var.InstallFolderName)" />
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder">
       <Directory Id="AppStartMenuFolder" Name="Dyson Harness" />

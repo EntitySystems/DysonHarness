@@ -7,11 +7,12 @@ Continuous publishing has two tracks:
 | `master` | `stable` | Full release (not pre-release) |
 | `release-preview` | `preview` | Pre-release (`--prerelease`) |
 
-Every push to either branch publishes self-contained zips (all RIDs), a Windows **MSI** (`win-x64`), and signed macOS **packages** (`osx-arm64`, `osx-x64`) tagged with that run’s CalVer (`YYYY.M.run_number`). Pushes to other branches (for example `dev-bleeding-edge`) do not run continuous release.
+Every push to either branch publishes self-contained zips (all RIDs), Windows **MSIs** (`win-x64` and `win-arm64`), and signed macOS **packages** (`osx-arm64`, `osx-x64`) tagged with that run’s CalVer (`YYYY.M.run_number`). Pushes to other branches (for example `dev-bleeding-edge`) do not run continuous release.
 
 | RID | Publish project | Entrypoint |
 | --- | --------------- | ---------- |
 | `win-x64` | `DysonHarness.UI.Windows` | `DysonHarness.exe` (CefSharp WPF shell hosting Blazor in-process) |
+| `win-arm64` | `DysonHarness.UI.Windows` | Same shell, cross-published for Windows ARM64 |
 | `linux-x64` | `Harness.UI` | `Harness.UI` |
 | `osx-arm64` / `osx-x64` | `DysonHarness.UI.macOS` | `DysonHarness.app` (WKWebView shell hosting Blazor in-process; agent browser is a second window) |
 
@@ -33,11 +34,12 @@ The channels are retained independently. For each older selected release, cleanu
 - Releases: https://github.com/EntitySystems/DysonHarness/releases
 - Prefer the latest **stable** (non-prerelease) MSI for production installs; preview builds are marked as GitHub pre-releases
 - Every publish output (so every zip, the MSI, and the macOS pkg) also contains `LICENSE` and `THIRD-PARTY-NOTICES.md` (MIT attribution for the CLIProxyAPI-derived native xAI and ChatGPT Codex providers).
-- Asset names: `DysonHarness-{version}-{rid}.zip` (all RIDs); `DysonHarness-{version}-win-x64.msi` (Windows installer); `DysonHarness-{version}-osx-arm64.pkg` and `DysonHarness-{version}-osx-x64.pkg` (macOS installers)
+- Asset names: `DysonHarness-{version}-{rid}.zip` (all RIDs); `DysonHarness-{version}-win-x64.msi` and `DysonHarness-{version}-win-arm64.msi` (Windows installers); `DysonHarness-{version}-osx-arm64.pkg` and `DysonHarness-{version}-osx-x64.pkg` (macOS installers). The `win-x64` names are unchanged.
 
 | RID | Runner / OS | Notes |
 | --- | ----------- | ----- |
-| `win-x64` | Windows | CEF shell + agent browser (`net10.0-windows`); zip + MSI |
+| `win-x64` | Windows x64 | CEF shell + agent browser (`net10.0-windows`); zip + MSI. Existing asset names, unchanged |
+| `win-arm64` | Windows ARM64, cross-published from the x64 Windows runner | Same shell. Zip `DysonHarness-{version}-win-arm64.zip` plus MSI `DysonHarness-{version}-win-arm64.msi`. CefSharp supplies `chromiumembeddedframework.runtime.win-arm64` |
 | `linux-x64` | Linux | Blazor host only (no agent browser) |
 | `osx-arm64` | macOS Apple Silicon | WKWebView shell + agent browser window. Prefer `DysonHarness-{version}-osx-arm64.pkg` (installs to `/Applications`). The zip is the same stapled app |
 | `osx-x64` | macOS Intel (cross-published from the Apple Silicon runner, including `swiftc -target x86_64-apple-macos14`) | Same `.app` and a matching `.pkg` |
@@ -75,10 +77,10 @@ Unstamped local builds fall back to `1.0.0`, which disables in-app installation 
 
 ## In-app updater
 
-The shell checks for a newer build on the **same channel** once per process, shortly after the UI is ready. Windows installs from the MSI. macOS installs from the `.pkg` that matches `version.json` `rid` (`osx-arm64` or `osx-x64`).
+The shell checks for a newer build on the **same channel** once per process, shortly after the UI is ready. Windows installs from the MSI that matches the **running process** architecture (`-win-arm64.msi` for an arm64 process, `-win-x64.msi` otherwise). macOS installs from the `.pkg` that matches `version.json` `rid` (`osx-arm64` or `osx-x64`).
 
 1. `DysonAppVersionInfo` reads `version.json` from `AppContext.BaseDirectory` (assembly `InformationalVersion` as fallback), once at host start (`DysonUiWebHost.Create`). In-app install runs only when the CalVer year is ≥ 2026, and only on Windows or on macOS when `rid` is `osx-arm64` or `osx-x64`. Dev builds (`1.0.0`) stay lookup-only. Missing/unknown `channel` defaults to `preview`.
-2. `DysonGitHubReleaseClient` calls `GET /repos/{repo}/releases?per_page=15` and picks the highest-CalVer non-draft release whose `prerelease` flag matches the local channel (`preview` → prerelease only; `stable` → non-prerelease only) and that carries this host’s installer asset: `*-win-x64.msi` on Windows, `*-{rid}.pkg` on macOS. (`/latest` is not used — it only surfaces non-prereleases, so preview builds would never see updates.) Hosts that cannot install in-app still look up the MSI asset so a manual check can show a release.
+2. `DysonGitHubReleaseClient` calls `GET /repos/{repo}/releases?per_page=15` and picks the highest-CalVer non-draft release whose `prerelease` flag matches the local channel (`preview` → prerelease only; `stable` → non-prerelease only) and that carries this host’s installer asset: on Windows `*-win-arm64.msi` when `RuntimeInformation.ProcessArchitecture` is Arm64, otherwise `*-win-x64.msi`; on macOS `*-{rid}.pkg`. (`/latest` is not used — it only surfaces non-prereleases, so preview builds would never see updates.) Hosts that cannot install in-app still look up that Windows MSI asset so a manual check can show a release. An x64 install running under emulation on an ARM device reports Arm64 for the OS and X64 for the process, so it stays on the x64 MSI. It switches only when the user installs the arm64 package.
 3. If that tag is strictly newer, `UpdateAvailableModal` prompts with local vs remote version. **Not now** / Escape / backdrop persist the tag in `app_settings` under `ui_update_skipped_version`, so the prompt only returns for a newer release.
 4. **Update** streams the installer to the temp directory with a byte progress bar (modal locks — no dismiss), then exits so the installer can replace the app.
    - **Windows:** `cmd /c ping -n 4 127.0.0.1 >nul & msiexec /i "<msi>"` and `Environment.Exit(0)`. The short delay plus process exit releases CEF/WPF file locks before the WiX major upgrade replaces `%LocalAppData%\Programs\DysonHarness`. (`ping` rather than `timeout`: a `WinExe` host has no console and `timeout` aborts without one.) The updater only hands off to msiexec; it does not start the new exe. After a successful install, the MSI launches `DysonHarness.exe`.
@@ -106,10 +108,11 @@ Patch instructions for [dysonharness.com](https://dysonharness.com) (Website rep
 
 ## Run
 
-1. **Windows (recommended):** download `DysonHarness-{version}-win-x64.msi` and install (default is per-user; no elevation). A successful install also starts the app automatically. You can launch again from the Start Menu shortcut **Dyson Harness**, or run `%LocalAppData%\Programs\DysonHarness\DysonHarness.exe`.
-2. **Windows (portable):** download the `win-x64` zip, unzip, and run `DysonHarness.exe` (desktop CEF shell; no separate browser URL needed).
-3. **Linux:** download the zip, unzip, run `Harness.UI`, and open the URL printed in the console (Kestrel default http://localhost:5000; there is no `launchSettings.json` in the publish output) if the browser does not open automatically. Local debug (`dotnet run`, Development) uses http://localhost:5181 instead — see [UI](../ui/README.md).
-4. **macOS:** download `DysonHarness-{version}-osx-arm64.pkg` (Apple Silicon) or `DysonHarness-{version}-osx-x64.pkg` (Intel) and install. The package puts `DysonHarness.app` in `/Applications` and asks for an administrator password. The WKWebView shell binds an ephemeral loopback address, same as the Windows desktop shell. The zip is that same app if you do not want the installer. Details: [webview.md](webview.md).
+1. **Windows x64 (recommended):** download `DysonHarness-{version}-win-x64.msi` and install (default is per-user; no elevation). A successful install also starts the app automatically. You can launch again from the Start Menu shortcut **Dyson Harness**, or run `%LocalAppData%\Programs\DysonHarness\DysonHarness.exe`.
+2. **Windows ARM64:** download `DysonHarness-{version}-win-arm64.msi`. It is a separate product (its own upgrade code) and installs to `%LocalAppData%\Programs\DysonHarness-arm64`. It does not upgrade or remove an x64 install. An x64 install left running under emulation on an ARM device keeps updating from the x64 MSI.
+3. **Windows (portable):** download the `win-x64` or `win-arm64` zip, unzip, and run `DysonHarness.exe` (desktop CEF shell; no separate browser URL needed).
+4. **Linux:** download the zip, unzip, run `Harness.UI`, and open the URL printed in the console (Kestrel default http://localhost:5000; there is no `launchSettings.json` in the publish output) if the browser does not open automatically. Local debug (`dotnet run`, Development) uses http://localhost:5181 instead — see [UI](../ui/README.md).
+5. **macOS:** download `DysonHarness-{version}-osx-arm64.pkg` (Apple Silicon) or `DysonHarness-{version}-osx-x64.pkg` (Intel) and install. The package puts `DysonHarness.app` in `/Applications` and asks for an administrator password. The WKWebView shell binds an ephemeral loopback address, same as the Windows desktop shell. The zip is that same app if you do not want the installer. Details: [webview.md](webview.md).
 
 Builds on `master` and `release-preview` resolve app mode to **Prod** (`DysonProd` app data) via `GITHUB_REF_NAME` in the resolve-app-mode scripts — channel is independent of Dev/Test/Prod. See [storage/models.md](../storage/models.md).
 
@@ -117,8 +120,8 @@ Speech (Settings → Voice) is not in the zip, the MSI, or the macOS pkg, and th
 
 ## Windows notes
 
-- **MSI:** WiX dual-scope package (`perUserOrMachine`); default is current-user install into `%LocalAppData%\Programs\DysonHarness`. Appears in Apps & Features as **Dyson Harness** under manufacturer **Entity Systems**. Start Menu shortcut **Dyson Harness** uses the app icon. A successful first install or major upgrade starts `DysonHarness.exe` when msiexec finishes; uninstall, repair, and modify do not. Uninstall removes the install directory and shortcut; app data under `%LocalAppData%\DysonHarness\` is left alone. Zip remains available for portable use. Asset filename keeps CalVer (`DysonHarness-{version}-win-x64.msi`); MSI `ProductVersion` maps `YYYY.M.N` → `(YYYY%100).M.N` because Windows Installer requires major &lt; 256.
-- **VC++ redistributable:** CefSharp needs the [Visual C++ 2022 x64 redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) on machines that do not already have it (required for both MSI and zip).
+- **MSI:** WiX dual-scope package (`perUserOrMachine`). The x64 MSI is unchanged: default current-user install into `%LocalAppData%\Programs\DysonHarness`, upgrade code `3887F848-1A76-413B-91F0-04CA3CB459AF`, so existing installs still major-upgrade in place. The arm64 MSI (`-arch arm64`) uses upgrade code `7C4E1B92-6D30-4F8A-A5E2-19B0C6D47F31` and installs into `%LocalAppData%\Programs\DysonHarness-arm64`, so the two packages never remove each other. Both appear in Apps & Features as **Dyson Harness** under manufacturer **Entity Systems**, with a Start Menu shortcut **Dyson Harness**. A successful first install or major upgrade starts `DysonHarness.exe` when msiexec finishes; uninstall, repair, and modify do not. Uninstall removes that package’s install directory and shortcut; app data under `%LocalAppData%\DysonHarness\` is left alone (and is shared by both architectures). Zip remains available for portable use. Asset filenames keep CalVer (`DysonHarness-{version}-win-x64.msi`, `DysonHarness-{version}-win-arm64.msi`); MSI `ProductVersion` maps `YYYY.M.N` → `(YYYY%100).M.N` because Windows Installer requires major &lt; 256. `win-arm64` is cross-published from the x64 Windows runner (`dotnet publish -r win-arm64`); no ARM runner is required.
+- **VC++ redistributable:** CefSharp needs the [Visual C++ 2022 redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) that matches the install (x64 or ARM64) on machines that do not already have it (required for both MSI and zip).
 - Keep the install/unzip folder intact (`CefSharp.BrowserSubprocess.exe`, `libcef.dll`, `locales\`, etc. must stay next to `DysonHarness.exe`).
 - **Single instance:** CEF uses a process singleton on `%LocalAppData%\DysonHarness\`. A second double-click focuses the running window and exits; that is not a packaging failure.
 - External http(s) links and popups open in the **OS default browser**; the shell CEF view stays on the local Blazor origin.
