@@ -256,9 +256,9 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_CERTIFICATE_PEM: ${{ secrets.AZURE_CLIENT_CERTIFICATE_PEM }}
-          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
-          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT || secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT || secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE || secrets.ARTIFACT_SIGNING_PROFILE }}
         run: |
           $missing = @()
           foreach ($name in @(
@@ -267,7 +267,7 @@ jobs:
             if ([string]::IsNullOrWhiteSpace((Get-Item "Env:$name").Value)) { $missing += $name }
           }
           if ($missing.Count) {
-            throw "Missing repository secrets or variables: $($missing -join ', '). Add them before publishing Windows MSIs."
+            throw "Missing repository secrets or variables (the three ARTIFACT_SIGNING_* settings may be a variable or a secret): $($missing -join ', '). Add them before publishing Windows MSIs."
           }
           $pem = Join-Path $env:RUNNER_TEMP 'azure-signing.pem'
           $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -290,9 +290,9 @@ jobs:
         if: startsWith(matrix.rid, 'win-') && steps.unsigned.outputs.count != '0'
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
-          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT || secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT || secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE || secrets.ARTIFACT_SIGNING_PROFILE }}
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-client-certificate-path: ${{ steps.azure-cert.outputs.pem }}
@@ -325,9 +325,9 @@ jobs:
         if: startsWith(matrix.rid, 'win-')
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
-          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT || secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT || secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE || secrets.ARTIFACT_SIGNING_PROFILE }}
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-client-certificate-path: ${{ steps.azure-cert.outputs.pem }}
