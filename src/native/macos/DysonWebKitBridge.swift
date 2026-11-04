@@ -124,20 +124,8 @@ final class DysonWebKitHost: NSObject, NSApplicationDelegate {
         if app.delegate == nil {
             app.delegate = self
         }
-        applyAppIcon()
-    }
-
-    private func applyAppIcon() {
-        if let url = Bundle.main.url(forResource: "DysonHarness", withExtension: "icns"),
-           let image = NSImage(contentsOf: url) {
-            NSApp.applicationIconImage = image
-            return
-        }
-        guard let exe = Bundle.main.executableURL else { return }
-        let png = exe.deletingLastPathComponent().appendingPathComponent("DysonHarnessIcon.png")
-        if let image = NSImage(contentsOf: png) {
-            NSApp.applicationIconImage = image
-        }
+        // CFBundleIconFile is the Dock tile. Assigning applicationIconImage
+        // replaces that tile with an unmasked square.
     }
 
     func emitSnip(_ json: String) {

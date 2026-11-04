@@ -53,7 +53,6 @@ icon_png 512 icon_256x256@2x.png
 icon_png 512 icon_512x512.png
 icon_png 1024 icon_512x512@2x.png
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/DysonHarness.icns"
-cp "$MASTER" "$APP/Contents/MacOS/DysonHarnessIcon.png"
 
 sign_one() {
   local target="$1"
