@@ -1,6 +1,7 @@
 import AppKit
 
-// White Dyson mark on a black square. macOS masks this to the Dock squircle.
+// Opaque white mark on black. macOS masks CFBundleIconFile to the Dock squircle.
+// Do not assign NSApp.applicationIconImage; that draws this square unclipped.
 let args = CommandLine.arguments
 guard args.count == 3 else {
     fputs("usage: make-macos-icon.swift <logo.png> <out.png>\n", stderr)

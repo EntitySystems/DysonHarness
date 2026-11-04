@@ -45,25 +45,17 @@
       <_DysonArch Condition="'$(RuntimeIdentifier)' == 'osx-x64'">x86_64</_DysonArch>
       <_DysonArch Condition="'$(RuntimeIdentifier)' != 'osx-x64'">arm64</_DysonArch>
       <_DysonWebKitDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\native\macos'))</_DysonWebKitDir>
-      <_DysonRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..'))</_DysonRepoRoot>
       <_Dylib>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)libDysonWebKit.dylib'))</_Dylib>
-      <_DysonIconPng>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)DysonHarnessIcon.png'))</_DysonIconPng>
       <_DylibDir>$([System.IO.Path]::GetDirectoryName('$(_Dylib)'))</_DylibDir>
     </PropertyGroup>
     <MakeDir Directories="$(_DylibDir)" />
     <Exec Command="swiftc -emit-library -module-name DysonWebKit -swift-version 5 -target $(_DysonArch)-apple-macos14 -framework AppKit -framework WebKit -o &quot;$(_Dylib)&quot; &quot;$(_DysonWebKitDir)/DysonWebKitBridge.swift&quot; &quot;$(_DysonWebKitDir)/DysonShellWindow.swift&quot; &quot;$(_DysonWebKitDir)/DysonAgentWindow.swift&quot;" />
-    <Exec Command="swift &quot;$(_DysonRepoRoot)/scripts/make-macos-icon.swift&quot; &quot;$(_DysonRepoRoot)/src/Harness/DysonHarness.UI.Windows/Assets/dyson.ico&quot; &quot;$(_DysonIconPng)&quot;" />
     <ItemGroup>
       <None Include="$(_Dylib)"
             Link="libDysonWebKit.dylib"
             CopyToOutputDirectory="PreserveNewest"
             CopyToPublishDirectory="PreserveNewest" />
-      <None Include="$(_DysonIconPng)"
-            Link="DysonHarnessIcon.png"
-            CopyToOutputDirectory="PreserveNewest"
-            CopyToPublishDirectory="PreserveNewest" />
       <FileWrites Include="$(_Dylib)" />
-      <FileWrites Include="$(_DysonIconPng)" />
     </ItemGroup>
   </Target>
 
