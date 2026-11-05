@@ -1070,11 +1070,14 @@
             if (_workdirSwitcher is not null)
                 await _workdirSwitcher.SelectAsync(id);
         });
-        _openPlanHook ??= planId => InvokeAsync(() => Host.OpenMetaPlanAsync(planId, WorkDirectoryId));
+        _openPlanHook ??= OpenPlanOnScreenAsync;
         focus.OpenPanel = _openPanelHook;
         focus.SwitchTo = _switchHook;
         focus.OpenPlan = _openPlanHook;
     }
+
+    private Task<VoidResult<string>> OpenPlanOnScreenAsync(long planId) =>
+        Host.OpenMetaPlanAsync(planId, WorkDirectoryId);
 
     private void UnbindFocusHooks()
     {
