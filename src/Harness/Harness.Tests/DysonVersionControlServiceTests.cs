@@ -135,12 +135,15 @@ public sealed class DysonVersionControlServiceTests
                     Run(5, DysonPipelineState.Succeeded)],
         };
         await using var h = Harness.Create(provider);
+        var pillTick = h.Listen();
         using var pill = h.Service.Watch(false);
-        await h.UntilRunsAsync(1);
+        await pillTick.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(0, provider.JobsCalls);
 
+        // The provider call starts the tick; the publish ends it, after the jobs are in the snapshot.
+        var panelTick = h.Listen();
         using var panel = h.Service.Watch(true);
-        await h.UntilRunsAsync(2);
+        await panelTick.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(3, provider.JobsCalls);
         Assert.Equal(3, h.Service.Snapshot!.Jobs.Count);
 
@@ -157,8 +160,9 @@ public sealed class DysonVersionControlServiceTests
             Error = new DysonPipelineError(DysonPipelineErrorKind.CliMissing, "gh not found"),
         };
         await using var h = Harness.Create(provider);
+        var published = h.Listen();
         using var lease = h.Service.Watch(false);
-        await h.UntilRunsAsync(1);
+        await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var snapshot = h.Service.Snapshot!;
         Assert.True(snapshot.IsDetected);
@@ -193,8 +197,9 @@ public sealed class DysonVersionControlServiceTests
         var runs = new List<DysonPipelineRun> { Run(1, DysonPipelineState.Succeeded) };
         var provider = new FakeProvider { Runs = runs, Etag = "e" };
         await using var h = Harness.Create(provider);
+        var first = h.Listen();
         using var lease = h.Service.Watch(false);
-        await h.UntilRunsAsync(1);
+        await first.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         provider.Error = new DysonPipelineError(DysonPipelineErrorKind.Failed, "boom");
         var published = h.Listen();
@@ -415,6 +420,7 @@ public sealed class DysonVersionControlServiceTests
             return _events;
         }
 
+        /// <summary>A tick has started its runs call. It has not published yet: await <see cref="Listen"/> to read its snapshot.</summary>
         public Task UntilRunsAsync(int count) => UntilAsync(() => Field() is FakeProvider provider && provider.RunsCalls >= count);
 
         public Task UntilJobsAsync(int count) => UntilAsync(() => Field() is FakeProvider provider && provider.JobsCalls >= count);
@@ -565,13 +571,15 @@ public sealed class DysonVersionControlServiceTests
             MaxInFlight = Math.Max(MaxInFlight, now);
             try
             {
+                // Read the knobs before recording the call: a test that saw this call may set them for the next one.
+                var (gate, error, notModified, runs, nextEtag) = (Gate, Error, NotModified, Runs, Etag);
                 RunEtags.Enqueue(etag);
-                if (Gate is { } gate)
+                if (gate is not null)
                     await gate.Task.WaitAsync(ct);
-                if (Error is { } error)
+                if (error is not null)
                     return Result<DysonPipelineFetch<DysonPipelineRun>, DysonPipelineError>.AsError(error);
                 return Result<DysonPipelineFetch<DysonPipelineRun>, DysonPipelineError>.AsValue(
-                    new DysonPipelineFetch<DysonPipelineRun>(NotModified, NotModified ? [] : Runs, Etag, 4000, null));
+                    new DysonPipelineFetch<DysonPipelineRun>(notModified, notModified ? [] : runs, nextEtag, 4000, null));
             }
             finally
             {

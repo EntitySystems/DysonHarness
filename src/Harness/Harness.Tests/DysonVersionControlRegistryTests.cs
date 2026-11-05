@@ -29,7 +29,8 @@ public sealed class DysonVersionControlRegistryTests
 
         using var leaseA = firstA.Value.Watch(false);
         using var leaseB = firstB.Value.Watch(false);
-        await h.UntilAsync(() => a.Calls.Count >= 1 && b.Calls.Count >= 1);
+        // Both loops parked on their idle wait; otherwise a fast `a` can park twice and take both releases.
+        await h.UntilAsync(() => h.Clock.Parked == 2);
         await h.Clock.AdvanceOneAsync(TimeSpan.FromSeconds(120));
         await h.Clock.AdvanceOneAsync(TimeSpan.FromSeconds(120));
         await h.UntilAsync(() => a.Calls.Count >= 2 && b.Calls.Count >= 2);
@@ -193,6 +194,15 @@ public sealed class DysonVersionControlRegistryTests
 
         public DysonVersionControlSeams Seams => new(
             (span, ct) => Delay(span, ct), () => T0, (_, _) => Task.FromResult(Result<string, string>.AsValue("")));
+
+        public int Parked
+        {
+            get
+            {
+                lock (_gate)
+                    return _pending.Count(p => !p.Done.Task.IsCompleted);
+            }
+        }
 
         public async Task AdvanceOneAsync(TimeSpan span)
         {
