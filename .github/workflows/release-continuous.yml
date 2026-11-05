@@ -367,7 +367,7 @@ jobs:
           $msi = (Resolve-Path "artifacts/DysonHarness-$env:VERSION-${{ matrix.rid }}.msi").Path
           $dest = Join-Path $env:RUNNER_TEMP "msi-extract-${{ matrix.rid }}"
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dest
-          $p = Start-Process msiexec.exe -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=`"$dest`"") -Wait -PassThru
+          $p = Start-Process msiexec.exe -ArgumentList "/a `"$msi`" /qn TARGETDIR=`"$dest`"" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "msiexec /a failed with exit $($p.ExitCode)" }
           $pe = @(Get-ChildItem -LiteralPath $dest -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' })
           if (-not $pe.Count) { throw "No .exe/.dll extracted from $msi" }
