@@ -182,7 +182,14 @@ public class DysonMetaAgentToolsetTests
             Assert.DoesNotContain("ListWorkdirs", pipeline.Tools.Keys);
             Assert.DoesNotContain("OpenWorkdirsPanel", pipeline.Tools.Keys);
             Assert.DoesNotContain("SwitchWorkdir", pipeline.Tools.Keys);
+            Assert.DoesNotContain("ListMetaPlans", pipeline.Tools.Keys);
+            Assert.DoesNotContain("OpenMetaPlan", pipeline.Tools.Keys);
         }
+
+        var metaCatalog = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent);
+        Assert.Contains("ListPlans", metaCatalog.Tools.Keys);
+        Assert.DoesNotContain("ListMetaPlans", metaCatalog.Tools.Keys);
+        Assert.DoesNotContain("OpenMetaPlan", metaCatalog.Tools.Keys);
     }
 
     [Fact]
@@ -216,6 +223,8 @@ public class DysonMetaAgentToolsetTests
             var pipeline = DysonSessionToolsetBuilder.Build(voiced, mode);
             Assert.False(pipeline.Tools.ContainsKey("SpeakToUser"), mode);
             Assert.False(pipeline.Tools.ContainsKey("MessageVoiceModeSidecar"), mode);
+            Assert.False(pipeline.Tools.ContainsKey("ListMetaPlans"), mode);
+            Assert.False(pipeline.Tools.ContainsKey("OpenMetaPlan"), mode);
         }
     }
 
@@ -227,8 +236,8 @@ public class DysonMetaAgentToolsetTests
         Assert.Equal(
             new[]
             {
-                "EditMemory", "ListWorkdirs", "MessageMetaSession", "OpenWorkdirsPanel", "ReadMemory",
-                "ReadMetaAgentLog", "SpeakToUser", "SwitchWorkdir",
+                "EditMemory", "ListMetaPlans", "ListWorkdirs", "MessageMetaSession", "OpenMetaPlan",
+                "OpenWorkdirsPanel", "ReadMemory", "ReadMetaAgentLog", "SpeakToUser", "SwitchWorkdir",
             },
             expected);
 

@@ -359,6 +359,7 @@
     private WorkDirectorySwitcher? _workdirSwitcher;
     private Func<Task>? _openPanelHook;
     private Func<Guid, Task>? _switchHook;
+    private Func<long, Task<VoidResult<string>>>? _openPlanHook;
     private bool _voiceOn;
     private bool _imageCaptureBound;
     private bool _dragOver;
@@ -1072,8 +1073,10 @@
             if (_workdirSwitcher is not null)
                 await _workdirSwitcher.SelectAsync(id);
         });
+        _openPlanHook ??= planId => InvokeAsync(() => Host.OpenMetaPlanAsync(planId, WorkDirectoryId));
         focus.OpenPanel = _openPanelHook;
         focus.SwitchTo = _switchHook;
+        focus.OpenPlan = _openPlanHook;
     }
 
     private void UnbindFocusHooks()
@@ -1085,6 +1088,8 @@
             focus.OpenPanel = null;
         if (ReferenceEquals(focus.SwitchTo, _switchHook))
             focus.SwitchTo = null;
+        if (ReferenceEquals(focus.OpenPlan, _openPlanHook))
+            focus.OpenPlan = null;
     }
 
     public async ValueTask DisposeAsync()

@@ -1,7 +1,7 @@
 namespace DysonHarness;
 
 /// <summary>
-/// Voice Mode Meta Sidecar catalog: exactly eight tools, voice on or off.
+/// Voice Mode Meta Sidecar catalog: exactly ten tools, voice on or off.
 /// <see cref="MessageVoiceModeSidecar"/> is the Meta Agent's replacement for SpeakToUser and is not
 /// in <see cref="AllowedToolNames"/>.
 /// </summary>
@@ -18,6 +18,8 @@ public static class DysonVoiceSidecarTools
         "ListWorkdirs",
         "OpenWorkdirsPanel",
         "SwitchWorkdir",
+        "ListMetaPlans",
+        "OpenMetaPlan",
     ];
 
     private static readonly HashSet<string> AllowedToolNameSet = new(AllowedToolNames, StringComparer.Ordinal);
@@ -146,8 +148,39 @@ public static class DysonVoiceSidecarTools
             """,
     };
 
+    /// <summary>Sidecar only. Non-archived plans of this sidecar's work directory.</summary>
+    public static readonly DysonMcpTool ListMetaPlans = new()
+    {
+        Name = "ListMetaPlans",
+        Description =
+            "List the active work directory's non-archived plans. Returns planId, title, and status only. Archived plans are omitted. No arguments.",
+        InputSchemaJson = """
+            {
+              "type": "object",
+              "properties": {}
+            }
+            """,
+    };
+
+    /// <summary>Sidecar only. Opens the plan in the on-screen viewer.</summary>
+    public static readonly DysonMcpTool OpenMetaPlan = new()
+    {
+        Name = "OpenMetaPlan",
+        Description =
+            "Open that plan in the on-screen plan viewer. Returns ok only after the viewer is actually opened. Fails when the plan is missing, archived, or the plan's work directory is not the one on screen.",
+        InputSchemaJson = """
+            {
+              "type": "object",
+              "properties": {
+                "planId": { "type": "integer", "description": "Id of the plan to open." }
+              },
+              "required": ["planId"]
+            }
+            """,
+    };
+
     /// <summary>
-    /// Strips the pipeline to exactly <see cref="AllowedToolNames"/> and restores those eight definitions.
+    /// Strips the pipeline to exactly <see cref="AllowedToolNames"/> and restores those ten definitions.
     /// Authoritative for the sidecar mode.
     /// </summary>
     public static void ApplyAllowlist(DysonMcpPipeline pipeline)
@@ -167,5 +200,7 @@ public static class DysonVoiceSidecarTools
         pipeline.Tools[EditMemory.Name] = EditMemory;
         foreach (var tool in DysonMetaAgentTools.CreateWorkdirTools())
             pipeline.Tools[tool.Name] = tool;
+        pipeline.Tools[ListMetaPlans.Name] = ListMetaPlans;
+        pipeline.Tools[OpenMetaPlan.Name] = OpenMetaPlan;
     }
 }

@@ -66,6 +66,91 @@ public class DysonVoiceSidecarSliceTests
 
         Assert.Contains("Plain reply text is never heard.", DysonAgentSystemPrompts.VoiceSidecarTurnInstruction, StringComparison.Ordinal);
         Assert.Contains("SpeakToUser", DysonAgentSystemPrompts.VoiceSidecarMetaMessageInstruction, StringComparison.Ordinal);
+
+        Assert.Contains("ListMetaPlans", prompt, StringComparison.Ordinal);
+        Assert.Contains("OpenMetaPlan", prompt, StringComparison.Ordinal);
+        Assert.Contains("ListMetaPlans", DysonAgentSystemPrompts.VoiceSidecarTurnInstruction, StringComparison.Ordinal);
+        Assert.Contains("OpenMetaPlan", DysonAgentSystemPrompts.VoiceSidecarTurnInstruction, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ListMetaPlans_returns_only_live_plans_in_the_sidecar_workdir()
+    {
+        await using var fixture = await DysonPlanToolFixture.CreateAsync();
+        await fixture.CreatePlanAsync("Live plan");
+        var archivedId = await fixture.CreatePlanAsync("Archived plan");
+        var archived = await fixture.Plans.ArchiveAsync(archivedId, fixture.WorkDirectoryId);
+        Assert.True(archived.IsSuccess, archived.IsError ? archived.Error : null);
+        await fixture.CreatePlanAsync("Other workdir", workDirectoryId: fixture.OtherWorkDirectoryId);
+
+        using var http = new HttpClient();
+        var session = new DysonPlanToolStubSession(DysonAgentModes.VoiceSidecar);
+        var executor = await fixture.ExecutorAsync(session, http);
+        var result = await executor.ExecuteAsync(Call("ListMetaPlans", "{}"));
+
+        Assert.False(result.IsError, result.Content);
+        using var doc = JsonDocument.Parse(result.Content);
+        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
+        var item = Assert.Single(doc.RootElement.EnumerateArray());
+        var names = item.EnumerateObject()
+            .Select(p => p.Name)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(["planId", "status", "title"], names);
+        Assert.Equal("Live plan", item.GetProperty("title").GetString());
+        Assert.Equal("draft", item.GetProperty("status").GetString());
+        Assert.DoesNotContain("Archived plan", result.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("Other workdir", result.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OpenMetaPlan_opens_only_a_live_plan_on_the_screen()
+    {
+        await using var fixture = await DysonPlanToolFixture.CreateAsync();
+        var liveId = await fixture.CreatePlanAsync("Open me");
+        var archivedId = await fixture.CreatePlanAsync("Shelved");
+        var archived = await fixture.Plans.ArchiveAsync(archivedId, fixture.WorkDirectoryId);
+        Assert.True(archived.IsSuccess, archived.IsError ? archived.Error : null);
+
+        using var http = new HttpClient();
+        var session = new DysonPlanToolStubSession(DysonAgentModes.VoiceSidecar);
+        var focus = new DysonWorkDirectoryFocus(new DysonWorkDirectoryFocusTests.FakeWorkDirectories());
+        focus.SetActive(fixture.WorkDirectoryId);
+        var opened = new List<long>();
+        focus.OpenPlan = planId =>
+        {
+            opened.Add(planId);
+            return Task.FromResult(VoidResult<string>.Success);
+        };
+        session.Config.Focus = focus;
+
+        var executor = await fixture.ExecutorAsync(session, http);
+
+        var ok = await executor.ExecuteAsync(Call("OpenMetaPlan", $$"""{"planId":{{liveId}}}"""));
+        Assert.False(ok.IsError, ok.Content);
+        Assert.Equal("{\"ok\":true}", ok.Content);
+        Assert.Equal([liveId], opened);
+
+        var missing = await executor.ExecuteAsync(Call("OpenMetaPlan", """{"planId":999999}"""));
+        Assert.True(missing.IsError);
+        Assert.Equal([liveId], opened);
+
+        var shelved = await executor.ExecuteAsync(Call("OpenMetaPlan", $$"""{"planId":{{archivedId}}}"""));
+        Assert.True(shelved.IsError);
+        Assert.Contains("is archived", shelved.Content, StringComparison.Ordinal);
+        Assert.Equal([liveId], opened);
+
+        focus.SetActive(Guid.NewGuid());
+        var notOwner = await executor.ExecuteAsync(Call("OpenMetaPlan", $$"""{"planId":{{liveId}}}"""));
+        Assert.True(notOwner.IsError);
+        Assert.Equal(DysonWorkDirectoryFocus.NotOwnerMessage, notOwner.Content);
+        Assert.Equal([liveId], opened);
+
+        session.Config.Focus = null;
+        var noFocus = await executor.ExecuteAsync(Call("OpenMetaPlan", $$"""{"planId":{{liveId}}}"""));
+        Assert.True(noFocus.IsError);
+        Assert.Equal(DysonWorkDirectoryFocus.NotOwnerMessage, noFocus.Content);
+        Assert.Equal([liveId], opened);
     }
 
     [Fact]

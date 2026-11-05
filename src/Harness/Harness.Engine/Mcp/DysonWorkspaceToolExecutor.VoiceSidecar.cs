@@ -332,6 +332,80 @@ public sealed partial class DysonWorkspaceToolExecutor
         return $"{where} failed{matches}: {failure.Failure.Message} Memory is unchanged (no edit in this call was applied).";
     }
 
+    private async Task<DysonToolCallResult> ListMetaPlans(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessVoiceSidecar(call, "ListMetaPlans");
+        if (denied is not null)
+            return denied;
+
+        if (_plans is null)
+            return Error(call, "Plan repository is not available.");
+
+        if (_workDirectoryId == Guid.Empty)
+            return Error(call, "Work directory is required to list plans.");
+
+        var listed = await _plans.ListAsync(_workDirectoryId, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        if (listed.IsError)
+            return Error(call, listed.Error);
+
+        var payload = listed.Value.Select(p => new
+        {
+            planId = p.Id,
+            title = p.Title,
+            status = FormatPlanStatus(p.Status),
+        }).ToArray();
+        return Ok(call, JsonSerializer.Serialize(payload));
+    }
+
+    private async Task<DysonToolCallResult> OpenMetaPlan(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessVoiceSidecar(call, "OpenMetaPlan");
+        if (denied is not null)
+            return denied;
+
+        long planId;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var id = GetInt64(doc.RootElement, "planId");
+            if (id is null || id.Value <= 0)
+                return Error(call, DysonMetaAgentTools.PlanIdMustBePositiveMessage);
+            planId = id.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "OpenMetaPlan: invalid JSON arguments.");
+        }
+
+        var focus = _session.Config.Focus;
+        if (focus is null || !focus.IsOwner(_workDirectoryId))
+            return Error(call, DysonWorkDirectoryFocus.NotOwnerMessage);
+
+        if (_plans is null)
+            return Error(call, "Plan repository is not available.");
+
+        if (_workDirectoryId == Guid.Empty)
+            return Error(call, "Work directory is required to open a plan.");
+
+        var loaded = await _plans.GetAsync(planId, _workDirectoryId, cancellationToken).ConfigureAwait(false);
+        if (loaded.IsError)
+            return Error(call, loaded.Error);
+
+        if (loaded.Value.ArchivedUtc is not null)
+            return Error(call, $"Plan '{planId}' is archived.");
+
+        var opened = await focus.OpenPlanAsync(_workDirectoryId, planId).ConfigureAwait(false);
+        if (opened.IsError)
+            return Error(call, opened.Error);
+
+        return Ok(call, """{"ok":true}""");
+    }
+
     private static string Cut(string? text, int maxChars)
     {
         var value = text ?? "";
