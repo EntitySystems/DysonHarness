@@ -222,32 +222,6 @@ jobs:
             (cd "artifacts/publish/${RID}" && zip -r "../../${ZIP_NAME}" .)
           fi
 
-      - name: Build MSI (Windows)
-        if: startsWith(matrix.rid, 'win-')
-        shell: pwsh
-        run: |
-          $rid = "${{ matrix.rid }}"
-          $arch = $rid.Substring(4)
-          $publishDir = (Resolve-Path "artifacts/publish/$rid").Path
-          # MSI ProductVersion requires major < 256; map CalVer YYYY.M.N → (YYYY%100).M.N
-          $parts = $env:VERSION -split '\.'
-          if ($parts.Count -lt 3) { throw "Unexpected VERSION '$env:VERSION' (want YYYY.M.N)" }
-          $msiProductVersion = "{0}.{1}.{2}" -f ([int]$parts[0] % 100), [int]$parts[1], [int]$parts[2]
-          Write-Host "CalVer=$env:VERSION MSI ProductVersion=$msiProductVersion channel=$env:CHANNEL arch=$arch"
-          dotnet build packaging/wix/DysonHarness.Installer.wixproj -c Release `
-            -p:Version=$env:VERSION `
-            -p:ProductVersion=$msiProductVersion `
-            -p:InstallerArch=$arch `
-            -p:PublishDir=$publishDir
-          if ($LASTEXITCODE -ne 0) { throw "WiX MSI build failed with exit $LASTEXITCODE" }
-          $msi = Get-ChildItem -Path packaging/wix/bin -Recurse -Filter "DysonHarness-$env:VERSION-$rid.msi" |
-            Select-Object -First 1
-          if (-not $msi) {
-            throw "MSI not found under packaging/wix/bin for version $env:VERSION rid $rid"
-          }
-          Copy-Item $msi.FullName "artifacts/$($msi.Name)" -Force
-          Write-Host "Copied MSI to artifacts/$($msi.Name)"
-
       - name: Import Azure signing certificate
         if: startsWith(matrix.rid, 'win-')
         id: azure-cert
@@ -321,6 +295,32 @@ jobs:
           $zipName = "DysonHarness-$env:VERSION-$rid.zip"
           Compress-Archive -Path "artifacts/publish/$rid/*" -DestinationPath "artifacts/$zipName" -Force
 
+      - name: Build MSI (Windows)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        run: |
+          $rid = "${{ matrix.rid }}"
+          $arch = $rid.Substring(4)
+          $publishDir = (Resolve-Path "artifacts/publish/$rid").Path
+          # MSI ProductVersion requires major < 256; map CalVer YYYY.M.N → (YYYY%100).M.N
+          $parts = $env:VERSION -split '\.'
+          if ($parts.Count -lt 3) { throw "Unexpected VERSION '$env:VERSION' (want YYYY.M.N)" }
+          $msiProductVersion = "{0}.{1}.{2}" -f ([int]$parts[0] % 100), [int]$parts[1], [int]$parts[2]
+          Write-Host "CalVer=$env:VERSION MSI ProductVersion=$msiProductVersion channel=$env:CHANNEL arch=$arch"
+          dotnet build packaging/wix/DysonHarness.Installer.wixproj -c Release `
+            -p:Version=$env:VERSION `
+            -p:ProductVersion=$msiProductVersion `
+            -p:InstallerArch=$arch `
+            -p:PublishDir=$publishDir
+          if ($LASTEXITCODE -ne 0) { throw "WiX MSI build failed with exit $LASTEXITCODE" }
+          $msi = Get-ChildItem -Path packaging/wix/bin -Recurse -Filter "DysonHarness-$env:VERSION-$rid.msi" |
+            Select-Object -First 1
+          if (-not $msi) {
+            throw "MSI not found under packaging/wix/bin for version $env:VERSION rid $rid"
+          }
+          Copy-Item $msi.FullName "artifacts/$($msi.Name)" -Force
+          Write-Host "Copied MSI to artifacts/$($msi.Name)"
+
       - name: Sign MSI
         if: startsWith(matrix.rid, 'win-')
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
@@ -358,6 +358,23 @@ jobs:
           $bad = @( & scripts/list-unsigned-pe.ps1 -Root $root )
           if ($bad.Count) { throw "Still unsigned: $($bad -join ', ')" }
           Write-Host "Verified MSI and inner files."
+
+      - name: Verify MSI payload signatures
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        run: |
+          # Administrative extract copies the packaged file bytes as-is; every PE inside must be Valid.
+          $msi = (Resolve-Path "artifacts/DysonHarness-$env:VERSION-${{ matrix.rid }}.msi").Path
+          $dest = Join-Path $env:RUNNER_TEMP "msi-extract-${{ matrix.rid }}"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dest
+          $p = Start-Process msiexec.exe -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=`"$dest`"") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /a failed with exit $($p.ExitCode)" }
+          $pe = @(Get-ChildItem -LiteralPath $dest -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' })
+          if (-not $pe.Count) { throw "No .exe/.dll extracted from $msi" }
+          $bad = @( & scripts/list-unsigned-pe.ps1 -Root $dest )
+          if ($bad.Count) { throw "Unsigned inside MSI ($($bad.Count) of $($pe.Count)): $($bad -join ', ')" }
+          Write-Host "All $($pe.Count) PE files inside the MSI are Valid."
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dest
 
       - name: Remove Azure signing certificate
         if: always() && startsWith(matrix.rid, 'win-')
