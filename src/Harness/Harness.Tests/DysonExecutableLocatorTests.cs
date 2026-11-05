@@ -7,6 +7,9 @@ public class DysonExecutableLocatorTests
     [Fact]
     public void Find_WindowsPathExt_FindsGhExe()
     {
+        if (!OperatingSystem.IsWindows())
+            return; // PATHEXT is Windows-only; Find_PathMiss_FallsBackToExtraDir covers the bare name.
+
         var seen = new List<string>();
         string? found = DysonExecutableLocator.Find(
             "gh",
@@ -32,17 +35,17 @@ public class DysonExecutableLocatorTests
     [Fact]
     public void Find_PathMiss_FallsBackToExtraDir()
     {
+        // Windows appends PATHEXT; Linux/macOS probe the bare name.
+        var leaf = OperatingSystem.IsWindows() ? "gh.EXE" : "gh";
+        var extraDir = Path.Combine(Path.GetTempPath(), "GitHub CLI");
         string? found = DysonExecutableLocator.Find(
             "gh",
-            [@"C:\Program Files\GitHub CLI"],
-            @"C:\empty",
+            [extraDir],
+            Path.Combine(Path.GetTempPath(), "empty"),
             ".EXE",
-            path => path.Contains("GitHub CLI", StringComparison.OrdinalIgnoreCase)
-                    && path.EndsWith("gh.EXE", StringComparison.OrdinalIgnoreCase));
+            path => path == Path.Combine(extraDir, leaf));
 
-        Assert.NotNull(found);
-        Assert.Contains("GitHub CLI", found, StringComparison.OrdinalIgnoreCase);
-        Assert.EndsWith("gh.EXE", found, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(Path.Combine(extraDir, leaf), found);
     }
 
     [Fact]

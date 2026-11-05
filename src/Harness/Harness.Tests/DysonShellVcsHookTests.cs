@@ -39,7 +39,7 @@ public class DysonShellVcsHookTests
         Assert.False(subscribed.IsError, subscribed.Error);
         using var _ = subscribed.Value;
 
-        var result = await RunAsync(bus, workDirectoryId, "Write-Output hi");
+        var result = await RunAsync(bus, workDirectoryId, "echo hi");
 
         Assert.False(result.IsError, result.Content);
         Assert.Empty(hits);
@@ -77,7 +77,7 @@ public class DysonShellVcsHookTests
                 CallId = "shell-vcs",
                 ToolName = "ShellExecute",
                 Stage = 0,
-                ArgumentsJson = "{\"shell\":\"PowerShell\",\"command\":" + System.Text.Json.JsonSerializer.Serialize(command) + ",\"timeoutMs\":30000}",
+                ArgumentsJson = "{\"shell\":\"" + Shell.Name + "\",\"command\":" + System.Text.Json.JsonSerializer.Serialize(command) + ",\"timeoutMs\":30000}",
             });
         }
         finally
@@ -88,10 +88,15 @@ public class DysonShellVcsHookTests
             }
             catch (IOException)
             {
-                // Temp dir still locked by a just-exited powershell; the OS cleans %TEMP%.
+                // Temp dir still locked by a just-exited shell; the OS cleans %TEMP%.
             }
         }
     }
+
+    /// <summary>powershell.exe is Windows-only; Linux/macOS CI runs the same commands under sh.</summary>
+    private static readonly DysonConfiguredShellSpec Shell = OperatingSystem.IsWindows()
+        ? new DysonConfiguredShellSpec("PowerShell", "powershell.exe")
+        : new DysonConfiguredShellSpec("Sh", "sh");
 
     private sealed class StubProvider : DysonAgentProvider;
 
@@ -99,7 +104,7 @@ public class DysonShellVcsHookTests
         DysonAgentModes.Work,
         new DysonAgentSessionConfig
         {
-            AvailableShells = [new DysonConfiguredShellSpec("PowerShell", "powershell.exe")],
+            AvailableShells = [Shell],
         },
         new StubProvider())
     {
