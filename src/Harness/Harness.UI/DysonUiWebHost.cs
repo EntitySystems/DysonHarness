@@ -193,8 +193,9 @@ public static class DysonUiWebHost
         builder.Services.AddScoped<DysonUiHost>();
 #if DYSON_PREVIEW
         builder.Services.AddScoped<IDysonDemoHooks, DysonUiDemoHooks>();
-        builder.Services.AddScoped<DysonDemoScenarioRunner>();
 #endif
+        // Stub on stable (IsRunning is always false); real runner when DYSON_PREVIEW is defined.
+        builder.Services.AddScoped<DysonDemoScenarioRunner>();
         builder.Services.AddSingleton<DysonFilePreviewStore>();
         builder.Services.AddScoped<ThemeService>();
         builder.Services.AddScoped<ConfirmDialogService>();

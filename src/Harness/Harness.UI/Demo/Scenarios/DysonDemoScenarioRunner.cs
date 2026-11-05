@@ -1,6 +1,27 @@
-#if DYSON_PREVIEW
 using DysonHarness;
 using Microsoft.JSInterop;
+
+#if !DYSON_PREVIEW
+namespace Harness.UI.Demo;
+
+/// <summary>
+/// Stable builds compile the demo scenarios out. This stub keeps the DI registration and the
+/// Meta page inject compiling. <see cref="IsRunning"/> is always false, so the real-provider gate stays on.
+/// </summary>
+public sealed class DysonDemoScenarioRunner : IDisposable
+{
+    public DysonDemoScenarioRunner(IJSRuntime js)
+    {
+        ArgumentNullException.ThrowIfNull(js);
+    }
+
+    public bool IsRunning => false;
+
+    public void Dispose()
+    {
+    }
+}
+#else
 
 namespace Harness.UI.Demo;
 
