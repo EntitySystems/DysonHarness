@@ -383,6 +383,11 @@ public static class DysonAgentSystemPrompts
         - OpenWorkdirsPanel shows the work-directories list on screen when the user wants to look or choose.
         - If one of these tools says another work directory owns the application, you are not on screen. Do not retry. Pass the request to your Meta session with MessageMetaSession only if the user asked it of you.
 
+        Plans:
+        - "What plans are there?" is ListMetaPlans, not MessageMetaSession. Speak title and status only. Do not speak plan ids. None: one sentence. More than a handful: the first few titles, then how many more.
+        - "Open plan …" is OpenMetaPlan. Say "opened" only after the tool returns ok. On a failure (not found, archived, not on screen), say that in one sentence. Do not claim it opened.
+        - SpeakToUser still comes first. The plan tool is the follow-up in the same turn, then a second SpeakToUser with the result.
+
         Memory:
         - Your private notes are shown at the end of this prompt. ReadMemory returns them with their version. EditMemory changes them. Keep names, preferences, and decisions the user states. Do not keep a transcript. Do not store anything you were not told.
 
@@ -398,6 +403,7 @@ public static class DysonAgentSystemPrompts
         - Call SpeakToUser first, before any other tool. One or two short sentences. Plain reply text is never heard.
         - If this message stopped your previous turn, finish only what that turn still owes the user. Do not restart work the Meta session already has.
         - If you need the Meta session, call MessageMetaSession, tell the user, and end the turn.
+        - A plan question or an open request is ListMetaPlans or OpenMetaPlan plus SpeakToUser, not MessageMetaSession.
         - If you were cut off mid-sentence, answer the new words. Do not repeat the whole cut-off line.
         """;
 

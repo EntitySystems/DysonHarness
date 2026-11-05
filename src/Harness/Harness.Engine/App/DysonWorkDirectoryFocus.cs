@@ -5,8 +5,8 @@ namespace DysonHarness;
 /// <summary>
 /// The work directory on screen for one subject (in-memory, one instance per retained subject scope).
 /// Owns the owner gate for the root Meta Agent work-directory tools: only the meta session of
-/// <see cref="ActiveId"/> may list, open the panel, or switch. UI pages bind <see cref="OpenPanel"/> and
-/// <see cref="SwitchTo"/> while mounted.
+/// <see cref="ActiveId"/> may list, open the panel, or switch. UI pages bind <see cref="OpenPanel"/>,
+/// <see cref="SwitchTo"/>, and <see cref="OpenPlan"/> while mounted.
 /// </summary>
 public sealed class DysonWorkDirectoryFocus(IDysonWorkDirectoryRepository workDirectories)
 {
@@ -14,6 +14,8 @@ public sealed class DysonWorkDirectoryFocus(IDysonWorkDirectoryRepository workDi
         "Other work directory owns the application, you can ask the user in voice mode to change directories via MessageVoiceModeSidecar.";
 
     public const string PanelNotShownMessage = "The work directories panel is not on screen.";
+
+    public const string PlanViewerNotShownMessage = "The plan viewer is not on screen.";
 
     public const string SwitchNotAppliedMessage = "The switch did not take effect.";
 
@@ -35,6 +37,9 @@ public sealed class DysonWorkDirectoryFocus(IDysonWorkDirectoryRepository workDi
 
     /// <summary>UI hook: select a work directory through the existing switcher. Bound by the mounted page.</summary>
     public Func<Guid, Task>? SwitchTo { get; set; }
+
+    /// <summary>UI hook: open a plan in the on-screen viewer. Bound by the mounted page.</summary>
+    public Func<long, Task<VoidResult<string>>>? OpenPlan { get; set; }
 
     /// <summary>UI only. No ownership check. Does not touch voice.</summary>
     public void SetActive(Guid? id)
@@ -128,6 +133,27 @@ public sealed class DysonWorkDirectoryFocus(IDysonWorkDirectoryRepository workDi
         }
 
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>Gate, then the bound <see cref="OpenPlan"/> hook. The hook reports whether the viewer opened.</summary>
+    public async Task<VoidResult<string>> OpenPlanAsync(Guid callerWorkDirectoryId, long planId)
+    {
+        if (!IsOwner(callerWorkDirectoryId))
+            return VoidResult<string>.AsError(NotOwnerMessage);
+
+        var hook = OpenPlan;
+        if (hook is null)
+            return VoidResult<string>.AsError(PlanViewerNotShownMessage);
+
+        try
+        {
+            return await hook(planId).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // UI boundary: a disposed circuit or render failure becomes a tool error.
+            return VoidResult<string>.AsError(PlanViewerNotShownMessage, ex);
+        }
     }
 
     /// <summary>

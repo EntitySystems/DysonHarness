@@ -186,6 +186,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "ListWorkdirs" => await ListWorkdirsAsync(call, cancellationToken).ConfigureAwait(false),
                 "OpenWorkdirsPanel" => await OpenWorkdirsPanelAsync(call).ConfigureAwait(false),
                 "SwitchWorkdir" => await SwitchWorkdirAsync(call, cancellationToken).ConfigureAwait(false),
+                "ListMetaPlans" => await ListMetaPlans(call, cancellationToken).ConfigureAwait(false),
+                "OpenMetaPlan" => await OpenMetaPlan(call, cancellationToken).ConfigureAwait(false),
                 "PostUserQuestion" => PostUserQuestion(call),
                 "ListUserQuestions" => ListUserQuestions(call),
                 "UpdateUserQuestion" => await UpdateUserQuestionAsync(call, cancellationToken).ConfigureAwait(false),

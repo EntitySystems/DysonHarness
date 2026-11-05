@@ -36,6 +36,7 @@ Deleting a work directory cascades these rows, archived or not. That is the only
 | --- | --- |
 | `ListAsync` default | Excluded. `includeArchived: true` returns them too (the UI list uses this). |
 | `ListPlans` tool | Default list only; archived plans are omitted. Payload unchanged. |
+| `ListMetaPlans` (voice sidecar) | Same `ListAsync` default (archived omitted), scoped to the sidecar's own work directory. JSON is only `planId`, `title`, `status`. It does not widen the Meta `ListPlans` contract. |
 | `GetAsync` / `ReadMetaPlan` | Allowed (open-from-list works). |
 | `UpdateAsync` (`SetPlanStatus`, `EditMetaPlan`, `SubmitMetaPlan` revise) | Error `Plan '{id}' is archived.` before any mutation. |
 | `BeginBuildPlan` | Error before any drone spawn: `BeginBuildPlan: plan {id} is archived. The user restores it from the Archived section.` |

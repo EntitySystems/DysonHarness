@@ -11,9 +11,7 @@
 @inject IJSRuntime Js
 @inject Harness.UI.Services.ConfirmDialogService ConfirmDialog
 @inject IDysonPendingUserQuestionRepository PendingQuestions
-#if DYSON_PREVIEW
 @inject DysonDemoScenarioRunner DemoRunner
-#endif
 
 <PageTitle>Meta agent — @(_workDirectoryName ?? "DysonHarness")</PageTitle>
 
@@ -359,6 +357,7 @@
     private WorkDirectorySwitcher? _workdirSwitcher;
     private Func<Task>? _openPanelHook;
     private Func<Guid, Task>? _switchHook;
+    private Func<long, Task<VoidResult<string>>>? _openPlanHook;
     private bool _voiceOn;
     private bool _imageCaptureBound;
     private bool _dragOver;
@@ -440,14 +439,13 @@
 
     private async Task RefreshRealProviderAsync()
     {
-#if DYSON_PREVIEW
         // Scripted demo has no real provider; the gate would kill the scenario.
+        // The runner is a no-op (and IsRunning is always false) when preview is compiled out.
         if (DemoRunner.IsRunning)
         {
             _hasRealProvider = true;
             return;
         }
-#endif
 
         var listed = await ModelStore.ListProvidersAsync();
         _hasRealProvider = listed.IsSuccess && listed.Value.Any(DysonProviderKinds.IsRealProvider);
@@ -1072,9 +1070,14 @@
             if (_workdirSwitcher is not null)
                 await _workdirSwitcher.SelectAsync(id);
         });
+        _openPlanHook ??= OpenPlanOnScreenAsync;
         focus.OpenPanel = _openPanelHook;
         focus.SwitchTo = _switchHook;
+        focus.OpenPlan = _openPlanHook;
     }
+
+    private Task<VoidResult<string>> OpenPlanOnScreenAsync(long planId) =>
+        Host.OpenMetaPlanAsync(planId, WorkDirectoryId);
 
     private void UnbindFocusHooks()
     {
@@ -1085,6 +1088,8 @@
             focus.OpenPanel = null;
         if (ReferenceEquals(focus.SwitchTo, _switchHook))
             focus.SwitchTo = null;
+        if (ReferenceEquals(focus.OpenPlan, _openPlanHook))
+            focus.OpenPlan = null;
     }
 
     public async ValueTask DisposeAsync()
