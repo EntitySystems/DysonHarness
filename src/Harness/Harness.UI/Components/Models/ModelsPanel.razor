@@ -7,6 +7,7 @@
 @inject DysonCliProxyHost CliProxy
 @inject ManagedInferenceProviderCatalog ManagedCatalog
 @inject ConfirmDialogService ConfirmDialog
+@inject DysonUiHost Host
 
 <div class="models-panel panel">
     <div class="tool-panel__title">Providers &amp; slugs</div>
@@ -1184,6 +1185,7 @@
 
         await RefreshAsync();
         await OnChanged.InvokeAsync();
+        Host.NotifyModelCatalogChanged();
     }
 
     private async Task SaveEditProviderAsync(Guid id, ProviderFormModal.ProviderFormResult result)
@@ -1222,6 +1224,7 @@
         _editingProviderId = null;
         await RefreshAsync();
         await OnChanged.InvokeAsync();
+        Host.NotifyModelCatalogChanged();
     }
 
     private async Task ConfirmDeleteProviderAsync(DysonModelProviderEntity provider)
@@ -1275,6 +1278,7 @@
 
         await RefreshAsync();
         await OnChanged.InvokeAsync();
+        Host.NotifyModelCatalogChanged();
     }
 
     // --- Slug add/edit/remove (modal-driven) ---

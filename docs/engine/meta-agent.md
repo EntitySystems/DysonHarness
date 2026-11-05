@@ -2,6 +2,8 @@
 
 Never-blocking orchestrator plus isolated implementer. Page-launched; not in the composer mode picker. Storage: [plans.md](../storage/plans.md). UI: [UI README](../ui/README.md)#meta-agent-page. The shared compaction path is in [README.md](README.md)#context-compaction; the Meta Agent specifics (180K pin, reasoning always preserved) are under [Context](#context-180k-cap-compaction-reasoning) below. This page is the toolset, plan tools, and the child-report loop.
 
+Switching work directories (the panel, `SwitchWorkdir`, and startup restore of a remembered workdir) opens that work directory's root Meta session at `/meta/{id}`, created lazily if absent. Choosing a specific session (`Resume`, new session, Open full session) still opens it on `/`.
+
 ## Modes
 
 `DysonAgentModes.MetaAgent` (`"Meta Agent"`) and `MetaAgentDrone` (`"Meta Agent Drone"`) are in `BuiltIns`. Neither is in `ComposerSelectable`. The page-launched root is not in the work-session list and is not user-deletable (`Meta Agent sessions cannot be deleted.`). `DeleteMetaAgent` still deletes terminal drones. Directives: `DysonAgentSystemPrompts.MetaAgentDirective` / `MetaAgentDroneDirective`. Child first turns prepend `SubagentReportRequiredMandate`; Meta Agent Drone also gets `MetaAgentDroneFirstTurnMandate`. Default provider: `DysonAgentSessionConfig.MetaAgentDroneDefaultProvider` (same omit-slug cascade as Drone). Settable at Settings → Agent behavior via `meta_agent_drone_model_slug_id` (effort: `meta_agent_drone_reasoning_effort`); empty inherits the parent chat model, and an explicit spawn `modelSlug` still wins.

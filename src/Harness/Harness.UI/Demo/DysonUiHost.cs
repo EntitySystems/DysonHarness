@@ -1219,6 +1219,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         Notify(DysonHostChangeKind.Catalogs);
     }
 
+    /// <summary>Signals that the provider list changed so the Meta page can re-check its real-provider gate.</summary>
+    public void NotifyModelCatalogChanged() => Notify(DysonHostChangeKind.Catalogs);
+
     /// <summary>The app-data mode used for global plugin installation paths.</summary>
     public DysonAppMode CurrentAppMode => DysonBuildInfo.Current;
 
