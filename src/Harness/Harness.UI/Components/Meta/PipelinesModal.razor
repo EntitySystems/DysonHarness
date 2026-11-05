@@ -1,0 +1,452 @@
+@namespace Harness.UI.Components.Meta
+@using Microsoft.AspNetCore.Components.Web
+@using DysonHarness
+@implements IAsyncDisposable
+@inject DysonMessageBus Bus
+
+<DysonTransition Item="IsOpen" ExitMs="140" RestoreFocus="true"
+                 OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="confirm-dialog-backdrop dyson-fade-scale @ctx.StateClass"
+         role="presentation"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+         @onkeydown="args => { if (!ctx.IsExiting) OnKeyDown(args); }">
+        <div class="confirm-dialog pipelines-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="pipelines-modal-title"
+             @onclick:stopPropagation="true">
+            <div class="confirm-dialog__header">
+                <div class="pipelines-modal__title-row">
+                    @if (View is { ProviderId: { } providerId })
+                    {
+                        <span class="pipelines-modal__icon"
+                              style="--meta-icon: url('icons/providers/@(providerId).svg')"
+                              aria-hidden="true"></span>
+                    }
+                    <h3 id="pipelines-modal-title">Pipelines</h3>
+                    @if (View?.Target is { } target)
+                    {
+                        <button type="button"
+                                class="btn btn-ghost pipelines-modal__repo"
+                                title="@($"{target.WebUrl}/actions")"
+                                @onclick="() => OpenActionsAsync(target)">@target.Owner/@target.Name</button>
+                    }
+                    <span class="pipelines-modal__counts" aria-live="polite">@CountsLine(View)</span>
+                </div>
+                <div class="pipelines-modal__header-actions">
+                    <button type="button"
+                            class="btn btn-ghost pipelines-modal__refresh"
+                            aria-label="Refresh"
+                            @onclick="Refresh">
+                        <img src="icons/refresh.svg" alt="" />
+                    </button>
+                    <button type="button"
+                            class="btn btn-ghost pipelines-modal__close"
+                            @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+                            aria-label="Close">×</button>
+                </div>
+            </div>
+
+            <div class="confirm-dialog__body pipelines-modal__body">
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <p class="pipelines-modal__banner">@_error</p>
+                }
+                @{
+                    var snap = View;
+                    var fault = snap?.Error;
+                    var keepRuns = fault?.Kind is DysonPipelineErrorKind.RateLimited or DysonPipelineErrorKind.Failed
+                        && snap!.Runs.Count > 0;
+                }
+                @if (keepRuns && fault!.Kind == DysonPipelineErrorKind.RateLimited)
+                {
+                    <p class="pipelines-modal__banner">@RateLimitText(fault)</p>
+                }
+                else if (keepRuns && fault!.Kind == DysonPipelineErrorKind.Failed)
+                {
+                    <div class="pipelines-modal__notice">
+                        <p class="pipelines-modal__banner">@fault.Message</p>
+                        <button type="button" class="btn" @onclick="Refresh">Retry</button>
+                    </div>
+                }
+
+                @if (keepRuns || (fault is null && snap is { Runs.Count: > 0 }))
+                {
+                    <ul class="pipelines-modal__list" role="list">
+                        @foreach (var run in snap!.Runs)
+                        {
+                            var expanded = IsExpanded(run);
+                            var active = run.State is DysonPipelineState.Queued or DysonPipelineState.Waiting or DysonPipelineState.Running;
+                            var jobsId = $"pipeline-jobs-{run.Id}";
+                            <li class="pipeline-run" role="listitem" data-state="@run.State" data-active="@(active ? "true" : null)" @key="run.Id">
+                                <div class="pipeline-run__row">
+                                    <button type="button"
+                                            class="pipeline-run__main"
+                                            aria-label="@RunAccessibleName(run)"
+                                            @onclick="() => OpenAsync(run.HtmlUrl)">
+                                        <span class="pipeline-run__tile" aria-hidden="true"></span>
+                                        <span class="pipeline-run__text">
+                                            <span class="pipeline-run__title">
+                                                <span class="pipeline-run__name">@run.WorkflowName</span>
+                                                <span class="pipeline-run__badge mono">#@run.RunNumber</span>
+                                                @if (run.Attempt > 1)
+                                                {
+                                                    <span class="pipeline-run__attempt">· attempt @run.Attempt</span>
+                                                }
+                                            </span>
+                                            <span class="pipeline-run__step">@run.Title</span>
+                                            <span class="pipeline-run__meta mono">@MetaLine(run, _now)</span>
+                                        </span>
+                                        <span class="pipeline-run__trail">
+                                            @if (run.State == DysonPipelineState.Running)
+                                            {
+                                                <span class="subagent-card__spinner" aria-hidden="true"></span>
+                                            }
+                                            else
+                                            {
+                                                @run.StateLabel
+                                            }
+                                        </span>
+                                    </button>
+                                    <button type="button"
+                                            class="pipeline-run__toggle"
+                                            aria-expanded="@(expanded ? "true" : "false")"
+                                            aria-controls="@jobsId"
+                                            aria-label="@($"Show jobs for {run.WorkflowName} #{run.RunNumber}")"
+                                            @onclick="() => ToggleRun(run)">
+                                        <img src="icons/chevron-right.svg" alt="" />
+                                    </button>
+                                </div>
+                                @if (expanded)
+                                {
+                                    <div class="pipeline-jobs" id="@jobsId">
+                                        @if (!snap.Jobs.TryGetValue(run.Id, out var jobs))
+                                        {
+                                            <p class="pipeline-job pipeline-job--loading">
+                                                <span class="subagent-card__spinner" aria-hidden="true"></span>
+                                                Loading jobs…
+                                            </p>
+                                        }
+                                        else
+                                        {
+                                            var showAll = _showAllJobs.Contains(run.Id);
+                                            var visible = showAll || jobs.Count <= JobCap ? jobs : jobs.Take(JobCap);
+                                            @foreach (var job in visible)
+                                            {
+                                                <button type="button"
+                                                        class="pipeline-job"
+                                                        data-state="@job.State"
+                                                        aria-label="@($"{job.Name}, {job.StateLabel}, open in browser")"
+                                                        @onclick="() => OpenAsync(job.HtmlUrl)"
+                                                        @key="job.Id">
+                                                    <span class="pipeline-job__dot" aria-hidden="true"></span>
+                                                    <span class="pipeline-job__name">@job.Name</span>
+                                                    <span class="pipeline-job__state">@JobTrail(job)</span>
+                                                    @if (job.State == DysonPipelineState.Running)
+                                                    {
+                                                        <span class="subagent-card__spinner" aria-hidden="true"></span>
+                                                    }
+                                                </button>
+                                            }
+                                            @if (jobs.Count > JobCap)
+                                            {
+                                                var runId = run.Id;
+                                                if (showAll)
+                                                {
+                                                    <button type="button" class="pipeline-job pipeline-job--more" @onclick="() => _showAllJobs.Remove(runId)">Show less</button>
+                                                }
+                                                else
+                                                {
+                                                    <button type="button" class="pipeline-job pipeline-job--more" @onclick="() => _showAllJobs.Add(runId)">Show all (@jobs.Count)</button>
+                                                }
+                                            }
+                                        }
+                                    </div>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+                else if (snap is null || (snap.FetchedAt is null && fault is null))
+                {
+                    <p class="pipelines-modal__empty">
+                        <span class="subagent-card__spinner" aria-hidden="true"></span>
+                        Loading runs…
+                    </p>
+                }
+                else if (fault?.Kind == DysonPipelineErrorKind.CliMissing)
+                {
+                    <div class="pipelines-modal__notice">
+                        <p>GitHub CLI (gh) not found.</p>
+                        <p class="pipelines-modal__hint">Pipelines uses the GitHub CLI and its sign-in; Dyson never stores a token.</p>
+                        <div class="pipelines-modal__actions">
+                            <button type="button" class="btn" @onclick="OpenGhCliAsync">Get GitHub CLI</button>
+                            <button type="button" class="btn" @onclick="Refresh">Retry</button>
+                        </div>
+                    </div>
+                }
+                else if (fault?.Kind == DysonPipelineErrorKind.NotAuthenticated)
+                {
+                    var host = snap.Target?.Host ?? "github.com";
+                    <div class="pipelines-modal__notice">
+                        <p>gh is not signed in to @host.</p>
+                        <p class="pipelines-modal__mono">gh auth login --hostname @host</p>
+                        <button type="button" class="btn" @onclick="Refresh">Retry</button>
+                    </div>
+                }
+                else if (fault?.Kind is DysonPipelineErrorKind.RepoNotFound or DysonPipelineErrorKind.Failed)
+                {
+                    <div class="pipelines-modal__notice">
+                        <p>@fault.Message</p>
+                        <button type="button" class="btn" @onclick="Refresh">Retry</button>
+                    </div>
+                }
+                else if (fault?.Kind == DysonPipelineErrorKind.RateLimited)
+                {
+                    <p class="pipelines-modal__banner">@RateLimitText(fault)</p>
+                }
+                else
+                {
+                    <div class="pipelines-modal__notice">
+                        <p class="pipelines-modal__empty">No workflow runs yet.</p>
+                        @if (snap.Target is { } emptyTarget)
+                        {
+                            <button type="button" class="btn" @onclick="() => OpenActionsAsync(emptyTarget)">Open Actions</button>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</DysonTransition>
+
+@code {
+    private const int JobCap = 8;
+
+    [Parameter] public bool IsOpen { get; set; }
+
+    [Parameter] public DysonVersionControlService? Service { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private ElementReference _backdropEl;
+    private bool _wasOpen;
+    private DysonVersionControlService? _bound;
+    private IDisposable? _panelLease;
+    private IDisposable? _sub;
+    private DysonPipelineSnapshot? _snap;
+    private string? _error;
+    private DateTimeOffset _now = DateTimeOffset.Now;
+    private readonly HashSet<long> _expanded = [];
+    private readonly HashSet<long> _userCollapsed = [];
+    private readonly HashSet<long> _showAllJobs = [];
+    private CancellationTokenSource? _tickCts;
+
+    private DysonPipelineSnapshot? View => _snap ?? Service?.Snapshot;
+
+    protected override void OnParametersSet()
+    {
+        if (IsOpen && !_wasOpen && Service is { } opening)
+            TakePanelLease(opening);
+        else if (!IsOpen && _wasOpen)
+            ReleaseOpenState();
+        else if (IsOpen && !ReferenceEquals(_bound, Service))
+        {
+            ReleaseOpenState();
+            if (Service is { } next)
+                TakePanelLease(next);
+        }
+
+        _wasOpen = IsOpen;
+        SyncElapsedTicker();
+    }
+
+    private void TakePanelLease(DysonVersionControlService service)
+    {
+        _bound = service;
+        _panelLease = service.Watch(panelOpen: true);
+        _snap = service.Snapshot;
+        _now = DateTimeOffset.Now;
+        var sub = Bus.Subscribe<DysonPipelinesChangedEvent>(
+            DysonBusScopes.WorkDirectory(service.WorkDirectoryId),
+            OnPipelinesChanged);
+        if (sub.IsSuccess)
+            _sub = sub.Value;
+    }
+
+    private void OnPipelinesChanged(DysonPipelinesChangedEvent evt) => _ = InvokeAsync(() =>
+    {
+        if (_bound is not { } service || evt.WorkDirectoryId != service.WorkDirectoryId)
+            return;
+
+        _snap = service.Snapshot;
+        _now = DateTimeOffset.Now;
+        SyncElapsedTicker();
+        StateHasChanged();
+    });
+
+    private void SyncElapsedTicker()
+    {
+        var running = IsOpen && (View?.RunningCount ?? 0) > 0;
+        if (running == (_tickCts is not null))
+            return;
+
+        _tickCts?.Cancel();
+        _tickCts?.Dispose();
+        _tickCts = null;
+        if (!running)
+            return;
+
+        var cts = new CancellationTokenSource();
+        _tickCts = cts;
+        _ = TickElapsedAsync(cts.Token);
+    }
+
+    private async Task TickElapsedAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                await InvokeAsync(() =>
+                {
+                    _now = DateTimeOffset.Now;
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Closed or disposed.
+        }
+    }
+
+    private bool IsExpanded(DysonPipelineRun run)
+    {
+        if (_userCollapsed.Contains(run.Id))
+            return false;
+        if (_expanded.Contains(run.Id))
+            return true;
+        return run.State is DysonPipelineState.Queued or DysonPipelineState.Waiting or DysonPipelineState.Running;
+    }
+
+    private void ToggleRun(DysonPipelineRun run)
+    {
+        if (IsExpanded(run))
+        {
+            _expanded.Remove(run.Id);
+            _userCollapsed.Add(run.Id);
+            return;
+        }
+
+        _userCollapsed.Remove(run.Id);
+        _expanded.Add(run.Id);
+        Service?.RequestJobs(run.Id);
+    }
+
+    private static string CountsLine(DysonPipelineSnapshot? snap)
+    {
+        if (snap is null)
+            return "";
+        if (snap.RunningCount == 0 && snap.QueuedCount == 0)
+            return "no active runs";
+        var parts = new List<string>(2);
+        if (snap.RunningCount > 0)
+            parts.Add($"{snap.RunningCount} running");
+        if (snap.QueuedCount > 0)
+            parts.Add($"{snap.QueuedCount} queued");
+        return string.Join(" · ", parts);
+    }
+
+    private static string RateLimitText(DysonPipelineError error)
+    {
+        var when = error.RetryAfter?.ToLocalTime().ToString("HH:mm");
+        return when is null
+            ? "GitHub rate limit reached."
+            : $"GitHub rate limit reached — resuming at {when}";
+    }
+
+    private string JobTrail(DysonPipelineJob job)
+    {
+        if (job.State != DysonPipelineState.Running)
+            return job.StateLabel;
+        var elapsed = DysonPipelineText.Elapsed(job, _now);
+        return elapsed is { } span ? DysonPipelineText.FormatDuration(span) : job.StateLabel;
+    }
+
+    private static string RunAccessibleName(DysonPipelineRun run)
+    {
+        var attempt = run.Attempt > 1 ? $", attempt {run.Attempt}" : "";
+        return $"{run.WorkflowName} #{run.RunNumber}{attempt}, {run.StateLabel}, open in browser";
+    }
+
+    private static string MetaLine(DysonPipelineRun run, DateTimeOffset now)
+    {
+        var parts = new List<string>(4);
+        if (!string.IsNullOrEmpty(run.Branch))
+            parts.Add(run.Branch);
+        if (!string.IsNullOrEmpty(run.HeadSha))
+            parts.Add(DysonPipelineText.ShortSha(run.HeadSha));
+        if (!string.IsNullOrEmpty(run.Event))
+            parts.Add(run.Event);
+
+        var elapsed = DysonPipelineText.Elapsed(run, now);
+        parts.Add(run.State switch
+        {
+            DysonPipelineState.Running when elapsed is { } span => DysonPipelineText.FormatDuration(span),
+            DysonPipelineState.Queued or DysonPipelineState.Waiting =>
+                $"queued {(elapsed is { } wait ? DysonPipelineText.FormatDuration(wait) : DysonPipelineText.FormatRelative(run.CreatedAt, now))}",
+            _ when elapsed is { } done => $"{DysonPipelineText.FormatDuration(done)} · {DysonPipelineText.FormatRelative(run.UpdatedAt, now)}",
+            _ => DysonPipelineText.FormatRelative(run.UpdatedAt, now),
+        });
+        return string.Join(" · ", parts);
+    }
+
+    private void Refresh() => Service?.RefreshNow();
+
+    private async Task OpenAsync(string url)
+    {
+        var opened = await DysonOsLauncher.OpenUrlAsync(url);
+        if (opened.IsError)
+            _error = opened.Error;
+    }
+
+    private Task OpenActionsAsync(DysonPipelineTarget target) => OpenAsync(target.WebUrl + "/actions");
+
+    private Task OpenGhCliAsync() => OpenAsync("https://cli.github.com");
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private async Task FocusBackdropAsync()
+    {
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
+    }
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+
+    private void ReleaseOpenState()
+    {
+        _panelLease?.Dispose();
+        _panelLease = null;
+        _sub?.Dispose();
+        _sub = null;
+        _bound = null;
+        _tickCts?.Cancel();
+        _tickCts?.Dispose();
+        _tickCts = null;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        ReleaseOpenState();
+        return ValueTask.CompletedTask;
+    }
+}

@@ -183,6 +183,10 @@ public static class DysonUiWebHost
         builder.Services.AddSingleton<DysonSessionRuntimeRegistry>();
         builder.Services.AddSingleton<DysonMessageBus>();
         builder.Services.AddSingleton<DysonGitRepoChangePublisher>();
+        // Cloud registers no provider: gh would carry the operator's credentials across subjects.
+        if (hostingMode == DysonHostingMode.Local)
+            builder.Services.AddSingleton<DysonVersionControlProviderFactory>(_ => () => new DysonGitHubVersionControlProvider());
+        builder.Services.AddSingleton<DysonVersionControlRegistry>();
         builder.Services.AddSingleton<DysonSessionEventPublisher>();
         builder.Services.AddScoped<DysonUiRuntimeAttachment>();
         builder.Services.AddScoped<IDysonAgentSessionRuntimeFactory, DysonUiAgentSessionRuntimeFactory>();

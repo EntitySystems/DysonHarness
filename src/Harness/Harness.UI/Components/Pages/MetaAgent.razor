@@ -12,6 +12,7 @@
 @inject Harness.UI.Services.ConfirmDialogService ConfirmDialog
 @inject IDysonPendingUserQuestionRepository PendingQuestions
 @inject DysonDemoScenarioRunner DemoRunner
+@inject DysonVersionControlRegistry Vcs
 
 <PageTitle>Meta agent — @(_workDirectoryName ?? "DysonHarness")</PageTitle>
 
@@ -68,6 +69,18 @@
                         <span class="meta-stage__icon meta-stage__icon--viz" aria-hidden="true"></span>
                         <span class="meta-stage__label">Visualizations</span>
                     </button>
+                    @if (_pipelines is { IsDetected: true } p && _vcs is not null)
+                    {
+                        <button type="button" class="btn meta-stage__pipelines" data-error="@(p.Error is null ? null : "true")"
+                                title="@PipelinesTitle(p)" aria-label="@PipelinesTitle(p)" @onclick="TogglePipelines">
+                            <span class="meta-stage__icon" style="--meta-icon: url('icons/providers/@(p.ProviderId).svg')" aria-hidden="true"></span>
+                            <span class="meta-stage__label">Pipelines</span>
+                            @if (p.ActiveCount > 0)
+                            {
+                                <span class="meta-stage__count" data-running="@(p.RunningCount > 0 ? "true" : null)">@p.ActiveCount</span>
+                            }
+                        </button>
+                    }
                     <button type="button"
                             class="btn"
                             disabled="@(!CanOpenFullSession)"
@@ -314,6 +327,10 @@
                              FocusId="_vizFocusId"
                              OnClose="CloseVisualizations" />
 
+<PipelinesModal IsOpen="_pipelinesOpen"
+                Service="_vcs"
+                OnClose="ClosePipelines" />
+
 @code {
     [Parameter] public Guid WorkDirectoryId { get; set; }
 
@@ -352,6 +369,11 @@
     private IDisposable? _questionsSub;
     private bool _vizOpen;
     private Guid? _vizFocusId;
+    private DysonVersionControlService? _vcs;
+    private DysonPipelineSnapshot? _pipelines;
+    private IDisposable? _pipelinesLease;
+    private IDisposable? _pipelinesSub;
+    private bool _pipelinesOpen;
     private ElementReference _shell;
     private ElementReference _prompt;
     private WorkDirectorySwitcher? _workdirSwitcher;
@@ -484,6 +506,7 @@
         _tasksOpen = false;
         _questionsOpen = false;
         _vizOpen = false;
+        _pipelinesOpen = false;
 
         var get = await WorkDirs.GetAsync(WorkDirectoryId);
         _unknownWorkDirectory = get.IsError;
@@ -496,8 +519,11 @@
             _metaSessionId = null;
             BindAgentsListSubscriptions();
             BindQuestionsSubscription();
+            BindPipelines(null);
             return;
         }
+
+        BindPipelines(get.Value);
 
         // Keep the stored workdir in step with the screen so a later visit to "/" does not hydrate an old one.
         await PersistWorkDirectoryAsync(WorkDirectoryId);
@@ -922,6 +948,64 @@
 
     private void CloseVisualizations() => _vizOpen = false;
 
+    private void TogglePipelines() => _pipelinesOpen = !_pipelinesOpen;
+
+    private void ClosePipelines() => _pipelinesOpen = false;
+
+    private static string PipelinesTitle(DysonPipelineSnapshot snap)
+    {
+        if (snap.Error is { } error)
+            return error.Message;
+        var name = snap.ProviderName ?? "Pipelines";
+        if (snap.ActiveCount == 0)
+            return $"{name} \u00b7 no active runs";
+        var parts = new List<string> { name };
+        if (snap.RunningCount > 0)
+            parts.Add($"{snap.RunningCount} running");
+        if (snap.QueuedCount > 0)
+            parts.Add($"{snap.QueuedCount} queued");
+        return string.Join(" \u00b7 ", parts);
+    }
+
+    private void BindPipelines(DysonWorkDirectoryEntity? entity)
+    {
+        DisposePipelines();
+        if (entity is null)
+            return;
+
+        var svc = Vcs.GetOrCreate(entity);
+        if (svc.IsError)
+            return;
+
+        _vcs = svc.Value;
+        _pipelinesLease = _vcs.Watch(panelOpen: false);
+        var sub = Bus.Subscribe<DysonPipelinesChangedEvent>(
+            DysonBusScopes.WorkDirectory(entity.Id),
+            OnPipelinesChanged);
+        if (sub.IsSuccess)
+            _pipelinesSub = sub.Value;
+        _pipelines = _vcs.Snapshot;
+    }
+
+    private void OnPipelinesChanged(DysonPipelinesChangedEvent evt) => _ = InvokeAsync(() =>
+    {
+        if (_vcs is not { } service || evt.WorkDirectoryId != service.WorkDirectoryId)
+            return;
+
+        _pipelines = service.Snapshot;
+        StateHasChanged();
+    });
+
+    private void DisposePipelines()
+    {
+        _pipelinesLease?.Dispose();
+        _pipelinesLease = null;
+        _pipelinesSub?.Dispose();
+        _pipelinesSub = null;
+        _vcs = null;
+        _pipelines = null;
+    }
+
     private void OpenFocusedVisualization(Guid id)
     {
         _vizFocusId = id;
@@ -1101,6 +1185,7 @@
         _agentsListBoundId = null;
         DisposeQuestionsSubscription();
         _questionsBoundId = null;
+        DisposePipelines();
         if (_imageCaptureBound)
             await DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.detachImageCapture", _shell);
 

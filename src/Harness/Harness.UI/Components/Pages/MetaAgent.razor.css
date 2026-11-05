@@ -121,6 +121,26 @@
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
+
+.meta-stage__count[data-running] {
+  box-shadow: 0 0 0 0 var(--accent);
+  animation: dyson-status-pulse var(--motion-pulse) var(--ease-standard) infinite;
+}
+
+.meta-stage__pipelines {
+  position: relative;
+}
+
+.meta-stage__pipelines[data-error]::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--warning);
+}
 .meta-stage__icon--viz { --meta-icon: url("icons/visualization.svg"); }
 .meta-stage__icon--open { --meta-icon: url("icons/open-external.svg"); }
 .meta-stage__icon--back { --meta-icon: url("icons/arrow-left.svg"); }

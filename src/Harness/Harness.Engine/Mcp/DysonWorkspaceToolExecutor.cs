@@ -3087,6 +3087,9 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (run.IsError)
             return Error(call, run.Error);
 
+        if (DysonVcsCommandDetector.InvokesVcs(shellName.Value, command.Value))
+            PublishVcsCommandRan();
+
         var r = run.Value;
         var sb = new StringBuilder();
         sb.Append("exitCode=");
