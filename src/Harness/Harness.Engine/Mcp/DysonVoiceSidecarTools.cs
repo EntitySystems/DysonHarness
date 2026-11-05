@@ -29,7 +29,7 @@ public static class DysonVoiceSidecarTools
     {
         Name = "SpeakToUser",
         Description =
-            "Speak text aloud to the user. At most 600 characters. Use short, plain sentences. Returns once queued. If the user starts talking, playback stops and their words arrive as your next message.",
+            "Speak text aloud to the user. This is the only way the user hears you: plain reply text is discarded and never heard, so every word meant for the user goes through this call. Never claim you spoke without calling it. At most 600 characters. Use short, plain sentences. Returns once queued. If the user starts talking, playback stops and their words arrive as your next message.",
         InputSchemaJson = """
             {
               "type": "object",

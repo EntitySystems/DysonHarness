@@ -11,6 +11,9 @@
 @inject IJSRuntime Js
 @inject Harness.UI.Services.ConfirmDialogService ConfirmDialog
 @inject IDysonPendingUserQuestionRepository PendingQuestions
+#if DYSON_PREVIEW
+@inject DysonDemoScenarioRunner DemoRunner
+#endif
 
 <PageTitle>Meta agent — @(_workDirectoryName ?? "DysonHarness")</PageTitle>
 
@@ -137,6 +140,14 @@
                                           OnUserQuestion="OnUserQuestionAsync"
                                           OnOpenVisualization="OpenFocusedVisualization" />
                         </div>
+
+                        @if (!_hasRealProvider)
+                        {
+                            <div class="meta-provider-gate">
+                                <p>Connect a model provider to use the Meta Agent.</p>
+                                <button type="button" class="btn btn-primary" @onclick="GoToModelsAsync">Connect a model provider</button>
+                            </div>
+                        }
 
                         <div class="composer meta-composer">
                             <div @ref="_shell"
@@ -315,6 +326,7 @@
     private string? _error;
     private string? _workDirectoryName;
     private bool _unknownWorkDirectory;
+    private bool _hasRealProvider = true;
     private Guid _loadedWorkDirectoryId;
     private Guid? _metaSessionId;
     private bool _sessionReady;
@@ -370,7 +382,7 @@
 
     private bool CanOpenFullSession => _metaSessionId is Guid id && id != Guid.Empty;
 
-    private bool ComposerDisabled => _unknownWorkDirectory || !IsMetaFocused;
+    private bool ComposerDisabled => _unknownWorkDirectory || !IsMetaFocused || !_hasRealProvider;
 
     private bool CanSend =>
         !string.IsNullOrWhiteSpace(_draft)
@@ -420,6 +432,25 @@
             _error = attached.Error;
 
         await Host.EnsureDefaultModelAsync();
+        await RefreshRealProviderAsync();
+    }
+
+    private async Task GoToModelsAsync() =>
+        await DysonCircuitJs.NavigateAsync(Js, "/settings/models");
+
+    private async Task RefreshRealProviderAsync()
+    {
+#if DYSON_PREVIEW
+        // Scripted demo has no real provider; the gate would kill the scenario.
+        if (DemoRunner.IsRunning)
+        {
+            _hasRealProvider = true;
+            return;
+        }
+#endif
+
+        var listed = await ModelStore.ListProvidersAsync();
+        _hasRealProvider = listed.IsSuccess && listed.Value.Any(DysonProviderKinds.IsRealProvider);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -676,6 +707,7 @@
         if ((evt.Kind & PlanRefreshMask) != 0)
             await (_planList?.RefreshAsync() ?? Task.CompletedTask);
         await SyncModelFromHostAsync();
+        await RefreshRealProviderAsync();
         StateHasChanged();
     });
 
@@ -774,7 +806,7 @@
     {
         var text = _draft.Trim();
         var hasAttachments = Host.PendingImages.Count > 0 || Host.PendingFilePaths.Count > 0;
-        if ((string.IsNullOrWhiteSpace(text) && !hasAttachments) || !IsMetaFocused || Host.Session is null)
+        if ((string.IsNullOrWhiteSpace(text) && !hasAttachments) || ComposerDisabled || Host.Session is null)
             return;
 
         _error = null;

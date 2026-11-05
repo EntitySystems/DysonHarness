@@ -444,3 +444,23 @@
   .meta-agents { display: none; }
   .meta-stage__body { grid-template-columns: minmax(0, 1fr); }
 }
+
+.meta-provider-gate {
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto 8px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+
+.meta-provider-gate p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
