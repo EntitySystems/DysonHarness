@@ -32,6 +32,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory;
     private readonly IDysonPendingUserQuestionRepository? _pendingUserQuestions;
     private readonly IDysonSessionSecretRepository? _sessionSecrets;
+    private readonly DysonVersionControlRegistry? _vcs;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -154,7 +155,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         IDysonMetaScratchFileRepository? scratchFiles = null,
         IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null,
         IDysonPendingUserQuestionRepository? pendingUserQuestions = null,
-        IDysonSessionSecretRepository? sessionSecrets = null)
+        IDysonSessionSecretRepository? sessionSecrets = null,
+        DysonVersionControlRegistry? vcs = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -166,6 +168,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _voiceSidecarMemory = voiceSidecarMemory;
         _pendingUserQuestions = pendingUserQuestions;
         _sessionSecrets = sessionSecrets;
+        _vcs = vcs;
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -2977,6 +2980,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var deleted = await _workDirectories.DeleteAsync(workDirectoryId, cancellationToken)
             .ConfigureAwait(false);
+        if (deleted.IsSuccess)
+            _vcs?.Remove(workDirectoryId);
         Notify(DysonHostChangeKind.SessionGraph);
         return deleted;
     }

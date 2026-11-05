@@ -1688,6 +1688,17 @@ public sealed partial class DysonWorkspaceToolExecutor
             new DysonPlansChangedEvent(_workDirectoryId, planId));
     }
 
+    private void PublishVcsCommandRan()
+    {
+        var bus = _session.Config.Bus;
+        if (bus is null || _workDirectoryId == Guid.Empty)
+            return;
+
+        bus.Publish(
+            DysonBusScopes.WorkDirectory(_workDirectoryId),
+            new DysonShellVcsCommandRanEvent(_workDirectoryId));
+    }
+
     private async Task<Result<DysonStartSubagentResult, string>> CreateMetaAgentDroneChildAsync(
         string task,
         string? context,
