@@ -538,6 +538,8 @@ public sealed partial class DysonSessionRuntime
         }
 
         var turn = DysonAgentSession.CreateNormalTurn(framed);
+        if (toSidecar)
+            turn.HiddenInstruction = DysonAgentSystemPrompts.VoiceSidecarMetaMessageInstruction;
         var queued = EnqueuePrompt(target.PersistenceId, turn);
         if (queued.IsError)
             return VoidResult<string>.AsError(queued.Error);

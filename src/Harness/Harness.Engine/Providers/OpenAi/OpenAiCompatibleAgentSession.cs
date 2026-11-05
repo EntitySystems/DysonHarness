@@ -1167,7 +1167,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 // Title parse only at finalize — preview stays raw (incl. mid-stream H1) until then.
                 CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
                 turn.RecordReasoningItems(reply.ReasoningOutputItems, OpenAiProvider.ReasoningSourceTag, finalRound: true);
-                ApplyAssistantText(turn, text);
+                // Sidecar replies are never heard; trimming stops the model copying a growing run of blank lines from its history.
+                ApplyAssistantText(turn, IsVoiceSidecar ? text.Trim() : text);
                 turn.FinishStreaming();
                 turn.FinishReasoningStreaming();
                 AppendLog($"turn complete: {turn.AgentTitle ?? turn.Id.ToString("N")[..8]}");
