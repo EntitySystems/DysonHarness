@@ -269,7 +269,6 @@
                 _pendingBootWorkDirectoryPath = get.Value.AbsolutePath;
                 await ApplyOperatorWorkspaceAsync();
                 await RefreshSessionsAsync();
-                await DysonCircuitJs.NavigateAsync(Js, $"/meta/{id}");
                 StateHasChanged();
                 return;
             }
@@ -427,7 +426,7 @@
                 return;
             }
 
-            await SetActiveWorkDirectoryAsync(wd, get.Value.AbsolutePath);
+            await SetActiveWorkDirectoryAsync(wd, get.Value.AbsolutePath, openMeta: true);
         }
         else
         {
@@ -448,7 +447,7 @@
         await RefreshSessionsAsync();
     }
 
-    private async Task SetActiveWorkDirectoryAsync(Guid id, string absolutePath)
+    private async Task SetActiveWorkDirectoryAsync(Guid id, string absolutePath, bool openMeta = false)
     {
         _activeWorkDirectoryId = id;
         Host.Focus?.SetActive(id);
@@ -458,7 +457,10 @@
         await ApplyOperatorWorkspaceAsync();
         await PersistWorkDirectoryAsync(id);
         await RefreshSessionsAsync();
-        await DysonCircuitJs.NavigateAsync(Js, $"/meta/{id}");
+        // Only an explicit user pick of a work directory lands on Meta. Hydrate, the
+        // first-listed fallback, and any session load that re-sets the workdir stay put.
+        if (HomeMetaNavigation.ShouldRedirectToMeta(openMeta))
+            await DysonCircuitJs.NavigateAsync(Js, $"/meta/{id}");
     }
 
     private string? ResolveOperatorWorkspacePath()
