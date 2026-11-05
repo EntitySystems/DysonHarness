@@ -42,6 +42,8 @@ public class DysonVoiceSidecarMinorTests
 
         var ran = await prompts.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Contains("hello replacement", ran, StringComparison.Ordinal);
+        // A Meta message turn carries the SpeakToUser reminder; plain sidecar text is never heard.
+        Assert.EndsWith(DysonAgentSystemPrompts.VoiceSidecarMetaMessageInstruction, ran, StringComparison.Ordinal);
 
         // The old subscription is gone, so a publish on the old id never reaches a live session.
         harness.Bus.Publish(
@@ -244,7 +246,9 @@ public class DysonVoiceSidecarMinorTests
             DysonAgentTurn turn,
             CancellationToken cancellationToken = default)
         {
-            prompts?.TrySetResult(turn.Instruction);
+            prompts?.TrySetResult(turn.HiddenInstruction is null
+                ? turn.Instruction
+                : turn.Instruction + "\n\n" + turn.HiddenInstruction);
             return Task.FromResult(VoidResult<string>.Success);
         }
 

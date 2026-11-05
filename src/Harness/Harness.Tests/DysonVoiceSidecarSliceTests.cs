@@ -53,6 +53,22 @@ public class DysonVoiceSidecarSliceTests
     }
 
     [Fact]
+    public void Sidecar_prompt_and_tool_say_only_SpeakToUser_is_heard()
+    {
+        var prompt = DysonAgentSystemPrompts.VoiceModeMetaSidecarDirective;
+        Assert.Contains("Only SpeakToUser reaches the user. Your plain reply text is discarded.", prompt, StringComparison.Ordinal);
+        Assert.Contains("Every word meant for the user goes through a SpeakToUser call", prompt, StringComparison.Ordinal);
+        Assert.Contains("Never claim you spoke", prompt, StringComparison.Ordinal);
+
+        var description = DysonVoiceSidecarTools.SpeakToUser.Description;
+        Assert.Contains("plain reply text is discarded and never heard", description, StringComparison.Ordinal);
+        Assert.Contains("Never claim you spoke without calling it.", description, StringComparison.Ordinal);
+
+        Assert.Contains("Plain reply text is never heard.", DysonAgentSystemPrompts.VoiceSidecarTurnInstruction, StringComparison.Ordinal);
+        Assert.Contains("SpeakToUser", DysonAgentSystemPrompts.VoiceSidecarMetaMessageInstruction, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WithVoiceSidecarMemory_appends_only_when_non_empty()
     {
         var prompt = DysonAgentSystemPrompts.VoiceModeMetaSidecarDirective;
