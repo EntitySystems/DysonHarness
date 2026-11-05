@@ -806,7 +806,7 @@
     {
         var text = _draft.Trim();
         var hasAttachments = Host.PendingImages.Count > 0 || Host.PendingFilePaths.Count > 0;
-        if ((string.IsNullOrWhiteSpace(text) && !hasAttachments) || !IsMetaFocused || Host.Session is null)
+        if ((string.IsNullOrWhiteSpace(text) && !hasAttachments) || ComposerDisabled || Host.Session is null)
             return;
 
         _error = null;
