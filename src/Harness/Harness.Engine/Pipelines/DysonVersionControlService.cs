@@ -101,6 +101,8 @@ public sealed class DysonVersionControlService : IDisposable
             }
             else
                 _pillLeases++;
+            if (_loop is not { IsCompleted: false })
+                ForgetNotDetectedLocked();
             EnsureLoopLocked();
             if (panelOpen)
                 CancelWaitLocked();
@@ -130,6 +132,7 @@ public sealed class DysonVersionControlService : IDisposable
                 return;
             _clearBackoff = true;
             (_provider as DysonGitHubVersionControlProvider)?.ResetProbe();
+            ForgetNotDetectedLocked();
             WakeLocked();
         }
     }
@@ -244,6 +247,8 @@ public sealed class DysonVersionControlService : IDisposable
         {
             if (_disposed || generation != _debounceGeneration)
                 return;
+            // `git remote add` may have just given this work directory a GitHub remote.
+            ForgetNotDetectedLocked();
             // A loop parked on its idle wait is still a loop: wake it instead of starting a second tick.
             if (_loopCts is not null)
             {
@@ -279,6 +284,13 @@ public sealed class DysonVersionControlService : IDisposable
             return;
         }
 
+        if (LeaseCountLocked() > 0 && !_disposed)
+        {
+            // Leased but the loop ended (NotDetected): restart it instead of a lone one-shot.
+            EnsureLoopLocked();
+            return;
+        }
+
         if (_busy)
         {
             _pollAgain = true;
@@ -288,6 +300,13 @@ public sealed class DysonVersionControlService : IDisposable
         _busy = true;
         _pollAgain = false;
         _ = Task.Run(() => RunOneShotAsync());
+    }
+
+    /// <summary>A NotDetected result is not final: the next Watch, RefreshNow or shell poll re-resolves the origin.</summary>
+    private void ForgetNotDetectedLocked()
+    {
+        if (_detected && _provider is null)
+            _detected = false;
     }
 
     private void CancelWaitLocked()
@@ -408,15 +427,23 @@ public sealed class DysonVersionControlService : IDisposable
         {
             lock (_lock)
             {
+                var restart = false;
                 if (ReferenceEquals(_loopCts, loopCts))
                 {
                     _loopCts = null;
                     _loop = null;
                     loopCts.Dispose();
+                    // A wake that landed while this loop was stopping (e.g. Retry right after NotDetected).
+                    restart = _pollAgain && !_disposed && LeaseCountLocked() > 0;
                 }
 
                 _busy = false;
                 CancelWaitLocked();
+                if (restart)
+                {
+                    ForgetNotDetectedLocked();
+                    EnsureLoopLocked();
+                }
             }
         }
     }

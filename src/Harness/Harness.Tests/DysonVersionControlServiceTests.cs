@@ -275,6 +275,22 @@ public sealed class DysonVersionControlServiceTests
     }
 
     [Fact]
+    public async Task Refresh_now_re_detects_after_not_detected()
+    {
+        var provider = new FakeProvider { Resolve = false };
+        await using var h = Harness.Create(provider, origin: "https://github.com/o/r.git");
+        var published = h.Listen();
+        using var lease = h.Service.Watch(false);
+        await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(h.Service.Snapshot!.IsDetected);
+
+        provider.Resolve = true; // e.g. a GitHub remote was added afterwards
+        h.Service.RefreshNow();
+        await h.UntilRunsAsync(1);
+        await h.UntilAsync(() => h.Service.Snapshot?.IsDetected == true);
+    }
+
+    [Fact]
     public async Task Not_detected_instance_makes_no_provider_calls_on_poll_soon()
     {
         var provider = new FakeProvider { Resolve = false };
