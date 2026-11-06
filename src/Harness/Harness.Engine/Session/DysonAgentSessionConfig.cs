@@ -196,7 +196,7 @@ public class DysonAgentSessionConfig
     }
 
     /// <summary>
-    /// Optional process-wide browser control (Windows CefSharp host).
+    /// Optional process-wide browser control (Windows WebView2 host, macOS WKWebView host).
     /// Null ⇒ browser MCP tools are omitted from the catalog.
     /// </summary>
     public IDysonBrowserControl? BrowserControl { get; set; }

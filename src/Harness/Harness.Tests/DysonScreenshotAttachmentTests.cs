@@ -149,7 +149,7 @@ public class DysonScreenshotAttachmentTests
     }
 
     /// <summary>
-    /// Cancelled token or expired timeoutMs must fail quickly (same race as Cef TakeScreenshot).
+    /// Cancelled token or expired timeoutMs must fail quickly (same race as the Windows TakeScreenshot).
     /// </summary>
     [Fact]
     public async Task TakeScreenshot_CancelOrTimeout_FailsWithoutHanging()
@@ -947,7 +947,7 @@ public class DysonScreenshotAttachmentTests
                 return Result<byte[], string>.AsValue(png);
             }
 
-            // Mirror Cef race: linked CT + CancelAfter vs hanging work (no STA host).
+            // Mirror the Windows tab race: linked CT + CancelAfter vs hanging work (no STA host).
             var timeout = timeoutMs is > 0 ? timeoutMs.Value : DysonBrowserDefaults.DefaultTimeoutMs;
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             linked.CancelAfter(timeout);

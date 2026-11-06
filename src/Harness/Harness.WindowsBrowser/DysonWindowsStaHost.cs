@@ -84,10 +84,42 @@ public static class DysonWindowsStaHost
     {
         var folder = UserDataFolder;
         Directory.CreateDirectory(folder);
-        // Edge ships WebGPU on by default; ignore-gpu-blocklist keeps WebGPU/WebGL on blocklisted drivers,
-        // matching the old CEF switches. Every user of this folder must pass identical options.
+        // Edge ships WebGPU on by default; ignore-gpu-blocklist keeps WebGPU/WebGL available
+        // on blocklisted drivers. Every user of this folder must pass identical options.
         var options = new CoreWebView2EnvironmentOptions(additionalBrowserArguments: "--ignore-gpu-blocklist");
         return await CoreWebView2Environment.CreateAsync(null, folder, options).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// One-time migration: delete the old CefSharp HTTP cache (<c>%LocalAppData%\DysonHarness\cef-cache</c>).
+    /// Skipped while an older CefSharp build still holds that root's <c>lockfile</c>. Only <c>cef-cache</c> is
+    /// removed; the rest of the folder is left alone.
+    /// </summary>
+    public static VoidResult<string> TryDeleteLegacyCefCache()
+    {
+        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DysonHarness");
+        var cache = Path.Combine(root, "cef-cache");
+        if (!Directory.Exists(cache))
+            return VoidResult<string>.Success;
+
+        try
+        {
+            var lockFile = Path.Combine(root, "lockfile");
+            if (File.Exists(lockFile))
+            {
+                // A running CefSharp DysonHarness.exe holds this open; probing with FileShare.None fails then.
+                using (new FileStream(lockFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                }
+            }
+
+            Directory.Delete(cache, recursive: true);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new VoidResult<string>("Legacy cef-cache not removed (an older DysonHarness may be running): " + ex.Message);
+        }
     }
 
     /// <summary>

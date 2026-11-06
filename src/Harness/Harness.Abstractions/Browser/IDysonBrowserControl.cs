@@ -1,7 +1,7 @@
 namespace DysonHarness;
 
 /// <summary>
-/// Process-wide browser control (Windows CefSharp host today; null/unavailable elsewhere).
+/// Process-wide browser control (Windows WebView2 host, macOS WKWebView host; null elsewhere).
 /// Register as a DI singleton from the UI host.
 /// </summary>
 public interface IDysonBrowserControl
@@ -26,7 +26,7 @@ public interface IDysonBrowserControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Clear the shared CEF HTTP cache once, then hard-reload every tab in every open agent window.
+    /// Clear the agent browser HTTP cache once, then hard-reload every tab in every open agent window.
     /// Does not clear cookies or site storage. Empty window list is success with zeros.
     /// </summary>
     Task<Result<DysonBrowserCacheClearResult, string>> ClearBrowserCacheAsync(

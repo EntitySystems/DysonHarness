@@ -72,7 +72,7 @@ internal static class DysonWebView2Interop
 
     /// <summary>
     /// CDP <c>Runtime.consoleAPICalled</c> / <c>Runtime.exceptionThrown</c> params → a console entry.
-    /// Levels match the CefSharp names (Info, Warning, Error, Verbose). Lines are 1-based.
+    /// Levels match the previous host names (Info, Warning, Error, Verbose). Lines are 1-based.
     /// </summary>
     internal static DysonBrowserConsoleEntry? ParseConsoleEvent(string eventName, string? json, DateTimeOffset timestamp)
     {

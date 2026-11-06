@@ -47,7 +47,7 @@ jobs:
             -p:PublishSingleFile=false `
             -o artifacts/win-arm64
           if ($LASTEXITCODE -ne 0) { throw "win-arm64 publish failed with exit $LASTEXITCODE" }
-          foreach ($native in "libcef.dll", "CefSharp.BrowserSubprocess.exe") {
+          foreach ($native in "WebView2Loader.dll", "Microsoft.Web.WebView2.Core.dll") {
             if (-not (Test-Path "artifacts/win-arm64/$native")) {
               throw "win-arm64 publish is missing $native"
             }

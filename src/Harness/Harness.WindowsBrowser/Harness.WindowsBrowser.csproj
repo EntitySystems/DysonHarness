@@ -10,8 +10,6 @@
     <PlatformTarget Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</PlatformTarget>
     <PlatformTarget Condition="'$(RuntimeIdentifier)' != 'win-arm64'">x64</PlatformTarget>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <!-- Library default is NoAction; force Default so locales/paks copy and can flow to Harness.UI. -->
-    <CefSharpBuildAction>Default</CefSharpBuildAction>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,8 +24,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="CefSharp.Wpf.NETCore" Version="149.0.40" />
-    <PackageReference Include="CefSharp.Wpf.HwndHost" Version="149.0.40" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
     <!-- Live speech playback (DysonWindowsAudioPlayback). Windows-only project; never reference from Engine/UI. -->
     <PackageReference Include="NAudio.WinMM" Version="3.2.0" />

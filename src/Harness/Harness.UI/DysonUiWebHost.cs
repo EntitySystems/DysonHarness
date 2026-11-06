@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Harness.UI;
 
-/// <summary>Shared Blazor Interactive Server host used by CLI <c>Harness.UI</c> and the Windows CEF shell.</summary>
+/// <summary>Shared Blazor Interactive Server host used by CLI <c>Harness.UI</c> and the Windows WebView2 shell.</summary>
 public static class DysonUiWebHost
 {
     public static WebApplication Create(string[] args, DysonUiWebHostOptions? options = null)

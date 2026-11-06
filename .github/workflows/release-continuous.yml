@@ -62,7 +62,7 @@ jobs:
         include:
           - rid: win-x64
             os: windows-latest
-          # Cross-published from the x64 Windows runner. CefSharp ships chromiumembeddedframework.runtime.win-arm64.
+          # Cross-published from the x64 Windows runner. WebView2 is the OS runtime; the package ships an arm64 WebView2Loader.dll.
           - rid: win-arm64
             os: windows-latest
           - rid: linux-x64
@@ -487,7 +487,7 @@ jobs:
           | **Commit** | \`${GITHUB_SHA}\` (\`${SHORT_SHA}\`) |
           | **Workflow** | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |
 
-          **Windows:** prefer the MSI for a per-user install (Start Menu shortcut + Apps & Features as **Dyson Harness**, manufacturer **Entity Systems**). \`DysonHarness-${VERSION}-win-x64.msi\` is the existing x64 install. \`DysonHarness-${VERSION}-win-arm64.msi\` is a separate ARM64 install (its own upgrade code and \`%LocalAppData%\\Programs\\DysonHarness-arm64\`). Zips remain portable. Each MSI needs the matching VC++ 2022 redistributable (x64 or ARM64). An x64 install running under emulation on an ARM device stays on the x64 MSI. **Linux:** unzip and run \`Harness.UI\`. **macOS:** install \`DysonHarness-${VERSION}-osx-arm64.pkg\` (Apple Silicon) or \`DysonHarness-${VERSION}-osx-x64.pkg\` (Intel). The package is Developer ID signed and notarized. A stable package installs **Dyson Harness** (\`/Applications/Dyson Harness.app\`); a preview package installs **Dyson Harness (Preview)** (\`/Applications/Dyson Harness (Preview).app\`). The zip is that same stapled app. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
+          **Windows:** prefer the MSI for a per-user install (Start Menu shortcut + Apps & Features as **Dyson Harness**, manufacturer **Entity Systems**). \`DysonHarness-${VERSION}-win-x64.msi\` is the existing x64 install. \`DysonHarness-${VERSION}-win-arm64.msi\` is a separate ARM64 install (its own upgrade code and \`%LocalAppData%\\Programs\\DysonHarness-arm64\`). Zips remain portable. Windows needs the Microsoft Edge WebView2 Runtime (preinstalled on Windows 11 and current Windows 10). An x64 install running under emulation on an ARM device stays on the x64 MSI. **Linux:** unzip and run \`Harness.UI\`. **macOS:** install \`DysonHarness-${VERSION}-osx-arm64.pkg\` (Apple Silicon) or \`DysonHarness-${VERSION}-osx-x64.pkg\` (Intel). The package is Developer ID signed and notarized. A stable package installs **Dyson Harness** (\`/Applications/Dyson Harness.app\`); a preview package installs **Dyson Harness (Preview)** (\`/Applications/Dyson Harness (Preview).app\`). The zip is that same stapled app. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
           EOF
           sed -i 's/^          //' "${RUNNER_TEMP}/continuous-notes.md"
 

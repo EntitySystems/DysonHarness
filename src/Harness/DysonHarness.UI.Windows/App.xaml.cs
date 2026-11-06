@@ -44,6 +44,8 @@ public partial class App : Application
             }
 
             DysonWindowsStaHost.AttachToExistingApplication();
+            // Pre-WebView2 builds left a Chromium cache here; drop it once nothing holds it.
+            _ = Task.Run(DysonWindowsStaHost.TryDeleteLegacyCefCache);
 
             _webHostCts = new CancellationTokenSource();
             var options = new DysonUiWebHostOptions

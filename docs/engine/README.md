@@ -338,7 +338,7 @@ Same platform gate as `ShellExecute` (omitted when no shells). Plan soft-warns o
 
 ### Browser control
 
-Optional process-wide `IDysonBrowserControl` on `DysonAgentSessionConfig.BrowserControl` (Windows: CefSharp WPF via `Harness.WindowsBrowser`; see [packaging/webview](../packaging/webview.md)). When null, browser tools are **omitted** from the MCP catalog. Meta Agent root keeps this set when `BrowserControl` is set.
+Optional process-wide `IDysonBrowserControl` on `DysonAgentSessionConfig.BrowserControl` (Windows: WebView2 WPF via `Harness.WindowsBrowser`; macOS: WKWebView via `Harness.MacBrowser`; see [packaging/webview](../packaging/webview.md)). When null, browser tools are **omitted** from the MCP catalog. Meta Agent root keeps this set when `BrowserControl` is set.
 
 | Tool | Behavior |
 | ---- | -------- |
@@ -346,7 +346,7 @@ Optional process-wide `IDysonBrowserControl` on `DysonAgentSessionConfig.Browser
 | `ListBrowserWindows` / `CloseBrowser` / `ResizeBrowser` | Window list / close / resize |
 | `ListBrowserTabs` / `NewBrowserTab` / `CloseBrowserTab` / `ActivateBrowserTab` | Tab management |
 | `BrowserNavigate` / `BrowserGoBack` / `BrowserGoForward` / `BrowserReload` | Navigation |
-| `ClearBrowserCache` | Clear shared CEF HTTP cache once, then hard-reload every tab in every open agent window. Does not clear cookies/storage. Empty windows → `{ windows: 0, tabsReloaded: 0 }`. Profile-wide: agent + shell share `%LocalAppData%\DysonHarness\cef-cache` (shell is not hard-reloaded) |
+| `ClearBrowserCache` | Clear the agent browser HTTP cache once (Windows: agent WebView2 profile), then hard-reload every tab in every open agent window. Does not clear cookies/storage. Empty windows → `{ windows: 0, tabsReloaded: 0 }`. The Windows shell uses a separate profile and is untouched |
 | `BrowserClick` / `BrowserType` / `BrowserFill` / `BrowserHover` / `BrowserPressKey` | Interaction (JS helpers for click/type/etc.) |
 | `BrowserWaitForSelector` / `BrowserWaitForNavigation` | Waits |
 | `BrowserExecuteJavaScript` / `BrowserGetHtml` / `BrowserTakeScreenshot` | Page inspection (screenshot via DevTools CDP). JS/HTML evaluation races the linked timeout token so `BrowserExecuteJavaScript` cannot hang forever |
