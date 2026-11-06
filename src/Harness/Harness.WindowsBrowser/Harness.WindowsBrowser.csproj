@@ -21,11 +21,14 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Harness.Tests" />
+    <!-- Desktop shell (DysonHarness.UI.Windows) reuses DysonWebView2Interop. -->
+    <InternalsVisibleTo Include="DysonHarness" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="CefSharp.Wpf.NETCore" Version="149.0.40" />
     <PackageReference Include="CefSharp.Wpf.HwndHost" Version="149.0.40" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
     <!-- Live speech playback (DysonWindowsAudioPlayback). Windows-only project; never reference from Engine/UI. -->
     <PackageReference Include="NAudio.WinMM" Version="3.2.0" />
   </ItemGroup>

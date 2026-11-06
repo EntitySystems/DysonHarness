@@ -174,7 +174,7 @@ public static class DysonUiWebHost
             .AddHttpMessageHandler<OpenAiCodexRequestHandler>();
         builder.Services.AddScoped<ManagedInferenceProviderCatalog>();
 #if WINDOWS
-        builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
+        builder.Services.AddSingleton<IDysonBrowserControl, DysonWebView2BrowserControl>();
         builder.Services.AddSingleton<IDysonAudioPlayback, DysonWindowsAudioPlayback>();
         builder.Services.AddSingleton<IDysonAudioCapture, DysonWindowsAudioCapture>();
 #endif
