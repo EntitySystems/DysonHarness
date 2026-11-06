@@ -10,7 +10,7 @@ using System.Windows.Shapes;
 
 namespace DysonHarness;
 
-internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
+internal sealed class DysonWindowsBrowserWindow : Window, IDysonBrowserWindow
 {
     private static readonly Brush Bg0 = Brush("#0c0e11");
     private static readonly Brush Bg1 = Brush("#12151a");
@@ -25,8 +25,8 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
     private static readonly Brush SnipSelectionStroke = Brush("#4c8bf5");
     private static readonly Brush SnipSelectionFill = Brush("#334c8bf5");
 
-    private readonly DysonCefBrowserControl _owner;
-    private readonly ConcurrentDictionary<string, DysonCefBrowserTab> _tabs = new(StringComparer.Ordinal);
+    private readonly DysonWebView2BrowserControl _owner;
+    private readonly ConcurrentDictionary<string, DysonWebView2BrowserTab> _tabs = new(StringComparer.Ordinal);
     private readonly StackPanel _tabStrip;
     private readonly TextBox _urlBox;
     private readonly Button _backButton;
@@ -46,7 +46,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
     private double? _snipViewportHeight;
     private bool _snipCapturing;
 
-    public DysonCefBrowserWindow(DysonCefBrowserControl owner, string? initialUrl, int width, int height)
+    public DysonWindowsBrowserWindow(DysonWebView2BrowserControl owner, string? initialUrl, int width, int height)
     {
         _owner = owner;
         Id = Guid.NewGuid().ToString("N");
@@ -87,11 +87,11 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         };
         DockPanel.SetDock(nav, Dock.Top);
 
-        _backButton = MakeIconButton("←", "Back");
+        _backButton = MakeIconButton("â†", "Back");
         _backButton.Click += (_, _) => _ = ActiveTab()?.GoBackAsync();
-        _forwardButton = MakeIconButton("→", "Forward");
+        _forwardButton = MakeIconButton("â†’", "Forward");
         _forwardButton.Click += (_, _) => _ = ActiveTab()?.GoForwardAsync();
-        _reloadButton = MakeIconButton("↻", "Reload");
+        _reloadButton = MakeIconButton("â†»", "Reload");
         _reloadButton.Click += (_, _) => _ = ActiveTab()?.ReloadAsync();
 
         var navButtons = new StackPanel
@@ -106,7 +106,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         DockPanel.SetDock(navButtons, Dock.Left);
         nav.Children.Add(navButtons);
 
-        _snipButton = MakeIconButton("✂", "Snip page region into agent prompt");
+        _snipButton = MakeIconButton("âœ‚", "Snip page region into agent prompt");
         _snipButton.Click += (_, _) => _ = EnterSnipModeAsync();
         DockPanel.SetDock(_snipButton, Dock.Right);
         nav.Children.Add(_snipButton);
@@ -132,6 +132,9 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         root.Children.Add(_contentHost);
         Content = root;
 
+        // The HWND child takes keyboard focus; clicking WPF chrome (URL box, chips) must pull it back.
+        _urlBox.PreviewMouseDown += (_, _) => _urlBox.Focus();
+
         Closed += (_, _) =>
         {
             foreach (var tab in _tabs.Values.ToArray())
@@ -145,11 +148,11 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
 
     public string Id { get; }
 
-    internal DysonCefBrowserTab[] SnapshotTabs() => _tabs.Values.ToArray();
+    internal DysonWebView2BrowserTab[] SnapshotTabs() => _tabs.Values.ToArray();
 
     public Task<Result<IReadOnlyList<IDysonBrowserTab>, string>> ListTabsAsync(
         CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
+        DysonWindowsStaHost.InvokeAsync(() =>
         {
             IReadOnlyList<IDysonBrowserTab> list = _tabs.Values.Cast<IDysonBrowserTab>().ToArray();
             return Result<IReadOnlyList<IDysonBrowserTab>, string>.AsValue(list);
@@ -158,7 +161,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
     public Task<Result<IDysonBrowserTab, string>> NewTabAsync(
         string? url = null,
         CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
+        DysonWindowsStaHost.InvokeAsync(() =>
         {
             var tab = NewTabCore(url);
             return Result<IDysonBrowserTab, string>.AsValue(tab);
@@ -167,7 +170,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
     public Task<VoidResult<string>> CloseTabAsync(
         string tabId,
         CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
+        DysonWindowsStaHost.InvokeAsync(() =>
         {
             if (!_tabs.TryRemove(tabId, out var tab))
                 return new VoidResult<string>($"Tab not found: {tabId}");
@@ -190,7 +193,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
     public Task<VoidResult<string>> ActivateTabAsync(
         string tabId,
         CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
+        DysonWindowsStaHost.InvokeAsync(() =>
         {
             if (!_tabs.ContainsKey(tabId))
                 return new VoidResult<string>($"Tab not found: {tabId}");
@@ -199,7 +202,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         });
 
     public Task<VoidResult<string>> CloseAsync(CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
+        DysonWindowsStaHost.InvokeAsync(() =>
         {
             Close();
             return VoidResult<string>.Success;
@@ -209,7 +212,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         int width,
         int height,
         CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
+        DysonWindowsStaHost.InvokeAsync(() =>
         {
             if (width < 200 || height < 200)
                 return new VoidResult<string>("Width and height must be at least 200.");
@@ -219,7 +222,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         });
 
     public Task<VoidResult<string>> BringToFrontAsync(CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
+        DysonWindowsStaHost.InvokeAsync(() =>
         {
             if (WindowState == WindowState.Minimized)
                 WindowState = WindowState.Normal;
@@ -230,7 +233,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
             return VoidResult<string>.Success;
         });
 
-    internal DysonCefBrowserTab? TryGetTab(string tabId) =>
+    internal DysonWebView2BrowserTab? TryGetTab(string tabId) =>
         _tabs.TryGetValue(tabId, out var tab) ? tab : null;
 
     internal void SyncAddress(string tabId, string? address, string? title)
@@ -241,17 +244,17 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         if (address is not null)
             _urlBox.Text = address;
         if (!string.IsNullOrWhiteSpace(title))
-            Title = title + " — Dyson Browser";
+            Title = title + " â€” Dyson Browser";
 
         UpdateTabChipTitle(tabId, string.IsNullOrWhiteSpace(title) ? (address ?? "New tab") : title);
     }
 
-    private DysonCefBrowserTab? ActiveTab() =>
+    private DysonWebView2BrowserTab? ActiveTab() =>
         _activeTabId is not null && _tabs.TryGetValue(_activeTabId, out var tab) ? tab : null;
 
-    private DysonCefBrowserTab NewTabCore(string? url)
+    private DysonWebView2BrowserTab NewTabCore(string? url)
     {
-        var tab = new DysonCefBrowserTab(this, url);
+        var tab = new DysonWebView2BrowserTab(this, url);
         _tabs[tab.Id] = tab;
         AddTabChip(tab);
         ActivateTabCore(tab.Id);
@@ -269,7 +272,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
             _urlBox.Text = tab.CurrentAddress ?? "";
             Title = string.IsNullOrWhiteSpace(tab.CurrentTitle)
                 ? "Dyson Browser"
-                : tab.CurrentTitle + " — Dyson Browser";
+                : tab.CurrentTitle + " â€” Dyson Browser";
         }
 
         RefreshTabChipStyles();
@@ -307,7 +310,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
                 bitmap.Freeze();
             }
 
-            // Hide HwndHost so the WPF overlay can receive mouse (HWND airspace).
+            // Hide the WebView2 HWND so the WPF overlay can receive mouse (HWND airspace).
             tab.BrowserControl.Visibility = Visibility.Collapsed;
 
             var overlay = new Grid
@@ -531,7 +534,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
     }
 
     private static async Task<(double ScrollY, double ScrollHeight, double ViewportHeight)?> TryReadScrollMetricsAsync(
-        DysonCefBrowserTab tab)
+        DysonWebView2BrowserTab tab)
     {
         try
         {
@@ -572,7 +575,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         _ = ActiveTab()?.NavigateAsync(url);
     }
 
-    private void AddTabChip(DysonCefBrowserTab tab)
+    private void AddTabChip(DysonWebView2BrowserTab tab)
     {
         var chip = new Border
         {
@@ -595,7 +598,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         var row = new DockPanel { LastChildFill = true };
         var close = new Button
         {
-            Content = "×",
+            Content = "Ã—",
             Width = 20,
             Height = 20,
             Margin = new Thickness(6, 0, 0, 0),

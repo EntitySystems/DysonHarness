@@ -15,7 +15,6 @@
     <SelfContained Condition="'$(SelfContained)' == ''">false</SelfContained>
     <ApplicationIcon>Assets\dyson.ico</ApplicationIcon>
     <ApplicationManifest>..\Harness.WindowsBrowser\app.manifest</ApplicationManifest>
-    <CefSharpBuildAction>Default</CefSharpBuildAction>
     <!-- Shell hosts Blazor from Harness.UI; no local Razor pages. -->
     <EnableDefaultContentItems>true</EnableDefaultContentItems>
   </PropertyGroup>
@@ -23,10 +22,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Harness.UI\Harness.UI.csproj" />
     <ProjectReference Include="..\Harness.WindowsBrowser\Harness.WindowsBrowser.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="CefSharp.Wpf.NETCore" Version="149.0.40" />
   </ItemGroup>
 
   <ItemGroup>

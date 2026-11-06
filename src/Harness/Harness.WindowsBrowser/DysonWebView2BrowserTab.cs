@@ -1,113 +1,142 @@
 using System.Collections.Concurrent;
-using System.ComponentModel;
 using System.Text.Json;
 using System.Windows;
-using CefSharp;
-using CefSharp.Wpf.HwndHost;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
 
 namespace DysonHarness;
 
-internal sealed class DysonCefBrowserTab : IDysonBrowserTab
+/// <summary>
+/// Agent browser tab on the HWND-hosted WPF <see cref="WebView2"/> (profile <c>agent</c>). Every CoreWebView2 call
+/// runs on the <see cref="DysonWindowsStaHost"/> dispatcher after <see cref="_init"/> completes.
+/// </summary>
+internal sealed class DysonWebView2BrowserTab : IDysonBrowserTab
 {
-    private readonly DysonCefBrowserWindow _window;
+    private readonly DysonWindowsBrowserWindow _window;
     private readonly ConcurrentQueue<DysonBrowserConsoleEntry> _console = new();
     private readonly ConcurrentQueue<DysonBrowserNetworkEntry> _network = new();
     private readonly object _navGate = new();
+    private readonly Task<VoidResult<string>> _init;
     private TaskCompletionSource? _navTcs;
 
-    public DysonCefBrowserTab(DysonCefBrowserWindow window, string? initialUrl)
+    /// <summary>Must be constructed on the STA dispatcher thread.</summary>
+    public DysonWebView2BrowserTab(DysonWindowsBrowserWindow window, string? initialUrl)
     {
         _window = window;
         Id = Guid.NewGuid().ToString("N");
         WindowId = window.Id;
 
-        // Windowed HwndHost so WebGPU/WebGL present into a real HWND (OSR bitmap path stays black).
-        // Snip uses a CDP screenshot overlay because HWND airspace blocks live WPF rubber-bands.
-        BrowserControl = new ChromiumWebBrowser(string.IsNullOrWhiteSpace(initialUrl) ? "about:blank" : initialUrl)
+        // Windowed (HwndHost) so WebGPU/WebGL present into a real HWND. Snip uses a CDP screenshot overlay
+        // because HWND airspace blocks live WPF rubber-bands.
+        BrowserControl = new WebView2
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
-            ActivateBrowserOnCreation = true,
-            BrowserSettings = new BrowserSettings
-            {
-                WebGl = CefState.Enabled,
-            },
+            DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 0x0c, 0x0e, 0x11),
         };
-        // Agent windows only. The shell OSR view does not set PermissionHandler.
-        BrowserControl.PermissionHandler = new DysonAgentBrowserPermissionHandler();
+        _init = InitializeAsync(string.IsNullOrWhiteSpace(initialUrl) ? "about:blank" : initialUrl);
+    }
 
-        BrowserControl.IsBrowserInitializedChanged += (_, _) => NudgeHwndLayoutIfNeeded();
-        BrowserControl.Loaded += (_, _) => NudgeHwndLayoutIfNeeded();
+    public string Id { get; }
+    public string WindowId { get; }
+    public WebView2 BrowserControl { get; }
+    public string? CurrentAddress { get; private set; }
+    public string? CurrentTitle { get; private set; }
 
-        // HwndHost exposes Address as a DP but no AddressChanged event (unlike OSR Wpf).
-        DependencyPropertyDescriptor
-            .FromProperty(ChromiumWebBrowser.AddressProperty, typeof(ChromiumWebBrowser))
-            ?.AddValueChanged(BrowserControl, (_, _) =>
+    /// <summary>Agent profile of this tab once initialized (ClearBrowserCache target).</summary>
+    internal CoreWebView2Profile? Profile => BrowserControl.CoreWebView2?.Profile;
+
+    private async Task<VoidResult<string>> InitializeAsync(string url)
+    {
+        try
+        {
+            var env = await DysonWindowsStaHost.GetEnvironmentAsync().ConfigureAwait(true);
+            if (env.IsError)
+                return VoidResult<string>.AsError(env.Error);
+
+            var options = env.Value.CreateCoreWebView2ControllerOptions();
+            options.ProfileName = DysonWebView2Interop.AgentProfile;
+            // Completes once the control has an HWND (the window keeps every tab in its visual tree).
+            await BrowserControl.EnsureCoreWebView2Async(env.Value, options).ConfigureAwait(true);
+            var core = BrowserControl.CoreWebView2;
+
+            core.SourceChanged += (_, _) =>
             {
-                CurrentAddress = BrowserControl.Address;
+                CurrentAddress = core.Source;
                 _window.SyncAddress(Id, CurrentAddress, CurrentTitle);
-            });
-        BrowserControl.TitleChanged += (_, e) =>
-        {
-            CurrentTitle = e.NewValue as string ?? BrowserControl.Title;
-            _window.SyncAddress(Id, CurrentAddress, CurrentTitle);
-        };
-        BrowserControl.LoadingStateChanged += (_, e) =>
-        {
-            if (!e.IsLoading)
+            };
+            core.DocumentTitleChanged += (_, _) =>
             {
+                CurrentTitle = core.DocumentTitle;
+                _window.SyncAddress(Id, CurrentAddress, CurrentTitle);
+            };
+            core.NavigationCompleted += (_, e) =>
+            {
+                _network.Enqueue(new DysonBrowserNetworkEntry
+                {
+                    Url = core.Source ?? CurrentAddress ?? "",
+                    Method = "GET",
+                    Status = e.HttpStatusCode > 0 ? e.HttpStatusCode : null,
+                    Timestamp = DateTimeOffset.UtcNow,
+                });
                 lock (_navGate)
                 {
                     _navTcs?.TrySetResult();
                     _navTcs = null;
                 }
-            }
-        };
-        BrowserControl.ConsoleMessage += (_, e) =>
-        {
-            _console.Enqueue(new DysonBrowserConsoleEntry
+            };
+            core.PermissionRequested += (_, e) =>
+                e.State = DysonWebView2Interop.DecidePermission(e.PermissionKind, isShell: false);
+            // window.open / target=_blank → new tab in this window (matches macOS).
+            core.NewWindowRequested += (_, e) =>
             {
-                Level = e.Level.ToString(),
-                Message = e.Message ?? "",
-                Source = e.Source,
-                Line = e.Line,
-                Timestamp = DateTimeOffset.UtcNow,
-            });
-        };
-        BrowserControl.FrameLoadEnd += (_, e) =>
-        {
-            if (e.Frame.IsMain)
+                e.Handled = true;
+                _ = _window.NewTabAsync(e.Uri);
+            };
+
+            foreach (var name in new[] { "Runtime.consoleAPICalled", "Runtime.exceptionThrown" })
             {
-                _network.Enqueue(new DysonBrowserNetworkEntry
+                core.GetDevToolsProtocolEventReceiver(name).DevToolsProtocolEventReceived += (_, e) =>
                 {
-                    Url = e.Url ?? CurrentAddress ?? "",
-                    Method = "GET",
-                    Status = 200,
-                    Timestamp = DateTimeOffset.UtcNow,
-                });
+                    if (DysonWebView2Interop.ParseConsoleEvent(name, e.ParameterObjectAsJson, DateTimeOffset.UtcNow) is { } entry)
+                        _console.Enqueue(entry);
+                };
             }
-        };
+
+            await core.CallDevToolsProtocolMethodAsync("Runtime.enable", "{}").ConfigureAwait(true);
+            core.Navigate(url);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError("WebView2 tab failed to initialize: " + ex.Message, ex);
+        }
     }
 
-    public string Id { get; }
-    public string WindowId { get; }
-    public ChromiumWebBrowser BrowserControl { get; }
-    public string? CurrentAddress { get; private set; }
-    public string? CurrentTitle { get; private set; }
+    private Task<Result<T, string>> WithCoreAsync<T>(Func<CoreWebView2, Task<Result<T, string>>> action) =>
+        DysonWindowsStaHost.InvokeAsync(async () =>
+        {
+            var ready = await _init.ConfigureAwait(true);
+            if (ready.IsError)
+                return Result<T, string>.AsError(ready.Error);
+            try
+            {
+                return await action(BrowserControl.CoreWebView2).ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                return Result<T, string>.AsError(ex.Message, ex);
+            }
+        });
 
-    /// <summary>
-    /// Force a layout pass when the HwndHost is still ~0×0 so WebGPU swapchains are not created against an empty HWND.
-    /// </summary>
-    private void NudgeHwndLayoutIfNeeded()
+    private async Task<VoidResult<string>> WithCoreAsync(Action<CoreWebView2> action)
     {
-        if (BrowserControl.ActualWidth >= 1 && BrowserControl.ActualHeight >= 1)
-            return;
-
-        BrowserControl.InvalidateMeasure();
-        BrowserControl.InvalidateArrange();
-        BrowserControl.UpdateLayout();
-        _window.InvalidateMeasure();
-        _window.UpdateLayout();
+        var result = await WithCoreAsync(core =>
+        {
+            action(core);
+            return Task.FromResult(Result<bool, string>.AsValue(true));
+        }).ConfigureAwait(false);
+        return result.IsError ? VoidResult<string>.AsError(result.Error) : VoidResult<string>.Success;
     }
 
     public void DisposeBrowser()
@@ -123,43 +152,46 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
     }
 
     public Task<Result<string, string>> GetUrlAsync(CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
-            Result<string, string>.AsValue(CurrentAddress ?? BrowserControl.Address ?? ""));
+        DysonWindowsStaHost.InvokeAsync(() =>
+            Result<string, string>.AsValue(CurrentAddress ?? BrowserControl.CoreWebView2?.Source ?? ""));
 
     public Task<Result<string, string>> GetTitleAsync(CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
-            Result<string, string>.AsValue(CurrentTitle ?? BrowserControl.Title ?? ""));
+        DysonWindowsStaHost.InvokeAsync(() =>
+            Result<string, string>.AsValue(CurrentTitle ?? BrowserControl.CoreWebView2?.DocumentTitle ?? ""));
 
-    public Task<VoidResult<string>> NavigateAsync(string url, CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
-        {
-            if (string.IsNullOrWhiteSpace(url))
-                return new VoidResult<string>("url is required");
-            BrowserControl.Load(url);
-            return VoidResult<string>.Success;
-        });
+    public Task<VoidResult<string>> NavigateAsync(string url, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return Task.FromResult(new VoidResult<string>("url is required"));
+        return WithCoreAsync(core => core.Navigate(url));
+    }
 
     public Task<VoidResult<string>> ReloadAsync(CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
+        WithCoreAsync(core => core.Reload());
+
+    /// <summary>Reload bypassing the HTTP cache (CDP <c>Page.reload</c>).</summary>
+    internal async Task<VoidResult<string>> HardReloadAsync()
+    {
+        var result = await WithCoreAsync(async core =>
         {
-            BrowserControl.Reload();
-            return VoidResult<string>.Success;
-        });
+            await core.CallDevToolsProtocolMethodAsync("Page.reload", """{"ignoreCache":true}""").ConfigureAwait(true);
+            return Result<bool, string>.AsValue(true);
+        }).ConfigureAwait(false);
+        return result.IsError ? VoidResult<string>.AsError(result.Error) : VoidResult<string>.Success;
+    }
 
     public Task<VoidResult<string>> GoBackAsync(CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
+        WithCoreAsync(core =>
         {
-            if (BrowserControl.CanGoBack)
-                BrowserControl.Back();
-            return VoidResult<string>.Success;
+            if (core.CanGoBack)
+                core.GoBack();
         });
 
     public Task<VoidResult<string>> GoForwardAsync(CancellationToken cancellationToken = default) =>
-        DysonCefStaHost.InvokeAsync(() =>
+        WithCoreAsync(core =>
         {
-            if (BrowserControl.CanGoForward)
-                BrowserControl.Forward();
-            return VoidResult<string>.Success;
+            if (core.CanGoForward)
+                core.GoForward();
         });
 
     public async Task<VoidResult<string>> ClickAsync(
@@ -235,8 +267,8 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
         while (Environment.TickCount64 < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var js = DysonBrowserDomScripts.SelectorProbe(sel);
-            var result = await ExecuteJavaScriptAsync(js, cancellationToken).ConfigureAwait(false);
+            var result = await ExecuteJavaScriptAsync(DysonBrowserDomScripts.SelectorProbe(sel), cancellationToken)
+                .ConfigureAwait(false);
             if (result.IsError)
                 return new VoidResult<string>(result.Error);
             if (string.Equals(result.Value, "ok", StringComparison.Ordinal))
@@ -277,39 +309,35 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
         if (string.IsNullOrWhiteSpace(code))
             return Result<string, string>.AsError("code is required");
 
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        linked.Token.ThrowIfCancellationRequested();
-
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            // Race eval against linked CT — do not plumb CT into STA host (this change).
-            var evalTask = DysonCefStaHost.InvokeAsync(async () =>
+            // Race eval against the caller's token; the STA call itself cannot be aborted.
+            var evalTask = WithCoreAsync(async core =>
             {
-                var r = await BrowserControl.EvaluateScriptAsync(code).ConfigureAwait(true);
-                return r;
+                var r = await core.ExecuteScriptWithResultAsync(code).ConfigureAwait(true);
+                if (!r.Succeeded)
+                {
+                    var message = r.Exception?.Message;
+                    return Result<string, string>.AsError(
+                        string.IsNullOrWhiteSpace(message) ? "JavaScript evaluation failed." : message);
+                }
+
+                return Result<string, string>.AsValue(DysonWebView2Interop.UnwrapScriptResult(r.ResultAsJson));
             });
-            var delayTask = Task.Delay(Timeout.Infinite, linked.Token);
+            var delayTask = Task.Delay(Timeout.Infinite, cancellationToken);
             var winner = await Task.WhenAny(evalTask, delayTask).ConfigureAwait(false);
             if (winner != evalTask)
             {
-                if (cancellationToken.IsCancellationRequested)
-                    cancellationToken.ThrowIfCancellationRequested();
+                cancellationToken.ThrowIfCancellationRequested();
                 return Result<string, string>.AsError("JavaScript evaluation timed out.");
             }
 
-            var response = await evalTask.ConfigureAwait(false);
-            if (!response.Success)
-                return Result<string, string>.AsError(response.Message ?? "JavaScript evaluation failed.");
-
-            return Result<string, string>.AsValue(response.Result?.ToString() ?? "");
+            return await evalTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
-        }
-        catch (OperationCanceledException)
-        {
-            return Result<string, string>.AsError("JavaScript evaluation timed out.");
         }
         catch (Exception ex)
         {
@@ -331,26 +359,24 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
 
         try
         {
-            // Race CDP against linked CT — do not plumb CT into STA host (this change).
-            var cdpTask = DysonCefStaHost.InvokeAsync(async () =>
+            // CDP capture includes WebGPU/WebGL pixels (CapturePreviewAsync may not).
+            var cdpTask = WithCoreAsync(async core =>
             {
-                using var client = BrowserControl.GetDevToolsClient();
-                var shot = await client.Page.CaptureScreenshotAsync().ConfigureAwait(true);
-                return shot.Data;
+                var json = await core.CallDevToolsProtocolMethodAsync("Page.captureScreenshot", "{}").ConfigureAwait(true);
+                return DysonWebView2Interop.ParseScreenshotData(json);
             });
             var delayTask = Task.Delay(Timeout.Infinite, linked.Token);
             var winner = await Task.WhenAny(cdpTask, delayTask).ConfigureAwait(false);
             if (winner != cdpTask)
             {
-                if (cancellationToken.IsCancellationRequested)
-                    cancellationToken.ThrowIfCancellationRequested();
+                cancellationToken.ThrowIfCancellationRequested();
                 return Result<byte[], string>.AsError($"Screenshot timed out after {timeout}ms.");
             }
 
-            var bytes = await cdpTask.ConfigureAwait(false);
-            if (bytes is null || bytes.Length == 0)
-                return Result<byte[], string>.AsError("Screenshot capture returned empty.");
-            return Result<byte[], string>.AsValue(bytes);
+            var shot = await cdpTask.ConfigureAwait(false);
+            return shot.IsError
+                ? Result<byte[], string>.AsError("TakeScreenshot not available or failed: " + shot.Error)
+                : shot;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -362,8 +388,7 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
         }
         catch (Exception ex)
         {
-            return Result<byte[], string>.AsError(
-                "TakeScreenshot not available or failed: " + ex.Message);
+            return Result<byte[], string>.AsError("TakeScreenshot not available or failed: " + ex.Message);
         }
     }
 
@@ -377,7 +402,7 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
     public Task<Result<IReadOnlyList<DysonBrowserNetworkEntry>, string>> ReadNetworkLogAsync(
         CancellationToken cancellationToken = default)
     {
-        // Thin stub: only main-frame load ends until CDP request logging is wired.
+        // Main-frame navigations only (real HTTP status); no full CDP Network.* log.
         IReadOnlyList<DysonBrowserNetworkEntry> list = _network.ToArray();
         return Task.FromResult(Result<IReadOnlyList<DysonBrowserNetworkEntry>, string>.AsValue(list));
     }

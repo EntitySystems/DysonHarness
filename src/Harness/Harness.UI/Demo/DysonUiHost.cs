@@ -1869,7 +1869,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// </summary>
     public string? FocusedSessionWorkRootPath => SessionWorkDirectoryPath(_session);
 
-    /// <summary>True when a process-wide browser control is registered (Windows CefSharp).</summary>
+    /// <summary>True when a process-wide browser control is registered (Windows WebView2 / macOS WKWebView).</summary>
     public bool IsBrowserControlAvailable => _browserControl is not null;
 
     /// <summary>True when the long-running shells modal is open.</summary>
@@ -1903,7 +1903,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             : DysonLongRunningShellRegistry.List(wd, path);
     }
 
-    /// <summary>Opens a CefSharp browser window (default blank page). Maps failures to <see cref="LastError"/>.</summary>
+    /// <summary>Opens an agent browser window (default blank page). Maps failures to <see cref="LastError"/>.</summary>
     public async Task OpenBrowserAsync(CancellationToken cancellationToken = default)
     {
         if (_browserControl is null)

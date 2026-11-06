@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace DysonHarness;
 
 /// <summary>
-/// DOM automation scripts shared by the Windows CefSharp tab and the macOS WKWebView tab.
+/// DOM automation scripts shared by the Windows WebView2 tab and the macOS WKWebView tab.
 /// Synthetic JS events, not OS input.
 /// </summary>
 public static class DysonBrowserDomScripts

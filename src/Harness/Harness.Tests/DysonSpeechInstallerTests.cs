@@ -929,18 +929,11 @@ public class DysonSpeechInstallerTests
     public void Shell_mic_grants_audio_capture_only()
     {
         Assert.Equal(
-            CefSharp.MediaAccessPermissionType.AudioCapture,
-            DysonShellMicPermission.GrantMedia(CefSharp.MediaAccessPermissionType.AudioCapture));
-        Assert.Null(DysonShellMicPermission.GrantMedia(CefSharp.MediaAccessPermissionType.VideoCapture));
-        Assert.Null(DysonShellMicPermission.GrantMedia(
-            CefSharp.MediaAccessPermissionType.AudioCapture | CefSharp.MediaAccessPermissionType.VideoCapture));
-        Assert.Null(DysonShellMicPermission.GrantMedia(CefSharp.MediaAccessPermissionType.DesktopAudioCapture));
+            Microsoft.Web.WebView2.Core.CoreWebView2PermissionState.Allow,
+            DysonWebView2Interop.DecidePermission(Microsoft.Web.WebView2.Core.CoreWebView2PermissionKind.Microphone, isShell: true));
         Assert.Equal(
-            CefSharp.PermissionRequestResult.Accept,
-            DysonShellMicPermission.GrantPrompt(CefSharp.PermissionRequestType.MicStream));
-        Assert.Equal(
-            CefSharp.PermissionRequestResult.Deny,
-            DysonShellMicPermission.GrantPrompt(CefSharp.PermissionRequestType.MicStream | CefSharp.PermissionRequestType.CameraStream));
+            Microsoft.Web.WebView2.Core.CoreWebView2PermissionState.Deny,
+            DysonWebView2Interop.DecidePermission(Microsoft.Web.WebView2.Core.CoreWebView2PermissionKind.Camera, isShell: true));
     }
 #endif
 

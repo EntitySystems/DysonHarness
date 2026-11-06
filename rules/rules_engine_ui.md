@@ -11,7 +11,7 @@ Write engine code as if it may run embedded on a server, headless, or behind ano
 - Razor / CSS / theme
 - Circuit lifetime
 - Composer chrome
-- CefSharp / WKWebView / file pickers
+- WebView2 / WKWebView / file pickers
 - Thin adapters that call engine APIs
 
 ## Not allowed in UI
