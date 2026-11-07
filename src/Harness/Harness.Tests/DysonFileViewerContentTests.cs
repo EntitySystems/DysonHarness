@@ -177,6 +177,97 @@ public class DysonFileViewerContentTests
         Assert.Equal("# Skill", host.FileViewer.Content);
     }
 
+    [Fact]
+    public void Audio_extensions_map_to_audio_mime_types_case_insensitively()
+    {
+        Assert.Equal("audio/mpeg", DysonAudioFiles.ContentTypeFor(".dyson/composer-uploads/cannon_shot_2.MP3"));
+        Assert.Equal("audio/wav", DysonAudioFiles.ContentTypeFor("a.wav"));
+        Assert.Equal("audio/ogg", DysonAudioFiles.ContentTypeFor("a.Ogg"));
+        Assert.Equal("audio/ogg", DysonAudioFiles.ContentTypeFor("a.oga"));
+        Assert.Equal("audio/ogg", DysonAudioFiles.ContentTypeFor("a.opus"));
+        Assert.Equal("audio/flac", DysonAudioFiles.ContentTypeFor("a.flac"));
+        Assert.Equal("audio/mp4", DysonAudioFiles.ContentTypeFor("a.m4a"));
+        Assert.Equal("audio/aac", DysonAudioFiles.ContentTypeFor("a.aac"));
+        Assert.Equal("audio/webm", DysonAudioFiles.ContentTypeFor("a.weba"));
+
+        Assert.True(DysonAudioFiles.IsAudioPath("song.Mp3"));
+        Assert.False(DysonAudioFiles.IsAudioPath("notes.txt"));
+        Assert.False(DysonAudioFiles.IsAudioPath("clip.mp4"));
+        Assert.False(DysonAudioFiles.IsAudioPath("mp3"));
+        Assert.False(DysonAudioFiles.IsAudioPath(""));
+        Assert.False(DysonAudioFiles.IsAudioPath(null));
+    }
+
+    [Fact]
+    public async Task Audio_file_opens_player_streaming_from_disk_and_close_revokes()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var host = ctx.Host;
+        var workRoot = Path.Combine(Path.GetTempPath(), $"dyson-fv-audio-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(workRoot, "clips"));
+        try
+        {
+            var onDisk = Path.Combine(workRoot, "clips", "shot.MP3");
+            await File.WriteAllBytesAsync(onDisk, [0xFF, 0xFB, 0x90, 0x00]);
+
+            await host.OpenFileViewerAsync("clips/shot.MP3", workRoot);
+
+            Assert.NotNull(host.FileViewer);
+            Assert.True(host.FileViewer.IsAudio);
+            Assert.Null(host.FileViewer.Error);
+            Assert.Equal("", host.FileViewer.Content);
+            Assert.True(host.FileViewer.CanOpenInDefaultEditor);
+            var previewId = host.FileViewer.AudioPreviewId;
+            Assert.False(string.IsNullOrEmpty(previewId));
+            Assert.Equal(DysonFilePreviewStore.UrlFor(previewId!), host.FileViewer.AudioPreviewUrl);
+            Assert.True(ctx.Previews.TryGet(previewId!, out var entry));
+            Assert.Equal("audio/mpeg", entry.ContentType);
+            Assert.Equal(Path.GetFullPath(onDisk), entry.FilePath);
+            Assert.Empty(entry.Bytes);
+
+            host.CloseFileViewer();
+            Assert.Null(host.FileViewer);
+            Assert.False(ctx.Previews.TryGet(previewId!, out _));
+        }
+        finally
+        {
+            try { Directory.Delete(workRoot, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
+    public async Task Audio_path_outside_work_directory_is_rejected_without_a_preview()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var host = ctx.Host;
+        var parent = Path.Combine(Path.GetTempPath(), $"dyson-fv-audio-out-{Guid.NewGuid():N}");
+        var workRoot = Path.Combine(parent, "work");
+        Directory.CreateDirectory(workRoot);
+        try
+        {
+            await File.WriteAllBytesAsync(Path.Combine(parent, "secret.mp3"), [1, 2, 3]);
+
+            await host.OpenFileViewerAsync("../secret.mp3", workRoot);
+            Assert.NotNull(host.FileViewer);
+            Assert.True(host.FileViewer.IsAudio);
+            Assert.False(string.IsNullOrEmpty(host.FileViewer.Error));
+            Assert.Null(host.FileViewer.AudioPreviewId);
+            Assert.Null(host.FileViewer.AudioPreviewUrl);
+            Assert.False(host.FileViewer.CanOpenInDefaultEditor);
+
+            await host.OpenFileViewerAsync("missing.mp3", workRoot);
+            Assert.NotNull(host.FileViewer);
+            Assert.False(string.IsNullOrEmpty(host.FileViewer.Error));
+            Assert.Null(host.FileViewer.AudioPreviewId);
+
+            Assert.Throws<ArgumentException>(() => ctx.Previews.PutFile("relative/a.mp3", "audio/mpeg"));
+        }
+        finally
+        {
+            try { Directory.Delete(parent, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
     private sealed class HostContext : IAsyncDisposable
     {
         private readonly SqliteConnection _conn;
