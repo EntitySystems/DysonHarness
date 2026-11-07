@@ -61,9 +61,13 @@ public static class DysonCompactionFlow
                && (!IsCompactionContinuation(turn) || turn.ToolRoundCallCounts.Count > 0);
     }
 
+    /// <summary>
+    /// Prefix match: <see cref="CreateFreshContinuationTurn"/> may append a todo block after
+    /// <see cref="ContinuationInstruction"/>.
+    /// </summary>
     public static bool IsCompactionContinuation(DysonAgentTurn turn) =>
         turn.Kind == DysonAgentTurnKind.Continuation
-        && string.Equals(turn.Instruction, ContinuationInstruction, StringComparison.Ordinal);
+        && turn.Instruction?.StartsWith(ContinuationInstruction, StringComparison.Ordinal) == true;
 
     /// <summary>
     /// The summary turn. The sidecar mode uses <see cref="DysonFullSummarizeFlow.SidecarInstruction"/>
@@ -90,16 +94,79 @@ public static class DysonCompactionFlow
 
     /// <summary>
     /// The one continuation a successful summary re-queues. <see cref="DysonAgentTurn.AfterSummaryResume"/>
-    /// lets the same clear keep it while dropping every older resume.
+    /// lets the same clear keep it while dropping every older resume. Appends
+    /// <see cref="FormatTodosForResume"/> for every session except the root Meta Agent.
     /// </summary>
-    public static DysonAgentTurn CreateFreshContinuationTurn() =>
-        new()
+    public static DysonAgentTurn CreateFreshContinuationTurn(DysonAgentSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        // The root Meta Agent's list is a dispatch ledger it reads with ListTodos; it gets no block.
+        var todos = DysonSessionPolicy.IsMetaAgent(session.Mode) ? "" : FormatTodosForResume(session.Todos);
+        return new()
         {
             Kind = DysonAgentTurnKind.Continuation,
-            Instruction = ContinuationInstruction,
+            Instruction = todos.Length == 0 ? ContinuationInstruction : ContinuationInstruction + "\n\n" + todos,
             StartedUtc = DateTime.UtcNow,
             AfterSummaryResume = true,
         };
+    }
+
+    /// <summary>Done items shown in <see cref="FormatTodosForResume"/> (most recently updated).</summary>
+    public const int MaxDoneTodosInResume = 5;
+
+    private const int MaxTodoTextChars = 200;
+
+    /// <summary>
+    /// Plain-English todo block for a post-compaction resume: In progress, Pending, then the
+    /// <see cref="MaxDoneTodosInResume"/> most recently updated Done items, each in Sequence order.
+    /// Empty string when there are no todos.
+    /// </summary>
+    public static string FormatTodosForResume(IReadOnlyList<DysonSessionTodo> todos)
+    {
+        ArgumentNullException.ThrowIfNull(todos);
+        if (todos.Count == 0)
+            return "";
+
+        var ordered = todos.OrderBy(t => t.Sequence).ToList();
+        var done = ordered.Where(t => t.Status == DysonSessionTodoStatus.Complete).ToList();
+        var shownDone = done.Count <= MaxDoneTodosInResume
+            ? done
+            : done.OrderByDescending(t => t.UpdatedUtc).Take(MaxDoneTodosInResume).OrderBy(t => t.Sequence).ToList();
+
+        var lines = new List<string> { "Your todo list when this resume was queued:" };
+        AppendTodoGroup(lines, "In progress:", ordered.Where(t => t.Status == DysonSessionTodoStatus.Ongoing));
+        AppendTodoGroup(
+            lines,
+            "Pending:",
+            ordered.Where(t => t.Status is not (DysonSessionTodoStatus.Ongoing or DysonSessionTodoStatus.Complete)));
+        AppendTodoGroup(
+            lines,
+            shownDone.Count < done.Count ? $"Done ({MaxDoneTodosInResume} most recent of {done.Count}):" : "Done:",
+            shownDone);
+        return string.Join("\n", lines);
+    }
+
+    private static void AppendTodoGroup(List<string> lines, string heading, IEnumerable<DysonSessionTodo> items)
+    {
+        var start = lines.Count;
+        foreach (var todo in items)
+        {
+            var comment = ClipTodoText(todo.Comments.Count == 0 ? "" : todo.Comments[^1]);
+            lines.Add($"- [{ClipTodoText(todo.TaskCode)}] {ClipTodoText(todo.DisplayName)}"
+                      + (comment.Length == 0 ? "" : " — " + comment));
+        }
+
+        if (lines.Count > start)
+            lines.Insert(start, heading);
+    }
+
+    /// <summary>One line, trimmed, at most <see cref="MaxTodoTextChars"/> chars (ending in … when clipped).</summary>
+    private static string ClipTodoText(string? text)
+    {
+        var flat = (text ?? "").Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return flat.Length <= MaxTodoTextChars ? flat : flat[..(MaxTodoTextChars - 1)].TrimEnd() + "…";
+    }
 
     public const string FailedTitle = "Context compaction failed";
 
@@ -232,7 +299,7 @@ public static class DysonCompactionFlow
             return;
         }
 
-        session.EnqueuePendingTurn(CreateFreshContinuationTurn());
+        session.EnqueuePendingTurn(CreateFreshContinuationTurn(session));
         session.AppendLog("compaction: continuation queued");
     }
 

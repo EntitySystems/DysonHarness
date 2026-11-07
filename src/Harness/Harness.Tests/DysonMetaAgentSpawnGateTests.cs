@@ -83,15 +83,18 @@ public class DysonMetaAgentSpawnGateTests
         {
             var root = schema.RootElement;
             var required = root.GetProperty("required").EnumerateArray().Select(e => e.GetString()).ToArray();
-            if (required.Length != 2
+            if (required.Length != 3
                 || !required.Contains("task")
-                || !required.Contains("useWorktree"))
+                || !required.Contains("useWorktree")
+                || !required.Contains("todos"))
             {
                 throw new InvalidOperationException(
-                    "StartAsyncMetaAgentDrone required must be task and useWorktree.");
+                    "StartAsyncMetaAgentDrone required must be task, useWorktree, and todos.");
             }
 
             var props = root.GetProperty("properties");
+            if (props.GetProperty("todos").GetProperty("minItems").GetInt32() != 1)
+                throw new InvalidOperationException("StartAsyncMetaAgentDrone todos must have minItems 1.");
             if (!string.Equals(props.GetProperty("useWorktree").GetProperty("type").GetString(), "boolean", StringComparison.Ordinal))
                 throw new InvalidOperationException("useWorktree must be boolean.");
             if (!props.TryGetProperty("existingWorktreePath", out _))

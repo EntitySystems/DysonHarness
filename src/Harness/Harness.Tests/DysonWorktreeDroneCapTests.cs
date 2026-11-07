@@ -21,14 +21,14 @@ public class DysonWorktreeDroneCapTests
             .ToList();
         var executor = await fixture.ExecutorAsync(meta, http);
 
-        var refused = await executor.ExecuteAsync(DroneCall("1", """{"task":"edit","useWorktree":true}"""));
+        var refused = await executor.ExecuteAsync(DroneCall("1", """{"task":"edit","useWorktree":true,"todos":[{"displayName":"t","taskCode":"t"}]}"""));
         Assert.True(refused.IsError);
         Assert.Contains($"the limit is {DysonMetaAgentTools.MaxRunningWorktreeDrones}", refused.Content, StringComparison.Ordinal);
         foreach (var id in ids)
             Assert.Contains($"#{id}", refused.Content, StringComparison.Ordinal);
         Assert.Null(meta.LastSpawned);
 
-        var shared = await executor.ExecuteAsync(DroneCall("2", """{"task":"run tests","useWorktree":false}"""));
+        var shared = await executor.ExecuteAsync(DroneCall("2", """{"task":"run tests","useWorktree":false,"todos":[{"displayName":"t","taskCode":"t"}]}"""));
         Assert.False(shared.IsError, shared.Content);
         Assert.NotNull(meta.LastSpawned);
     }
@@ -45,7 +45,7 @@ public class DysonWorktreeDroneCapTests
         RegisterDrone(meta, worktree: false); // useWorktree false / existingWorktreePath resolver
         var executor = await fixture.ExecutorAsync(meta, http);
 
-        var ok = await executor.ExecuteAsync(DroneCall("1", """{"task":"edit","useWorktree":true}"""));
+        var ok = await executor.ExecuteAsync(DroneCall("1", """{"task":"edit","useWorktree":true,"todos":[{"displayName":"t","taskCode":"t"}]}"""));
         Assert.False(ok.IsError, ok.Content);
     }
 
@@ -81,7 +81,7 @@ public class DysonWorktreeDroneCapTests
         var meta = new DysonPlanToolStubSession(DysonAgentModes.MetaAgent);
         var executor = await fixture.ExecutorAsync(meta, http);
 
-        var first = await executor.ExecuteAsync(DroneCall("1", """{"task":"edit a","useWorktree":true}"""));
+        var first = await executor.ExecuteAsync(DroneCall("1", """{"task":"edit a","useWorktree":true,"todos":[{"displayName":"t","taskCode":"t"}]}"""));
         Assert.False(first.IsError, first.Content);
         int firstId;
         using (var doc = JsonDocument.Parse(first.Content))
@@ -91,7 +91,7 @@ public class DysonWorktreeDroneCapTests
             Assert.False(doc.RootElement.TryGetProperty("notice", out _));
         }
 
-        var second = await executor.ExecuteAsync(DroneCall("2", """{"task":"edit b","useWorktree":true}"""));
+        var second = await executor.ExecuteAsync(DroneCall("2", """{"task":"edit b","useWorktree":true,"todos":[{"displayName":"t","taskCode":"t"}]}"""));
         Assert.False(second.IsError, second.Content);
         using (var doc = JsonDocument.Parse(second.Content))
         {
@@ -112,10 +112,61 @@ public class DysonWorktreeDroneCapTests
         var executor = await fixture.ExecutorAsync(meta, http);
 
         var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(i =>
-            executor.ExecuteAsync(DroneCall($"c{i}", """{"task":"edit","useWorktree":true}"""))));
+            executor.ExecuteAsync(DroneCall($"c{i}", """{"task":"edit","useWorktree":true,"todos":[{"displayName":"t","taskCode":"t"}]}"""))));
 
         Assert.Equal(1, results.Count(r => !r.IsError));
         Assert.Equal(3, results.Count(r => r.IsError));
+    }
+
+    [Fact]
+    public async Task StartAsyncMetaAgentDrone_requires_non_empty_todos()
+    {
+        using var http = new HttpClient();
+        await using var fixture = await DysonPlanToolFixture.CreateAsync();
+        var meta = new DysonPlanToolStubSession(DysonAgentModes.MetaAgent);
+        var executor = await fixture.ExecutorAsync(meta, http);
+
+        foreach (var args in new[]
+                 {
+                     """{"task":"edit","useWorktree":false}""",
+                     """{"task":"edit","useWorktree":false,"todos":null}""",
+                     """{"task":"edit","useWorktree":false,"todos":[]}""",
+                 })
+        {
+            var refused = await executor.ExecuteAsync(DroneCall("r", args));
+            Assert.True(refused.IsError, args);
+            Assert.Contains("todos is required", refused.Content, StringComparison.Ordinal);
+            Assert.Null(meta.LastSpawned);
+        }
+
+        var ok = await executor.ExecuteAsync(DroneCall(
+            "ok",
+            """{"task":"edit","useWorktree":false,"todos":[{"displayName":"x","taskCode":"x"}]}"""));
+        Assert.False(ok.IsError, ok.Content);
+        var seeded = Assert.Single(meta.LastInitialTodos!);
+        Assert.Equal("x", seeded.TaskCode);
+        Assert.Equal("x", seeded.DisplayName);
+    }
+
+    [Fact]
+    public async Task BeginBuildPlan_new_spawn_seeds_one_plan_todo_and_reuse_does_not()
+    {
+        using var http = new HttpClient();
+        await using var fixture = await DysonPlanToolFixture.CreateAsync();
+        var planId = await fixture.CreatePlanAsync("Seeded");
+        var meta = new DysonPlanToolStubSession(DysonAgentModes.MetaAgent);
+        var executor = await fixture.ExecutorAsync(meta, http);
+
+        var started = await executor.ExecuteAsync(BuildCall("1", $$"""{"planId":{{planId}}}"""));
+        Assert.False(started.IsError, started.Content);
+        var seed = Assert.Single(meta.LastInitialTodos!);
+        Assert.Equal($"build-plan-{planId}", seed.TaskCode);
+        Assert.Contains("Seeded", seed.DisplayName, StringComparison.Ordinal);
+        var drone = meta.LastSpawned!;
+
+        var reused = await executor.ExecuteAsync(BuildCall("2", $$"""{"planId":{{planId}},"agentId":{{drone.Id}}}"""));
+        Assert.False(reused.IsError, reused.Content);
+        Assert.Same(drone, meta.LastSpawned); // reuse never calls CreateChildAsync
     }
 
     private static DysonPlanToolStubSession RegisterDrone(DysonPlanToolStubSession meta, bool worktree)

@@ -3056,7 +3056,7 @@ public abstract class DysonAgentSession
             - conflictingPaths:
             {pathBullets}
 
-            Spawn a new Meta Agent Drone to resolve it. Call StartAsyncMetaAgentDrone with purpose build, useWorktree false, and existingWorktreePath set to {worktreePath}. Do not omit useWorktree. Do not pass useWorktree true. A second isolated worktree cannot see this checkout.
+            Spawn a new Meta Agent Drone to resolve it. Call StartAsyncMetaAgentDrone with purpose build, useWorktree false, and existingWorktreePath set to {worktreePath}. Do not omit useWorktree. Do not pass useWorktree true. A second isolated worktree cannot see this checkout. Pass todos with at least one item, for example one per conflicted path.
 
             Task text for that drone, with the facts above filled in:
 
