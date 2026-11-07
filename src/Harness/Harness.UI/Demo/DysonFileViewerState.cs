@@ -29,6 +29,15 @@ public sealed class DysonFileViewerState
     /// <summary>Preview store token to revoke on close; null when not an image preview.</summary>
     public string? ImagePreviewId { get; init; }
 
+    /// <summary>When true, <see cref="AudioPreviewUrl"/> is the <c>audio</c> src for the custom audio player.</summary>
+    public bool IsAudio { get; init; }
+
+    /// <summary>Relative URL under <see cref="DysonFilePreviewStore.RoutePrefix"/> (on-disk, range-enabled), or null.</summary>
+    public string? AudioPreviewUrl { get; init; }
+
+    /// <summary>Preview store token to revoke on close; null when not an audio preview.</summary>
+    public string? AudioPreviewId { get; init; }
+
     /// <summary>True while the host is preparing in-memory content off the circuit.</summary>
     public bool IsLoading { get; init; }
 

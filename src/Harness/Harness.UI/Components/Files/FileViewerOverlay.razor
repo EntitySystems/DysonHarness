@@ -99,6 +99,11 @@
                              src="@viewer.ImagePreviewUrl"
                              alt="@viewer.Title" />
                     }
+                    else if (viewer.IsAudio && !string.IsNullOrEmpty(viewer.AudioPreviewUrl))
+                    {
+                        @* @key: a new file gets a fresh player; the old one is disposed (paused). *@
+                        <AudioPlayer @key="viewer.AudioPreviewUrl" Src="@viewer.AudioPreviewUrl" Title="@viewer.Title" />
+                    }
                     else if (viewer.IsTextPreview && !string.IsNullOrEmpty(viewer.TextPreviewUrl))
                     {
                         <iframe class="file-viewer-modal__pdf"

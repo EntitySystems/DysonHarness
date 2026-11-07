@@ -1,0 +1,189 @@
+.audio-player {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 12px;
+    padding: 14px 16px;
+    margin: 8px 0;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-1);
+}
+
+.audio-player audio {
+    display: none;
+}
+
+.audio-player__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--ease),
+        background var(--motion-fast) var(--ease),
+        border-color var(--motion-fast) var(--ease);
+}
+
+.audio-player__btn:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+}
+
+.audio-player__btn:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+.audio-player__play {
+    width: 40px;
+    height: 40px;
+    color: var(--text-on-accent);
+    background: var(--accent-gradient);
+    border-color: var(--accent-border);
+}
+
+.audio-player__play:hover {
+    color: var(--text-on-accent);
+    background: var(--accent-gradient);
+    filter: brightness(1.08);
+}
+
+.audio-player__toggle[aria-pressed="true"] {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent-border);
+}
+
+/* Mute's pressed state is "sound off"; keep it neutral rather than accent-highlighted. */
+.audio-player__volume .audio-player__toggle[aria-pressed="true"] {
+    color: var(--text-muted);
+    background: transparent;
+    border-color: transparent;
+}
+
+.audio-player__icon {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.audio-player__play .audio-player__icon {
+    width: 20px;
+    height: 20px;
+    fill: currentColor;
+    stroke: none;
+}
+
+.audio-player__fill {
+    fill: currentColor;
+}
+
+.audio-player__icon--pause,
+.audio-player[data-playing] .audio-player__icon--play,
+.audio-player__icon--muted,
+.audio-player[data-muted] .audio-player__icon--sound {
+    display: none;
+}
+
+.audio-player[data-playing] .audio-player__icon--pause,
+.audio-player[data-muted] .audio-player__icon--muted {
+    display: block;
+}
+
+.audio-player__timeline {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 260px;
+    min-width: 0;
+}
+
+.audio-player__time {
+    flex: 0 0 auto;
+    min-width: 4ch;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+.audio-player__volume {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+/* The input itself is the track; --fill (set by the JS module) paints progress in the accent. */
+.audio-player__range {
+    --fill: 0%;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    margin: 0;
+    padding: 0;
+    border-radius: var(--radius-full);
+    background: linear-gradient(to right, var(--accent) var(--fill), var(--bg-3) var(--fill));
+    cursor: pointer;
+}
+
+.audio-player__seek {
+    flex: 1 1 auto;
+    min-width: 80px;
+}
+
+.audio-player__volume-range {
+    width: 84px;
+}
+
+.audio-player__range:disabled {
+    cursor: default;
+    opacity: 0.55;
+}
+
+.audio-player__range:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+.audio-player__range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--text);
+    border: 2px solid var(--accent);
+    transition: transform var(--motion-fast) var(--ease);
+}
+
+.audio-player__range::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--text);
+    border: 2px solid var(--accent);
+}
+
+.audio-player__range:hover::-webkit-slider-thumb {
+    transform: scale(1.15);
+}
+
+.audio-player__error {
+    flex: 1 0 100%;
+    font-size: 12px;
+    color: var(--danger);
+}

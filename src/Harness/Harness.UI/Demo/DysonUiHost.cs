@@ -2142,10 +2142,53 @@ public sealed class DysonUiHost : IAsyncDisposable
         var isMd = IsMarkdownPath(path);
         var isPdf = DysonFileViewerState.IsPdfPath(path);
         var isImage = DysonComposerUploads.LooksLikeImage(contentType: null, path);
+        var audioContentType = DysonAudioFiles.ContentTypeFor(path);
 
         var resolved = fs.ResolvePath(path);
         if (resolved.IsSuccess)
             absolutePath = resolved.Value;
+
+        if (audioContentType is not null)
+        {
+            // Stream from disk (range requests for seeking); ResolvePath already rejected paths outside the work root.
+            var exists = resolved.IsError
+                ? Result<bool, string>.AsError(resolved.Error)
+                : await fs.FileExistsAsync(path, cancellationToken).ConfigureAwait(true);
+            if (exists.IsError || !exists.Value)
+            {
+                SetFileViewer(new DysonFileViewerState
+                {
+                    RelativePath = path,
+                    Title = title,
+                    Content = "",
+                    IsMarkdown = false,
+                    IsAudio = true,
+                    AbsolutePath = absolutePath,
+                    CanOpenInDefaultEditor = false,
+                    MarkdownBlocks = [],
+                    Error = exists.IsError ? exists.Error : $"File not found: {path}",
+                    Actions = actionList,
+                });
+                return;
+            }
+
+            var previewId = _filePreviews.PutFile(resolved.Value, audioContentType);
+            SetFileViewer(new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = title,
+                Content = "",
+                IsMarkdown = false,
+                IsAudio = true,
+                AudioPreviewId = previewId,
+                AudioPreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
+                AbsolutePath = absolutePath,
+                CanOpenInDefaultEditor = true,
+                MarkdownBlocks = [],
+                Actions = actionList,
+            });
+            return;
+        }
 
         if (isPdf)
         {
@@ -2614,6 +2657,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             _filePreviews.Remove(imageId);
         if (viewer?.TextPreviewId is { } textId)
             _filePreviews.Remove(textId);
+        if (viewer?.AudioPreviewId is { } audioId)
+            _filePreviews.Remove(audioId);
     }
 
     private static IReadOnlyList<DysonFileViewerAction> NormalizeFileViewerActions(

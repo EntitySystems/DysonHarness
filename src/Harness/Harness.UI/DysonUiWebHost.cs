@@ -336,6 +336,26 @@ public static class DysonUiWebHost
             if (!store.TryGet(id, out var entry))
                 return Results.NotFound();
 
+            // On-disk entries were validated under the work root at open time; stream with ranges (seeking).
+            if (entry.FilePath is { } filePath)
+            {
+                try
+                {
+                    var stream = new FileStream(
+                        filePath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete,
+                        64 * 1024,
+                        useAsync: true);
+                    return Results.Stream(stream, entry.ContentType, enableRangeProcessing: true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    return Results.NotFound();
+                }
+            }
+
             return Results.File(entry.Bytes, entry.ContentType, enableRangeProcessing: true);
         });
         app.MapRazorComponents<App>()
