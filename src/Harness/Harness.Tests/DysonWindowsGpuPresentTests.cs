@@ -9,7 +9,7 @@ namespace Harness.Tests;
 /// <summary>
 /// Windows WebView2 integration gate: the HWND-hosted agent browser must obtain WebGPU + WebGL and present
 /// non-black pixels. Uses a temp WebView2 user data folder, so it never collides with a running DysonHarness.exe.
-/// WebGPU path must create a canvas context, configure, and present â€” adapter/device alone is insufficient
+/// WebGPU path must create a canvas context, configure, and present — adapter/device alone is insufficient
 /// (SharedImageBackingFactory / WebGPUSwapBufferProvider can still fail after requestDevice).
 /// </summary>
 public class DysonWindowsGpuPresentTests
@@ -163,8 +163,8 @@ public class DysonWindowsGpuPresentTests
             Ok(await tab.TypeAsync(new DysonBrowserTypeRequest { Selector = "#box", Text = "xy", ClearFirst = true }));
             Assert.Equal("xy", Ok(await tab.ExecuteJavaScriptAsync("document.getElementById('box').value")));
             Ok(await tab.ClickAsync(new DysonBrowserClickRequest { Selector = "#btn" }));
-            // Shared DomScripts.Click dispatches a click and also calls el.click() (pre-existing, host-independent).
-            Assert.NotEqual("0", Ok(await tab.ExecuteJavaScriptAsync("window.__clicked||0")));
+            // One agent click fires the page handler exactly once.
+            Assert.Equal("1", Ok(await tab.ExecuteJavaScriptAsync("window.__clicked||0")));
             Ok(await tab.HoverAsync("#hov"));
             Assert.Equal("true", Ok(await tab.ExecuteJavaScriptAsync("!!window.__hovered")));
             Ok(await tab.PressKeyAsync(new DysonBrowserKeyRequest { Selector = "#box", Key = "Enter" }));
@@ -430,7 +430,7 @@ public class DysonWindowsGpuPresentTests
     }
 
     /// <summary>
-    /// Probe HTML places WebGL red at left and WebGPU green at right (xâ‰¥128 CSS px).
+    /// Probe HTML places WebGL red at left and WebGPU green at right (x≥128 CSS px).
     /// Require saturated green in that rect so a WebGL-only present cannot pass the gate.
     /// </summary>
     private static void AssertPngHasWebGpuGreen(byte[] png)

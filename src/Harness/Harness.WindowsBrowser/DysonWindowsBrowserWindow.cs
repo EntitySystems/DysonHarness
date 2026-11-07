@@ -87,11 +87,11 @@ internal sealed class DysonWindowsBrowserWindow : Window, IDysonBrowserWindow
         };
         DockPanel.SetDock(nav, Dock.Top);
 
-        _backButton = MakeIconButton("â†", "Back");
+        _backButton = MakeIconButton("←", "Back");
         _backButton.Click += (_, _) => _ = ActiveTab()?.GoBackAsync();
-        _forwardButton = MakeIconButton("â†’", "Forward");
+        _forwardButton = MakeIconButton("→", "Forward");
         _forwardButton.Click += (_, _) => _ = ActiveTab()?.GoForwardAsync();
-        _reloadButton = MakeIconButton("â†»", "Reload");
+        _reloadButton = MakeIconButton("↻", "Reload");
         _reloadButton.Click += (_, _) => _ = ActiveTab()?.ReloadAsync();
 
         var navButtons = new StackPanel
@@ -106,7 +106,7 @@ internal sealed class DysonWindowsBrowserWindow : Window, IDysonBrowserWindow
         DockPanel.SetDock(navButtons, Dock.Left);
         nav.Children.Add(navButtons);
 
-        _snipButton = MakeIconButton("âœ‚", "Snip page region into agent prompt");
+        _snipButton = MakeIconButton("✂", "Snip page region into agent prompt");
         _snipButton.Click += (_, _) => _ = EnterSnipModeAsync();
         DockPanel.SetDock(_snipButton, Dock.Right);
         nav.Children.Add(_snipButton);
@@ -244,10 +244,13 @@ internal sealed class DysonWindowsBrowserWindow : Window, IDysonBrowserWindow
         if (address is not null)
             _urlBox.Text = address;
         if (!string.IsNullOrWhiteSpace(title))
-            Title = title + " â€” Dyson Browser";
+            Title = WindowTitle(title);
 
         UpdateTabChipTitle(tabId, string.IsNullOrWhiteSpace(title) ? (address ?? "New tab") : title);
     }
+
+    private static string WindowTitle(string? pageTitle) =>
+        string.IsNullOrWhiteSpace(pageTitle) ? "Dyson Browser" : pageTitle + " — Dyson Browser";
 
     private DysonWebView2BrowserTab? ActiveTab() =>
         _activeTabId is not null && _tabs.TryGetValue(_activeTabId, out var tab) ? tab : null;
@@ -270,9 +273,7 @@ internal sealed class DysonWindowsBrowserWindow : Window, IDysonBrowserWindow
         {
             _contentHost.Children.Add(tab.BrowserControl);
             _urlBox.Text = tab.CurrentAddress ?? "";
-            Title = string.IsNullOrWhiteSpace(tab.CurrentTitle)
-                ? "Dyson Browser"
-                : tab.CurrentTitle + " â€” Dyson Browser";
+            Title = WindowTitle(tab.CurrentTitle);
         }
 
         RefreshTabChipStyles();
@@ -598,7 +599,7 @@ internal sealed class DysonWindowsBrowserWindow : Window, IDysonBrowserWindow
         var row = new DockPanel { LastChildFill = true };
         var close = new Button
         {
-            Content = "Ã—",
+            Content = "×",
             Width = 20,
             Height = 20,
             Margin = new Thickness(6, 0, 0, 0),

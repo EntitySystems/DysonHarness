@@ -55,6 +55,10 @@ The shell's right-click menu is the default WebView2 menu with a top **Reload pa
 
 Agent-tab popups (`NewWindowRequested`) open as a new tab in the same agent window.
 
+Agent window chrome is native WPF in `DysonWindowsBrowserWindow` (no HTML): tab chips with a close `×`, `+` new tab, `←` back, `→` forward, `↻` reload, the address bar (Enter navigates; a bare host gets `https://`), and `✂` Snip. The window title is `{page title} — Dyson Browser`. The glyphs are C# string literals, so the source file must stay UTF-8. `DysonSourceEncodingScanTests` fails on UTF-8-read-as-cp1252 mojibake anywhere in `src`, `docs`, `rules` and `skills`.
+
+`BrowserClick` (`DysonBrowserDomScripts.Click`, shared with macOS) dispatches exactly one synthetic `click` event. It no longer also calls `el.click()`, which fired every page handler twice.
+
 ## Snip → agent composer
 
 Agent browser chrome has a **Snip** button to the right of the address bar. Agent tabs are HWND-hosted WebView2 controls, so a live WPF rubber-band cannot sit on top of the HWND (airspace). Snip therefore uses a **CDP screenshot-backed overlay**:
