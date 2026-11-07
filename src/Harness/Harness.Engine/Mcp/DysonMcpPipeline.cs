@@ -601,7 +601,8 @@ public sealed class DysonMcpPipeline
                 "that also cancels a pending parent-event wait and discards the child's question. " +
                 "timeoutSeconds 1–20 waits for the child to start the payload at its next turn boundary, then interrupts (above 20 clamps to 20). " +
                 "A positive timeout fails immediately while the child awaits a parent-event reply. " +
-                "An idle child starts the payload at once. Result status: delivered or interrupted, with waitedMs. " +
+                "An idle child starts the payload at once. Result status: delivered or interrupted, with waitedMs, " +
+                "or held (the child is summarizing; the payload interrupts the turn that starts after the summary). " +
                 "Injecting into a child that already submitted a report reopens it (`Active`) so SubmitSubagentReport works again.",
             InputSchemaJson = """
                 {

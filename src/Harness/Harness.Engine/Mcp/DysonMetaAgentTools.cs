@@ -435,7 +435,8 @@ public static class DysonMetaAgentTools
                 "Prefer this over creating a second drone for the same work. " +
                 "Default (timeoutSeconds omitted) interrupts the drone's in-flight turn and runs the message now, which also cancels a pending parent-event wait. " +
                 "Returns immediately unless timeoutSeconds ≥ 1 (max 20): then it waits for the drone to start the message at its next turn boundary, and interrupts after the timeout. " +
-                "A positive timeout fails immediately while the drone awaits a parent-event reply.",
+                "A positive timeout fails immediately while the drone awaits a parent-event reply. " +
+                "Status held: the drone is summarizing; the message interrupts the turn that starts after the summary.",
             InputSchemaJson = """
                 {
                   "type": "object",
