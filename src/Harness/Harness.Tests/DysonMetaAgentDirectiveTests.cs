@@ -157,6 +157,7 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "Before B, write in the dispatch todo why the slices do not overlap", "Meta Agent ForMode");
         MustContain(text, $"refuses a new useWorktree true drone while {DysonMetaAgentTools.MaxRunningWorktreeDrones} are running", "Meta Agent ForMode");
         MustNotContain(text, "Create a new drone only for genuinely independent work", "Meta Agent ForMode");
+        MustContain(text, "todos is required", "Meta Agent ForMode");
     }
 
     private static void AssertMetaAgentDroneForMode()
@@ -181,6 +182,10 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "No file belongs to two slices", "Meta Agent Drone ForMode");
         MustContain(text, "Workers do not commit. You commit once.", "Meta Agent Drone ForMode");
         MustContain(text, "Never SubmitSubagentReport while a worker is still running", "Meta Agent Drone ForMode");
+        // Plan 252: the Todos block lives in the system prompt so it survives compaction.
+        MustContain(text, "ListTodos at the start of your first turn", "Meta Agent Drone ForMode");
+        MustContain(text, "do not call ListTodos just to re-read it", "Meta Agent Drone ForMode");
+        MustNotContain(text, "again after every compaction", "Meta Agent Drone ForMode");
     }
 
     private static void AssertBothDifferFromWork()

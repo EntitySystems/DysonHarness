@@ -109,6 +109,8 @@ internal sealed class DysonPlanToolStubSession : DysonAgentSession
 
     public string? LastReasoningEffort { get; private set; }
 
+    public IReadOnlyList<DysonSessionTodoReplaceItem>? LastInitialTodos { get; private set; }
+
     public DysonPlanToolStubSession? LastSpawned { get; private set; }
 
     public DysonAgentTurn? LastPromptTurn { get; private set; }
@@ -145,6 +147,7 @@ internal sealed class DysonPlanToolStubSession : DysonAgentSession
         LastSpawnedTask = task;
         LastModelSlug = modelSlug;
         LastReasoningEffort = reasoningEffort;
+        LastInitialTodos = initialTodos;
         return Task.FromResult(Result<DysonStartSubagentResult, string>.AsValue(new DysonStartSubagentResult
         {
             SubagentId = child.Id,

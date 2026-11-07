@@ -19,7 +19,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         string? context;
         string? modelSlug;
         string? reasoningEffort;
-        IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos;
+        IReadOnlyList<DysonSessionTodoReplaceItem> initialTodos;
         var purpose = "build";
         bool useWorktree;
         string? existingWorktreePath;
@@ -59,7 +59,14 @@ public sealed partial class DysonWorkspaceToolExecutor
             var todos = TryParseTodoSeedItems(root, "todos");
             if (todos.IsError)
                 return Error(call, todos.Error);
-            initialTodos = todos.Value;
+            if (todos.Value is not { Count: > 0 } seeded)
+            {
+                return Error(
+                    call,
+                    "StartAsyncMetaAgentDrone: todos is required. Pass at least one {displayName, taskCode} item: the drone's starting checklist.");
+            }
+
+            initialTodos = seeded;
         }
         catch (JsonException)
         {
@@ -1224,7 +1231,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             var started = await CreateMetaAgentDroneChildAsync(
                     brief,
                     context: null,
-                    initialTodos: null,
+                    initialTodos: [DysonMetaBuildBrief.SeedTodo(plan.Id, plan.Title)],
                     modelSlug,
                     reasoningEffort,
                     useWorktree: true,
@@ -1702,7 +1709,7 @@ public sealed partial class DysonWorkspaceToolExecutor
     private async Task<Result<DysonStartSubagentResult, string>> CreateMetaAgentDroneChildAsync(
         string task,
         string? context,
-        IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos,
+        IReadOnlyList<DysonSessionTodoReplaceItem> initialTodos,
         string? modelSlug,
         string? reasoningEffort,
         bool useWorktree,

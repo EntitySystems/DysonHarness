@@ -283,6 +283,7 @@ public static class DysonMetaAgentTools
                 "Returns immediately with droneId / persistenceId / worktreeBranch (null when useWorktree is false); never waits. " +
                 "When other useWorktree true drones are running, the result also lists them in runningWorktreeDrones. " +
                 "purpose=build (default) implements; purpose=plan explores then SubmitMetaPlan. " +
+                "todos is required (at least one item): the drone's starting checklist. " +
                 "Call ListMetaAgentDrones before dispatching. Reuse an existing drone with MessageMetaAgentDrone " +
                 "instead of spawning a second one for the same work.",
             InputSchemaJson = """
@@ -306,7 +307,9 @@ public static class DysonMetaAgentTools
                     "context": { "type": "string", "description": "Optional extra context or constraints." },
                     "todos": {
                       "type": "array",
-                      "description": "Optional seed checklist for the drone's own session todo list.",
+                      "description": "Required, at least 1 item (max 50). The drone's starting checklist, written into its own session todo list before its first turn: one item per step or acceptance criterion. The drone keeps it current and adds items as scope grows.",
+                      "minItems": 1,
+                      "maxItems": 50,
                       "items": {
                         "type": "object",
                         "properties": {
@@ -340,7 +343,7 @@ public static class DysonMetaAgentTools
                       "items": { "type": "string", "description": "Work-relative or workspace file path." }
                     }
                   },
-                  "required": ["task", "useWorktree"]
+                  "required": ["task", "useWorktree", "todos"]
                 }
                 """,
         };
@@ -435,7 +438,8 @@ public static class DysonMetaAgentTools
                 "Prefer this over creating a second drone for the same work. " +
                 "Default (timeoutSeconds omitted) interrupts the drone's in-flight turn and runs the message now, which also cancels a pending parent-event wait. " +
                 "Returns immediately unless timeoutSeconds ≥ 1 (max 20): then it waits for the drone to start the message at its next turn boundary, and interrupts after the timeout. " +
-                "A positive timeout fails immediately while the drone awaits a parent-event reply.",
+                "A positive timeout fails immediately while the drone awaits a parent-event reply. " +
+                "Status held: the drone is summarizing; the message interrupts the turn that starts after the summary.",
             InputSchemaJson = """
                 {
                   "type": "object",

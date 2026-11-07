@@ -43,6 +43,9 @@ public abstract class DysonAgentSession
     // KickOff turns not yet inside PromptHarnessTurnAsync. An interrupt claims them here so a late
     // gate-wait cancellation cannot requeue a message the next run already drained past.
     private readonly HashSet<DysonAgentTurn> _unstartedKickOffTurns = [];
+    // Parent interrupts that arrived while this child was summarizing (guarded by _injectInterruptGate).
+    // Released when the next non-summary turn starts, or when the run ends with nothing to start.
+    private readonly List<DysonAgentTurn> _heldInterrupts = [];
     private readonly Stack<DysonAgentTurn> _inFlightPromptStack = new();
     // One provider loop per session. KickOff and host/runtime prompt entry both take it.
     // ponytail: one semaphore per session; upgrade to a per-turn queue if prompt entry becomes hot.
@@ -1672,10 +1675,7 @@ public abstract class DysonAgentSession
 
         var busy = child.HasActiveBackgroundRun || child.HasPendingParentEventWait;
         if (!queueOnly && waitSeconds == 0 && busy)
-        {
-            InterruptChildWith(child, turn);
-            return Result<string, string>.AsValue(Json("interrupted", 0));
-        }
+            return Result<string, string>.AsValue(Json(InterruptChildWith(child, turn) ? "interrupted" : "held", 0));
 
         TaskCompletionSource? started = null;
         if (!queueOnly && busy)
@@ -1705,8 +1705,8 @@ public abstract class DysonAgentSession
                 if (!started.Task.IsCompleted && child.TryRemovePendingTurn(turn))
                 {
                     child._injectWaiters.TryRemove(turn.Id, out _);
-                    InterruptChildWith(child, turn);
-                    return Result<string, string>.AsValue(Json("interrupted", clock.ElapsedMilliseconds));
+                    var status = InterruptChildWith(child, turn) ? "interrupted" : "held";
+                    return Result<string, string>.AsValue(Json(status, clock.ElapsedMilliseconds));
                 }
             }
 
@@ -1754,10 +1754,34 @@ public abstract class DysonAgentSession
     /// Cancel the child's in-flight turn and parent-event wait, drop queued harness follow-ups while keeping
     /// earlier parent messages FIFO, then start <paramref name="turn"/> now. A KickOff that has not entered
     /// its prompt yet is claimed here (not left for its cancelled task to requeue after this run drains).
+    /// While the child is summarizing (<see cref="IsSummarizingForInterrupt"/>) nothing is cancelled: a
+    /// cancelled summary is thrown away, so <paramref name="turn"/> is held and delivered as an interrupt when
+    /// the next turn starts (<see cref="ReleaseHeldInterrupts"/>). Returns false when held.
     /// </summary>
-    private static void InterruptChildWith(DysonAgentSession child, DysonAgentTurn turn)
+    private static bool InterruptChildWith(DysonAgentSession child, DysonAgentTurn turn)
     {
         lock (child._injectInterruptGate)
+        {
+            if (!child.IsSummarizingForInterrupt)
+            {
+                // Messages held by an earlier summary queue ahead of this one (FIFO, each once).
+                foreach (var held in child._heldInterrupts)
+                    child.EnqueuePendingTurn(held);
+                child._heldInterrupts.Clear();
+                InterruptChildWithLocked(child, turn);
+                return true;
+            }
+
+            child._heldInterrupts.Add(turn);
+        }
+
+        child.AppendLog("parent message held: summary in progress");
+        return false;
+    }
+
+    /// <summary>Caller holds <see cref="_injectInterruptGate"/>.</summary>
+    private static void InterruptChildWithLocked(DysonAgentSession child, DysonAgentTurn turn)
+    {
         {
             child.CancelPendingParentEventWait("cancelled by parent TriggerSubagentEvent");
             child.CancelBackgroundRun();
@@ -2089,12 +2113,119 @@ public abstract class DysonAgentSession
         }
     }
 
-    /// <summary>Drops all queued harness turns (e.g. on interrupt).</summary>
+    /// <summary>
+    /// True while a parent interrupt would throw away a summary: a compaction summary is running, or the
+    /// in-flight turn is a FullSummarize / ReportSummary. Interrupts are held meanwhile (<see cref="InterruptChildWith"/>).
+    /// </summary>
+    internal bool IsSummarizingForInterrupt
+    {
+        get
+        {
+            if (IsSummaryInFlight)
+                return true;
+
+            lock (_modelGate)
+            {
+                return _inFlightPromptStack.Count > 0
+                    && _inFlightPromptStack.Peek().Kind is DysonAgentTurnKind.FullSummarize or DysonAgentTurnKind.ReportSummary;
+            }
+        }
+    }
+
+    /// <summary>Parent interrupts held by a summary, not yet released.</summary>
+    internal int HeldInterruptCount
+    {
+        get
+        {
+            lock (_injectInterruptGate)
+                return _heldInterrupts.Count;
+        }
+    }
+
+    /// <summary>
+    /// Release A: <paramref name="started"/> is the first non-summary turn after a summary. A parent message
+    /// is not cancelled (it would be lost before its first request); the held messages run next instead.
+    /// Any other turn (normally the after-summary Continuation) is interrupted by the newest held message,
+    /// and the older ones queue FIFO behind it.
+    /// </summary>
+    private void ReleaseHeldInterrupts(DysonAgentTurn started)
+    {
+        string log;
+        lock (_injectInterruptGate)
+        {
+            if (_heldInterrupts.Count == 0 || IsSummarizingForInterrupt)
+                return;
+
+            if (IsParentMessageTurn(started))
+            {
+                var rest = new List<DysonAgentTurn>();
+                while (_pendingTurns.TryDequeue(out var queued))
+                    rest.Add(queued);
+                foreach (var held in _heldInterrupts)
+                    _pendingTurns.Enqueue(held);
+                foreach (var queued in rest)
+                    _pendingTurns.Enqueue(queued);
+                _heldInterrupts.Clear();
+                log = "parent messages released: queued after the running parent message";
+            }
+            else
+            {
+                // Not summarizing any more, so this interrupts (and queues the older held messages first).
+                var newest = _heldInterrupts[^1];
+                _heldInterrupts.RemoveAt(_heldInterrupts.Count - 1);
+                InterruptChildWith(this, newest);
+                log = "parent message released: interrupting the turn after the summary";
+            }
+        }
+
+        AppendLog(log);
+    }
+
+    /// <summary>
+    /// Release B: the run ended and no turn after the summary started. Caller holds
+    /// <see cref="_injectInterruptGate"/> and the run is already detached. Stopped drops the held
+    /// messages; a queued turn (the Continuation) starts first and releases them through
+    /// <see cref="ReleaseHeldInterrupts"/>; otherwise they run as ordinary queued messages.
+    /// </summary>
+    private void ReleaseHeldInterruptsAfterRunLocked()
+    {
+        if (_heldInterrupts.Count == 0 || HasActiveBackgroundRun || IsSummarizingForInterrupt)
+            return;
+
+        if (Status == DysonSessionStatus.Stopped)
+        {
+            AppendLog($"parent messages dropped: {_heldInterrupts.Count} held by a summary, child stopped");
+            _heldInterrupts.Clear();
+            return;
+        }
+
+        if (!HasPendingTurn)
+        {
+            foreach (var held in _heldInterrupts)
+                _pendingTurns.Enqueue(held);
+            _heldInterrupts.Clear();
+            AppendLog("parent messages released: run ended after the summary");
+        }
+
+        StartNextPendingTurn(this);
+    }
+
+    /// <summary>Drops all queued harness turns (e.g. on interrupt) and any parent message held by a summary.</summary>
     public void ClearPendingTurns()
     {
         while (_pendingTurns.TryDequeue(out _))
         {
         }
+
+        int dropped;
+        lock (_injectInterruptGate)
+        {
+            dropped = _heldInterrupts.Count;
+            _heldInterrupts.Clear();
+        }
+
+        if (dropped > 0)
+            AppendLog($"parent messages dropped: {dropped} held by a summary");
     }
 
     /// <summary>
@@ -2203,6 +2334,8 @@ public abstract class DysonAgentSession
         TryReopenForNewParentTask();
         if (_injectWaiters.TryRemove(turn.Id, out var injectStarted))
             injectStarted.TrySetResult();
+        // After the push, so a summary turn starting here still reads as summarizing and keeps them held.
+        ReleaseHeldInterrupts(turn);
         return new InFlightPromptScope(this);
     }
 
@@ -2923,7 +3056,7 @@ public abstract class DysonAgentSession
             - conflictingPaths:
             {pathBullets}
 
-            Spawn a new Meta Agent Drone to resolve it. Call StartAsyncMetaAgentDrone with purpose build, useWorktree false, and existingWorktreePath set to {worktreePath}. Do not omit useWorktree. Do not pass useWorktree true. A second isolated worktree cannot see this checkout.
+            Spawn a new Meta Agent Drone to resolve it. Call StartAsyncMetaAgentDrone with purpose build, useWorktree false, and existingWorktreePath set to {worktreePath}. Do not omit useWorktree. Do not pass useWorktree true. A second isolated worktree cannot see this checkout. Pass todos with at least one item, for example one per conflicted path.
 
             Task text for that drone, with the facts above filled in:
 
@@ -3098,7 +3231,8 @@ public abstract class DysonAgentSession
             status: Status,
             hasReported: Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed
                 || _subagentReportAccepted,
-            hasPendingWork: HasPendingTurn || InFlightPromptTurn is not null,
+            // A held parent message starts when this run detaches; do not remind or synthesize first.
+            hasPendingWork: HasPendingTurn || InFlightPromptTurn is not null || HeldInterruptCount > 0,
             remindersSent: _childReportRemindersSent);
 
         switch (action)
@@ -3475,6 +3609,8 @@ public abstract class DysonAgentSession
             return;
 
         _runCts = null;
+        lock (_injectInterruptGate)
+            ReleaseHeldInterruptsAfterRunLocked();
         ReleaseBackgroundIdleWaiters();
     }
 
@@ -3719,7 +3855,7 @@ public abstract class DysonAgentSession
                 lock (child._injectInterruptGate)
                 {
                     child.DetachBackgroundRun(runCts);
-                    if (requeuedHere && !child.HasActiveBackgroundRun && child.HasPendingTurn && !child.IsTerminal)
+                    if ((requeuedHere || !promptStarted) && !child.HasActiveBackgroundRun && child.HasPendingTurn && !child.IsTerminal)
                         StartNextPendingTurn(child);
                 }
 

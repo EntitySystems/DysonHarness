@@ -284,6 +284,44 @@ public class DysonContextCompactionSmokeTests
         Assert.True(DysonCompactionFlow.CanCompact(work, continuation));
         Assert.False(DysonCompactionFlow.IsCompactionContinuation(
             DysonAgentSession.CreateNormalTurn(DysonCompactionFlow.ContinuationInstruction)));
+
+        // A continuation with an appended todo block is still the compaction continuation (loop guard).
+        var withTodos = DysonCompactionFlow.ContinuationInstruction + "\n\nYour todo list when this resume was queued:";
+        var todoContinuation = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Continuation,
+            Instruction = withTodos,
+            StartedUtc = DateTime.UtcNow,
+        };
+        Assert.True(DysonCompactionFlow.IsCompactionContinuation(todoContinuation));
+        Assert.False(DysonCompactionFlow.CanCompact(work, todoContinuation));
+        Assert.False(DysonCompactionFlow.IsCompactionContinuation(DysonAgentSession.CreateNormalTurn(withTodos)));
+    }
+
+    [Fact]
+    public async Task Root_meta_agent_continuation_has_no_todo_block_but_meta_agent_drone_does()
+    {
+        using var http = new HttpClient();
+        var root = CreateSession(http, Path.GetTempPath(), mode: DysonAgentModes.MetaAgent);
+        var drone = CreateSession(http, Path.GetTempPath(), mode: DysonAgentModes.MetaAgentDrone);
+        foreach (var s in new DysonAgentSession[] { root, drone })
+        {
+            var created = await s.CreateTodoAsync("t1", "Ship it", DysonSessionTodoStatus.Ongoing);
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : "");
+            DysonCompactionFlow.QueueFreshContinuationIfNeeded(s, resume: true);
+        }
+
+        Assert.True(root.TryDequeuePendingTurn(out var rootTurn));
+        Assert.True(drone.TryDequeuePendingTurn(out var droneTurn));
+
+        Assert.Equal(DysonCompactionFlow.ContinuationInstruction, rootTurn.Instruction);
+        Assert.DoesNotContain("[t1]", rootTurn.Instruction, StringComparison.Ordinal);
+        Assert.StartsWith(DysonCompactionFlow.ContinuationInstruction, droneTurn.Instruction, StringComparison.Ordinal);
+        Assert.Contains("In progress:", droneTurn.Instruction, StringComparison.Ordinal);
+        Assert.Contains("- [t1] Ship it", droneTurn.Instruction, StringComparison.Ordinal);
+        Assert.True(DysonCompactionFlow.IsCompactionContinuation(rootTurn));
+        Assert.True(DysonCompactionFlow.IsCompactionContinuation(droneTurn));
+        Assert.True(droneTurn.AfterSummaryResume);
     }
 
     [Fact]

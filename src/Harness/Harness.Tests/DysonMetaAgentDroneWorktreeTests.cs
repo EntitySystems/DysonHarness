@@ -98,6 +98,7 @@ public class DysonMetaAgentDroneWorktreeTests
                 .Select(e => e.GetString())
                 .ToArray();
             Assert.Contains("useWorktree", required);
+            Assert.Contains("todos", required);
             Assert.Equal(
                 "boolean",
                 schema.RootElement.GetProperty("properties").GetProperty("useWorktree").GetProperty("type").GetString());
@@ -149,7 +150,8 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.Empty(meta.SubSessions);
             await AssertNoDroneWorktree(repo);
 
-            var shared = await executor.ExecuteAsync(DroneCall("shared", """{"task":"run tests","useWorktree":false}"""));
+            // Seeded complete: this drone reports completed below, and the report gate refuses pending todos.
+            var shared = await executor.ExecuteAsync(DroneCall("shared", """{"task":"run tests","useWorktree":false,"todos":[{"displayName":"t","taskCode":"t","status":"complete"}]}"""));
             Assert.False(shared.IsError, shared.Content);
             var drone = Assert.IsType<DemoDysonAgentSession>(Assert.Single(meta.SubSessions));
             Assert.Equal(DysonAgentModes.MetaAgentDrone, drone.Mode);
@@ -174,7 +176,7 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.Equal("base\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
             await AssertNoDroneWorktree(repo);
 
-            var owned = await executor.ExecuteAsync(DroneCall("owned", """{"task":"edit the repo","useWorktree":true}"""));
+            var owned = await executor.ExecuteAsync(DroneCall("owned", """{"task":"edit the repo","useWorktree":true,"todos":[{"displayName":"t","taskCode":"t"}]}"""));
             Assert.False(owned.IsError, owned.Content);
             var forked = Assert.IsType<DemoDysonAgentSession>(meta.SubSessions[1]);
             Assert.True(forked.WorktreeEnabled);
@@ -233,6 +235,7 @@ public class DysonMetaAgentDroneWorktreeTests
                 task = "resolve",
                 useWorktree = false,
                 existingWorktreePath = wt,
+                todos = new[] { new { displayName = "t", taskCode = "t" } },
             });
             var rebound = await executor.ExecuteAsync(DroneCall("rebind", reboundArgs));
             Assert.False(rebound.IsError, rebound.Content);
@@ -246,7 +249,7 @@ public class DysonMetaAgentDroneWorktreeTests
             await AssertListedWorktreeCount(repo, 2);
 
             var shared = await executor.ExecuteAsync(
-                DroneCall("shared", """{"task":"run tests","useWorktree":false}"""));
+                DroneCall("shared", """{"task":"run tests","useWorktree":false,"todos":[{"displayName":"t","taskCode":"t"}]}"""));
             Assert.False(shared.IsError, shared.Content);
             var plain = Assert.IsType<DemoDysonAgentSession>(meta.SubSessions[1]);
             Assert.True(SamePath(repo, plain.WorkDirectoryPath!));
@@ -258,6 +261,7 @@ public class DysonMetaAgentDroneWorktreeTests
                 task = "nope",
                 useWorktree = true,
                 existingWorktreePath = wt,
+                todos = new[] { new { displayName = "t", taskCode = "t" } },
             });
             var rejected = await executor.ExecuteAsync(DroneCall("both", both));
             Assert.True(rejected.IsError);
@@ -269,6 +273,7 @@ public class DysonMetaAgentDroneWorktreeTests
                 task = "missing",
                 useWorktree = false,
                 existingWorktreePath = Path.Combine(parent, "not-a-worktree"),
+                todos = new[] { new { displayName = "t", taskCode = "t" } },
             });
             var notListed = await executor.ExecuteAsync(DroneCall("missing-path", unknown));
             Assert.True(notListed.IsError);
@@ -284,7 +289,7 @@ public class DysonMetaAgentDroneWorktreeTests
             await AssertListedWorktreeCount(repo, 3);
 
             var owned = await executor.ExecuteAsync(
-                DroneCall("owned", """{"task":"edit the repo","useWorktree":true}"""));
+                DroneCall("owned", """{"task":"edit the repo","useWorktree":true,"todos":[{"displayName":"t","taskCode":"t"}]}"""));
             Assert.False(owned.IsError, owned.Content);
             var isolated = Assert.IsType<DemoDysonAgentSession>(meta.SubSessions[3]);
             Assert.True(isolated.WorktreeEnabled);
