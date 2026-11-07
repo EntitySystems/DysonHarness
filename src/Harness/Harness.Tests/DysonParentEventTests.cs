@@ -164,6 +164,8 @@ public class DysonParentEventTests
             await child.ContinuationCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30));
             await child.Seen("urgent").WaitAsync(TimeSpan.FromSeconds(30));
             await child.WaitForTerminalAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            // The released interrupt's run detaches: the child is not left busy forever.
+            await child.WaitForBackgroundRunIdleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
 
             var order = child.Instructions.ToList();
             Assert.Single(order, i => i.EndsWith("urgent", StringComparison.Ordinal));
@@ -198,6 +200,8 @@ public class DysonParentEventTests
             await child.Seen("urgent one").WaitAsync(TimeSpan.FromSeconds(30));
             await child.Seen("urgent two").WaitAsync(TimeSpan.FromSeconds(30));
             await child.WaitForTerminalAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            // The released interrupt's run detaches: the child is not left busy forever.
+            await child.WaitForBackgroundRunIdleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
 
             var order = child.Instructions.ToList();
             Assert.Single(order, i => i.EndsWith("urgent one", StringComparison.Ordinal));
@@ -231,6 +235,8 @@ public class DysonParentEventTests
             Assert.False(await child.SummaryTokenCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30)));
             await child.Seen("urgent").WaitAsync(TimeSpan.FromSeconds(30));
             await child.WaitForTerminalAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            // The released interrupt's run detaches: the child is not left busy forever.
+            await child.WaitForBackgroundRunIdleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
 
             var order = child.Instructions.ToList();
             Assert.Single(order, i => i.EndsWith("urgent", StringComparison.Ordinal));
