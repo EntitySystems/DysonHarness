@@ -3855,7 +3855,7 @@ public abstract class DysonAgentSession
                 lock (child._injectInterruptGate)
                 {
                     child.DetachBackgroundRun(runCts);
-                    if (requeuedHere && !child.HasActiveBackgroundRun && child.HasPendingTurn && !child.IsTerminal)
+                    if ((requeuedHere || !promptStarted) && !child.HasActiveBackgroundRun && child.HasPendingTurn && !child.IsTerminal)
                         StartNextPendingTurn(child);
                 }
 
