@@ -20,6 +20,23 @@ public class DysonBrowserDomScriptsTests
     }
 
     [Fact]
+    public void Click_dispatches_one_click_and_never_calls_el_click()
+    {
+        // el.click() after dispatchEvent fired every handler twice (two tabs, double navigation).
+        foreach (var request in new[]
+                 {
+                     new DysonBrowserClickRequest { Selector = "#go" },
+                     new DysonBrowserClickRequest { X = 10, Y = 20 },
+                 })
+        {
+            var script = DysonBrowserDomScripts.Click(request);
+            Assert.False(script.IsError);
+            Assert.DoesNotContain("el.click()", script.Value, StringComparison.Ordinal);
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(script.Value, "dispatchEvent"));
+        }
+    }
+
+    [Fact]
     public void Click_requires_a_target()
     {
         var script = DysonBrowserDomScripts.Click(new DysonBrowserClickRequest());
