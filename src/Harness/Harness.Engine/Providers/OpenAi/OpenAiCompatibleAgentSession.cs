@@ -670,6 +670,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string? title = null,
         CancellationToken cancellationToken = default)
     {
+        MarkChildReportDelivered(interrupt.SubagentId);
         var turn = DysonSubagentReportPrompt.CreateTurn(interrupt, title);
         return PromptWithTurnAsync(turn, [], cancellationToken);
     }
@@ -1129,7 +1130,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
                 var text = ResolveFinalAssistantContent(reply.Content);
 
-                if (Parent is not null && !TurnHasSubmitSubagentReport(turn))
+                // Workers still running: a plain reply ends the turn normally and the watch holds
+                // (no nudge; the drone must not report while a worker runs).
+                if (Parent is not null && !TurnHasSubmitSubagentReport(turn) && !IsAwaitingDescendants)
                 {
                     if (!childReportNudged)
                     {

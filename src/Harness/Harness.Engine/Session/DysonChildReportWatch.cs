@@ -49,13 +49,18 @@ public static class DysonChildReportWatch
         DysonSessionStatus status,
         bool hasReported,
         bool hasPendingWork,
-        int remindersSent)
+        int remindersSent,
+        bool hasActiveDescendant = false)
     {
         if (!isChild || hasReported || hasPendingWork)
             return DysonChildReportAction.None;
 
         if (status == DysonSessionStatus.Active)
         {
+            // A worker is still running or its report has not been delivered: the report wakes this child.
+            if (hasActiveDescendant)
+                return DysonChildReportAction.Wait;
+
             return remindersSent < MaxReminders
                 ? DysonChildReportAction.Remind
                 : DysonChildReportAction.Synthesize;
@@ -85,4 +90,6 @@ public enum DysonChildReportAction
     None = 0,
     Remind = 1,
     Synthesize = 2,
+    /// <summary>Hold: a descendant is Active or its report is undelivered. No reminder, no synthesis.</summary>
+    Wait = 3,
 }

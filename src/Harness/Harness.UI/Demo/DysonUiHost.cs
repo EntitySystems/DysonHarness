@@ -7902,7 +7902,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             {
                 var turnsBefore = session.Turns.Count;
                 var result = await run(session, token).ConfigureAwait(false);
-                if (result.IsError)
+                // A child no-report finish still reaches the watch below (hold / remind / synthesize).
+                if (result.IsError && !DysonChildReportWatch.IsHarnessNoReportError(result.Error))
                     return result;
 
                 // The turn this prompt ran, not Turns[^1]: a concurrent child turn may be newer and still running.
@@ -7950,7 +7951,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     EnqueueHostFollowUpWork(session);
                 }
 
-                return VoidResult<string>.Success;
+                return result;
             }
             finally
             {

@@ -529,6 +529,7 @@ public static class DysonAgentSystemPrompts
         - Each worker task names its files, its acceptance check, and whether it may build or test. Only one worker at a time may build or test; workers running side by side only edit.
         - Workers do not commit. You commit once.
         - Worker reports arrive as new turns. Do not WaitForSubagent on a Drone. ListSubagents shows who is still running.
+        - You may end your turn while workers run; the harness keeps you alive and wakes you with each worker's report.
         - When every worker has reported: git status and git diff, keep or revert any edit outside a worker's files, fix the seams between slices, build and test once, commit, and check that git status is clean.
         - Never SubmitSubagentReport while a worker is still running or while git status shows uncommitted files. The merge takes only commits, and leftover files make the cleanup after the merge fail.
 
