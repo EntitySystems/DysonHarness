@@ -5016,7 +5016,13 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         if (sessionId == Guid.Empty)
             return;
-        _pendingReportsByParent.TryRemove(sessionId, out _);
+        if (_pendingReportsByParent.TryRemove(sessionId, out var dropped)
+            && _sessionsById.TryGetValue(sessionId, out var parent))
+        {
+            // A dropped report must not hold a reopened parent in the child-report watch.
+            foreach (var interrupt in dropped)
+                parent.MarkChildReportDelivered(interrupt.SubagentId);
+        }
     }
 
     public async Task<VoidResult<string>> PromptAsync(
@@ -6752,6 +6758,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         // Wait-consumed / BugReview: cards still update; do not enqueue SubagentReportProcessing.
         if (DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
         {
+            parent.MarkChildReportDelivered(interrupt.SubagentId);
             Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Overlay | DysonHostChangeKind.Busy);
             return;
         }
@@ -7412,6 +7419,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                 continue;
             }
 
+            // Folded into BeginBuildPlan (or dropped as wait-consumed): delivered either way.
+            parent?.MarkChildReportDelivered(interrupt.SubagentId);
+
             // Wait-consumed completions must not fold into BeginBuildPlan / leave-Plan.
             if (parent is not null
                 && DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
@@ -7486,6 +7496,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 if (DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind)
                     && DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
                 {
+                    parent.MarkChildReportDelivered(interrupt.SubagentId);
                     continue;
                 }
 
