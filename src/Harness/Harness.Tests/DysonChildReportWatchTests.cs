@@ -35,6 +35,26 @@ public class DysonChildReportWatchTests
         Assert.Equal(expected, actual);
     }
 
+    [Theory]
+    [InlineData(DysonSessionStatus.Active, false, false, 0, DysonChildReportAction.Wait)]
+    [InlineData(DysonSessionStatus.Active, false, false, 2, DysonChildReportAction.Wait)]
+    [InlineData(DysonSessionStatus.Active, true, false, 0, DysonChildReportAction.None)]
+    [InlineData(DysonSessionStatus.Active, false, true, 0, DysonChildReportAction.None)]
+    [InlineData(DysonSessionStatus.Stopped, false, false, 0, DysonChildReportAction.Synthesize)]
+    [InlineData(DysonSessionStatus.Interrupted, false, false, 0, DysonChildReportAction.Synthesize)]
+    [InlineData(DysonSessionStatus.Failed, false, false, 0, DysonChildReportAction.Synthesize)]
+    public void Evaluate_with_active_descendant_waits_only_while_Active(
+        DysonSessionStatus status,
+        bool hasReported,
+        bool hasPendingWork,
+        int remindersSent,
+        DysonChildReportAction expected)
+    {
+        var actual = DysonChildReportWatch.Evaluate(
+            isChild: true, status, hasReported, hasPendingWork, remindersSent, hasActiveDescendant: true);
+        Assert.Equal(expected, actual);
+    }
+
     [Fact]
     public void Remind_stops_after_MaxReminders()
     {

@@ -426,6 +426,34 @@ public class DysonContextCompactionSmokeTests
     }
 
     [Fact]
+    public async Task Child_with_active_worker_finishes_plain_reply_without_report_nudge()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var handler = new ScriptedHandler([() => Sse(TextChunk("Waiting for my worker."))]);
+            using var http = new HttpClient(handler);
+            var parent = CreateSession(http, workDir, mode: DysonAgentModes.MetaAgent);
+            var drone = CreateSession(http, workDir, mode: DysonAgentModes.MetaAgentDrone);
+            var worker = CreateSession(http, workDir, mode: DysonAgentModes.Drone);
+            typeof(DysonAgentSession).GetProperty(nameof(DysonAgentSession.Id))!.SetValue(drone, 1);
+            typeof(DysonAgentSession).GetProperty(nameof(DysonAgentSession.Id))!.SetValue(worker, 1);
+            parent.RestoreRegisteredSubagent(drone);
+            drone.RestoreRegisteredSubagent(worker);
+
+            var result = await drone.PromptAsync("# Task\n\ncoordinate");
+
+            Assert.True(result.IsSuccess, result.IsError ? result.Error : "");
+            Assert.Equal(1, handler.PostCount);
+            Assert.Equal("Waiting for my worker.", drone.Turns[^1].AssistantText);
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
+    [Fact]
     public void ReportLiveContextTokens_SetsFlagWithoutSubscriberAndWithThrowingHandler()
     {
         using var http = new HttpClient();

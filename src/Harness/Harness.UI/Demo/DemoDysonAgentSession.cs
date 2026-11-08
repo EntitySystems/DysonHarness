@@ -522,6 +522,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         string? title = null,
         CancellationToken cancellationToken = default)
     {
+        MarkChildReportDelivered(interrupt.SubagentId);
         var turn = DysonSubagentReportPrompt.CreateTurn(interrupt, title);
         SeedDemoTools(turn);
         return PromptWithTurnAsync(turn, turn.Instruction ?? "Subagent report", cancellationToken);

@@ -230,6 +230,44 @@ public class DysonSessionRuntimeTests
     }
 
     [Fact]
+    public async Task ExecutePrompt_child_no_report_reaches_the_watch_hold_then_remind()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var parent = Assert.IsType<StubSession>(created.Value);
+        var childRow = await harness.Sessions.CreateSessionAsync(new DysonSessionCreateRequest
+        {
+            RuntimeId = 1,
+            AgentMode = DysonAgentModes.Work,
+            Title = "child",
+            SystemPromptSnapshot = "runtime-core",
+        });
+        Assert.True(childRow.IsSuccess, childRow.IsError ? childRow.Error : null);
+        var child = parent.SpawnChildForTest(childRow.Value);
+        child.BindStore(harness.Sessions);
+        var worker = child.SpawnUnpersistedChildForTest();
+
+        Task<VoidResult<string>> NoReport(DysonAgentSession live, CancellationToken _)
+        {
+            Assert.IsType<StubSession>(live).AddTurnForTest(DysonAgentSession.CreateNormalTurn("work"));
+            return Task.FromResult(new VoidResult<string>(DysonChildReportWatch.PromptEndedWithoutReportReason));
+        }
+
+        var held = await harness.Runtime.ExecutePromptAsync(child, NoReport);
+        Assert.True(held.IsError);
+        Assert.Equal(DysonChildReportWatch.PromptEndedWithoutReportReason, held.Error);
+        Assert.Equal(0, child.ChildReportRemindersSent);
+        Assert.False(child.HasPendingTurn);
+
+        Assert.True(worker.TryMarkTerminal(DysonSessionStatus.Completed, "done"));
+        await harness.Runtime.ExecutePromptAsync(child, NoReport);
+        Assert.Equal(1, child.ChildReportRemindersSent);
+        Assert.True(child.TryDequeuePendingTurn(out var reminder));
+        Assert.Equal(DysonAgentTurnKind.ChildReportReminder, reminder.Kind);
+    }
+
+    [Fact]
     public async Task Delete_parent_does_not_rematerialize_child_spawned_before_persistence_id()
     {
         await using var harness = await Harness.CreateAsync();

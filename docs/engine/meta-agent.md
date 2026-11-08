@@ -265,11 +265,20 @@ Not Meta-Agent-only. A child that goes terminal without `SubmitSubagentReport` w
 | Inputs | Action |
 | ------ | ------ |
 | not a child / already `Completed` or `Failed` / pending or in-flight work | `None` |
+| `Active`, unreported, a descendant `Active` or a child report undelivered | `Wait` — hold; no reminder, no synthesis, reminder count unchanged |
 | `Active`, idle, unreported, `remindersSent < 2` | `Remind` — enqueue `ChildReportReminder` (kind 19) on the **child** |
 | `Active`, idle, unreported, reminders spent | `Synthesize` — child becomes `Failed` |
 | `Stopped` / `Interrupted` / `Failed` without a report | `Synthesize` immediately |
 
 The no-report strings (`PromptEndedWithoutReportReason`, `IdleWithoutReportReason`, the no-output kickoff summary) are roster failures, not host errors. `DysonChildReportWatch.IsHarnessNoReportError` keeps them out of `DysonUiHost.LastError` (the Meta banner) and the voice-sidecar `ReportError` path; the parent sees them only through the synthetic `SubagentFailed` report.
+
+**Hold while workers run (plan 257).** `DysonAgentSession.IsAwaitingDescendants` is `DysonTaskLifecycleFlow.HasActiveDescendant` (any depth) or `HasUndeliveredChildReport`. A child report counts as undelivered from `NotifySubagentCompleted/Failed/Stopped` until its `PromptSubagentReportProcessingAsync(interrupt)` turn starts (`MarkChildReportDelivered`) or a `WaitForSubagent` consumes it (`MarkWaitConsumedCompletion`), or the host consumes it another way (suppressed BugReview completion, folded into BeginBuildPlan, discarded on user stop); the set is in-memory and ignored once the session is terminal. While it holds:
+
+- the provider-loop no-report gate (`OpenAiCompatibleAgentSession.RunTurnLoopAsync`) does not nudge: a plain final reply ends the turn normally;
+- `KickOffChildPrompt` does not synthesize on `PromptEndedWithoutReportReason`; it falls through to the watch;
+- the watch logs `child report watch: holding …` and does nothing else.
+
+The drone wakes through the existing auto-turn when a worker reports or raises a parent event. When nothing is active or undelivered, the old rule applies (remind ×2, then synthesize). Stop, Cancel and restart are unchanged: the hold applies only to `Active`. Host paths (`DysonSessionRuntime.ExecutePromptAsync`, `DysonUiHost.ExecutePromptOnSessionAsync`) no longer return early on a harness no-report error; they persist the turn and run the watch, then return the error (still kept off `LastError`). Covered by `DysonChildReportWatchTests`, `DysonSyntheticReportTests`, `DysonSessionRuntimeTests`, `DysonContextCompactionSmokeTests`.
 
 `remindersSent` (`_childReportRemindersSent`) and `LastReportSummary` are **in-memory, per-process**. They are not session columns. After a restart the counter is gone. A restored `Stopped` child counts as already reported (Stop synthesized at stop time): `RestoreFromPersisted` restores `LastReportSummary` from its last `SessionStatusChanged(Stopped)` reason, so the watch does not re-report it as `application restart`.
 
@@ -277,7 +286,7 @@ The no-report strings (`PromptEndedWithoutReportReason`, `IdleWithoutReportReaso
 
 `DysonAgentSession.SubmitSyntheticReportAsync` calls `SubmitSubagentReportAsync(..., failed: true, bypassIncompleteTodos: true, allowStoppedOrInterrupted: true)`. Same pipeline: `TryAcceptSubagentReport` → `NotifySubagentFailed` → `EnqueueInterrupt` → host `SubagentReportProcessing`. Idempotency is the existing "already submitted" guard (`_subagentReportAccepted`), not a second counter.
 
-`KickOffChildPrompt` synthesizes on provider/exception failure; after a successful turn with nothing queued it runs `ApplyChildReportWatchAsync`.
+`KickOffChildPrompt` synthesizes on provider/exception failure (except a no-report finish while `IsAwaitingDescendants`); after a successful turn with nothing queued it runs `ApplyChildReportWatchAsync`.
 
 ### Stop semantics
 
