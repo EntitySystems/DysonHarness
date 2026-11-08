@@ -1975,13 +1975,22 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (exists.Value && !overwrite)
                 return Error(call, $"File already exists: {path.Value}");
 
+            // Change Stream only: an unreadable prior file logs as a full-text Overwritten, never fails the write.
+            string? prior = null;
+            if (exists.Value)
+            {
+                var priorRead = await _fs.ReadAllTextAsync(path.Value, cancellationToken).ConfigureAwait(false);
+                if (priorRead.IsSuccess)
+                    prior = priorRead.Value;
+            }
+
             var written = await _fs.WriteAllTextAsync(path.Value, content, cancellationToken)
                 .ConfigureAwait(false);
             if (written.IsError)
                 return Error(call, written.Error);
 
             await RecordFileChangeAsync(
-                    "CreateFile", path.Value, null, content,
+                    "CreateFile", path.Value, prior, content,
                     exists.Value ? DysonFileChangeKind.Overwritten : DysonFileChangeKind.Created,
                     null, cancellationToken)
                 .ConfigureAwait(false);

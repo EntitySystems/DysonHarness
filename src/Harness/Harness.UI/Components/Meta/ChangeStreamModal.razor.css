@@ -1,3 +1,8 @@
+/* Below the file viewer (1000): Open file keeps this modal open and the viewer must stack on top. */
+.change-stream-backdrop {
+  z-index: 990;
+}
+
 .change-stream-modal {
   width: min(720px, 100%);
   max-height: min(80vh, 720px);

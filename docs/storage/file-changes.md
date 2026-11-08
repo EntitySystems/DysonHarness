@@ -53,4 +53,4 @@ After a successful append the executor publishes `DysonFileChangedEvent(RootSess
 
 ## Retention
 
-Newest **2,000 rows per root**. `AppendAsync` prunes older rows of that root when the new id is a multiple of 50 (ponytail: amortized, fixed cap; upgrade path is a settings key). Worst case about 130 KiB per row.
+Newest **2,000 rows per root**. `AppendAsync` prunes older rows of that root when the new id is a multiple of 50 (ponytail: amortized, fixed cap; ids are table-wide, so a root keeps rows past the cap until one of its own appends lands on the stride; upgrade path is a settings key and a per-root count check). Worst case about 130 KiB per row.

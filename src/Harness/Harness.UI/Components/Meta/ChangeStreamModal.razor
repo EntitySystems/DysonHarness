@@ -8,7 +8,7 @@
 
 <DysonTransition Item="IsOpen" ExitMs="140" RestoreFocus="true"
                  OnEntered="FocusBackdropAsync" Context="ctx">
-    <div class="confirm-dialog-backdrop dyson-fade-scale @ctx.StateClass"
+    <div class="confirm-dialog-backdrop change-stream-backdrop dyson-fade-scale @ctx.StateClass"
          role="presentation"
          tabindex="-1"
          @ref="_backdropEl"
@@ -193,7 +193,9 @@
             if (_items.Exists(item => item.Id == row.Id))
                 return;
 
-            _items.Insert(0, row);
+            // Keep newest-first by id: events from parallel writers can land out of order.
+            var at = _items.FindIndex(item => item.Id < row.Id);
+            _items.Insert(at < 0 ? _items.Count : at, row);
             StateHasChanged();
         });
 
@@ -203,7 +205,7 @@
             return;
 
         var root = _boundRoot;
-        var before = _items[^1].Id;
+        var before = _items.Min(item => item.Id);
         _loadingOlder = true;
         var listed = await Task.Run(() => FileChanges.ListAsync(root, before, PageSize));
         if (_boundRoot != root || !IsOpen)

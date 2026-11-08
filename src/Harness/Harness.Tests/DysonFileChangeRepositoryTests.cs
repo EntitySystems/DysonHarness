@@ -134,6 +134,49 @@ public class DysonFileChangeRepositoryTests
         }
     }
 
+    [Fact]
+    public async Task Deleting_sessions_nulls_writer_and_cascades_root_rows()
+    {
+        var (accessor, path) = DysonTempDb.OpenFileAccessor();
+        try
+        {
+            var sessions = DysonTempDb.Sessions(accessor);
+            var changes = DysonTempDb.FileChanges(accessor);
+            var root = await CreateSessionAsync(sessions, "root");
+            var child = await sessions.CreateSessionAsync(new DysonSessionCreateRequest
+            {
+                RuntimeId = 1,
+                AgentMode = DysonAgentModes.Work,
+                SystemPromptSnapshot = "test",
+                Title = "child",
+                ParentSessionId = root,
+            });
+            Assert.True(child.IsSuccess, child.IsError ? child.Error : null);
+
+            var row = Row(root, "a.txt");
+            row.SessionId = child.Value;
+            var appended = await changes.AppendAsync(row);
+            AssertOk(appended);
+
+            var deletedChild = await sessions.DeleteSessionAsync(child.Value);
+            Assert.True(deletedChild.IsSuccess, deletedChild.IsError ? deletedChild.Error : null);
+            var kept = await changes.GetAsync(appended.Value);
+            AssertOk(kept);
+            Assert.NotNull(kept.Value);
+            Assert.Null(kept.Value!.SessionId);
+
+            var deletedRoot = await sessions.DeleteSessionAsync(root);
+            Assert.True(deletedRoot.IsSuccess, deletedRoot.IsError ? deletedRoot.Error : null);
+            var gone = await changes.GetAsync(appended.Value);
+            AssertOk(gone);
+            Assert.Null(gone.Value);
+        }
+        finally
+        {
+            DeleteTemp(path);
+        }
+    }
+
     private static DysonFileChangeEntity Row(Guid root, string path) => new()
     {
         RootSessionId = root,

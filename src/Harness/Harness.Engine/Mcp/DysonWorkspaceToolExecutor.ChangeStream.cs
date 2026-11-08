@@ -56,7 +56,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 }
             }
 
-            var (worktree, branch) = await ResolveChangeLocationAsync(ct).ConfigureAwait(false);
+            // Bytes are already on disk: a turn cancel must not drop the log row, so ct is not used below.
+            var (worktree, branch) = await ResolveChangeLocationAsync(CancellationToken.None).ConfigureAwait(false);
             var row = new DysonFileChangeEntity
             {
                 RootSessionId = rootId,
@@ -78,7 +79,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 ToolName = toolName,
             };
 
-            var appended = await repo.AppendAsync(row, ct).ConfigureAwait(false);
+            var appended = await repo.AppendAsync(row, CancellationToken.None).ConfigureAwait(false);
             if (appended.IsError)
             {
                 _session.AppendLog($"file change: {appended.Error}");
