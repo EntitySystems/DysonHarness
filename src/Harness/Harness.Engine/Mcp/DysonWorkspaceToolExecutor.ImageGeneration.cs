@@ -84,6 +84,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 if (written.IsError)
                     return Error(call, $"GenerateImage: could not write {path.Value}: {written.Error}");
 
+                await RecordFileChangeAsync("GenerateImage", path.Value, null, null, DysonFileChangeKind.Binary, normalized.Bytes.Length, cancellationToken).ConfigureAwait(false);
                 artifacts.Add(artifact.Value);
             }
         }

@@ -32,6 +32,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory;
     private readonly IDysonPendingUserQuestionRepository? _pendingUserQuestions;
     private readonly IDysonSessionSecretRepository? _sessionSecrets;
+    private readonly IDysonFileChangeRepository? _fileChanges;
     private readonly DysonVersionControlRegistry? _vcs;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
@@ -156,7 +157,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null,
         IDysonPendingUserQuestionRepository? pendingUserQuestions = null,
         IDysonSessionSecretRepository? sessionSecrets = null,
-        DysonVersionControlRegistry? vcs = null)
+        DysonVersionControlRegistry? vcs = null,
+        IDysonFileChangeRepository? fileChanges = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -168,6 +170,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _voiceSidecarMemory = voiceSidecarMemory;
         _pendingUserQuestions = pendingUserQuestions;
         _sessionSecrets = sessionSecrets;
+        _fileChanges = fileChanges;
         _vcs = vcs;
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
@@ -5016,7 +5019,13 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         if (sessionId == Guid.Empty)
             return;
-        _pendingReportsByParent.TryRemove(sessionId, out _);
+        if (_pendingReportsByParent.TryRemove(sessionId, out var dropped)
+            && _sessionsById.TryGetValue(sessionId, out var parent))
+        {
+            // A dropped report must not hold a reopened parent in the child-report watch.
+            foreach (var interrupt in dropped)
+                parent.MarkChildReportDelivered(interrupt.SubagentId);
+        }
     }
 
     public async Task<VoidResult<string>> PromptAsync(
@@ -5688,6 +5697,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             VoiceSidecarMemory = _voiceSidecarMemory,
             PendingUserQuestions = _pendingUserQuestions,
             SessionSecrets = _sessionSecrets,
+            FileChanges = _fileChanges,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,
@@ -6752,6 +6762,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         // Wait-consumed / BugReview: cards still update; do not enqueue SubagentReportProcessing.
         if (DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
         {
+            parent.MarkChildReportDelivered(interrupt.SubagentId);
             Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Overlay | DysonHostChangeKind.Busy);
             return;
         }
@@ -7412,6 +7423,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                 continue;
             }
 
+            // Folded into BeginBuildPlan (or dropped as wait-consumed): delivered either way.
+            parent?.MarkChildReportDelivered(interrupt.SubagentId);
+
             // Wait-consumed completions must not fold into BeginBuildPlan / leave-Plan.
             if (parent is not null
                 && DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
@@ -7486,6 +7500,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 if (DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind)
                     && DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
                 {
+                    parent.MarkChildReportDelivered(interrupt.SubagentId);
                     continue;
                 }
 
@@ -7902,7 +7917,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             {
                 var turnsBefore = session.Turns.Count;
                 var result = await run(session, token).ConfigureAwait(false);
-                if (result.IsError)
+                // A child no-report finish still reaches the watch below (hold / remind / synthesize).
+                if (result.IsError && !DysonChildReportWatch.IsHarnessNoReportError(result.Error))
                     return result;
 
                 // The turn this prompt ran, not Turns[^1]: a concurrent child turn may be newer and still running.
@@ -7950,7 +7966,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     EnqueueHostFollowUpWork(session);
                 }
 
-                return VoidResult<string>.Success;
+                return result;
             }
             finally
             {

@@ -36,6 +36,7 @@ public static class DysonLocalDbServiceCollectionExtensions
         services.AddScoped<IDysonVoiceSidecarMemoryRepository, DysonVoiceSidecarMemoryRepository>();
         services.AddScoped<IDysonPendingUserQuestionRepository, DysonPendingUserQuestionRepository>();
         services.AddScoped<IDysonSessionSecretRepository, DysonSessionSecretRepository>();
+        services.AddScoped<IDysonFileChangeRepository, DysonFileChangeRepository>();
         services.AddScoped<IDysonPluginInstallationRepository, DysonPluginInstallationRepository>();
         services.AddScoped<IDysonPluginVariableValueRepository, DysonPluginVariableValueRepository>();
         services.AddScoped<IDysonPluginMcpGrantRepository, DysonPluginMcpGrantRepository>();

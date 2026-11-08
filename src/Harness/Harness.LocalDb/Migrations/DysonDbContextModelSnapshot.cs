@@ -80,6 +80,86 @@ namespace Harness.LocalDb.Migrations
                     b.ToTable("configured_shells", (string)null);
                 });
 
+            modelBuilder.Entity("DysonHarness.DysonFileChangeEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasAnnotation("Sqlite:Autoincrement", true);
+
+                    b.Property<string>("AddedText")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AgentChain")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("BranchName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("ByteLength")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ContextAfter")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContextBefore")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsTruncated")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RelativePath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RemovedText")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RootPath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("RootSessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("StartLine")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ToolName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("WorkDirectoryId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WorktreeName")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId");
+
+                    b.HasIndex("RootSessionId", "Id");
+
+                    b.HasIndex("SubjectId", "RootSessionId");
+
+                    b.ToTable("file_changes", (string)null);
+                });
+
             modelBuilder.Entity("DysonHarness.DysonMetaScratchFileEntity", b =>
                 {
                     b.Property<long>("Id")
@@ -1259,6 +1339,22 @@ namespace Harness.LocalDb.Migrations
                         .IsUnique();
 
                     b.ToTable("work_directories", (string)null);
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonFileChangeEntity", b =>
+                {
+                    b.HasOne("DysonHarness.DysonSessionEntity", "RootSession")
+                        .WithMany()
+                        .HasForeignKey("RootSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("DysonHarness.DysonSessionEntity", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("RootSession");
                 });
 
             modelBuilder.Entity("DysonHarness.DysonMetaScratchFileEntity", b =>

@@ -24,6 +24,7 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonMetaScratchFileEntity> MetaScratchFiles => Set<DysonMetaScratchFileEntity>();
     public DbSet<DysonVoiceSidecarMemoryEntity> VoiceSidecarMemories => Set<DysonVoiceSidecarMemoryEntity>();
     public DbSet<DysonPendingUserQuestionEntity> PendingUserQuestions => Set<DysonPendingUserQuestionEntity>();
+    public DbSet<DysonFileChangeEntity> FileChanges => Set<DysonFileChangeEntity>();
     public DbSet<DysonSessionSecretEntity> SessionSecrets => Set<DysonSessionSecretEntity>();
     public DbSet<DysonSessionEntity> Sessions => Set<DysonSessionEntity>();
     public DbSet<DysonTurnEntity> Turns => Set<DysonTurnEntity>();
@@ -196,6 +197,35 @@ public sealed class DysonDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(x => x.SessionId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonFileChangeEntity>(e =>
+        {
+            e.ToTable("file_changes");
+            e.HasKey(x => x.Id);
+            // SQLite INTEGER PRIMARY KEY is signed int64. Both casts are unchecked on purpose: EF's pre-insert
+            // temporary key round-trips through this converter as a negative long / huge ulong and must not
+            // throw. Stored ids are SQLite rowids 1, 2, 3… so the cast is lossless for every real row.
+            e.Property(x => x.Id)
+                .HasConversion(v => unchecked((long)v), v => unchecked((ulong)v))
+                .ValueGeneratedOnAdd()
+                .HasAnnotation("Sqlite:Autoincrement", true);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.RootPath).IsRequired();
+            e.Property(x => x.RelativePath).IsRequired();
+            e.Property(x => x.Kind).HasConversion<int>();
+            e.Property(x => x.AgentChain).IsRequired();
+            e.Property(x => x.ToolName).IsRequired();
+            e.HasIndex(x => new { x.RootSessionId, x.Id });
+            e.HasIndex(x => new { x.SubjectId, x.RootSessionId });
+            e.HasOne(x => x.RootSession)
+                .WithMany()
+                .HasForeignKey(x => x.RootSessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<DysonSessionEntity>()
+                .WithMany()
+                .HasForeignKey(x => x.SessionId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<DysonSessionSecretEntity>(e =>

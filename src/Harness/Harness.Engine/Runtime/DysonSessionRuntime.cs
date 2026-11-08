@@ -1033,10 +1033,12 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
                     return SupersededOrCancelled(linked);
                 }
 
-                if (result.IsError)
-                    return _supersededPromptCts.ContainsKey(linked)
-                        ? VoidResult<string>.AsError(PromptSupersededError)
-                        : result;
+                if (result.IsError && _supersededPromptCts.ContainsKey(linked))
+                    return VoidResult<string>.AsError(PromptSupersededError);
+
+                // A child no-report finish still reaches the watch below (hold / remind / synthesize).
+                if (result.IsError && !DysonChildReportWatch.IsHarnessNoReportError(result.Error))
+                    return result;
 
                 // The turn this prompt ran, not Turns[^1]: a concurrent child turn may be newer and still running.
                 if (session.TryGetTurnRanSince(turnsBefore, out var last))
@@ -1078,7 +1080,7 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
                     RaiseChanged(DysonRuntimeChangeKind.SessionGraph, sessionId);
                 }
 
-                return VoidResult<string>.Success;
+                return result;
             }
             finally
             {

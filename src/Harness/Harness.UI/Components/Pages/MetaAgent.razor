@@ -82,6 +82,15 @@
                         </button>
                     }
                     <button type="button"
+                            class="btn meta-stage__changes"
+                            disabled="@(!IsMetaFocused)"
+                            title="Change Stream"
+                            data-flash="@_changesFlash"
+                            @onclick="ToggleChanges">
+                        <span class="meta-stage__icon meta-stage__icon--changes" aria-hidden="true"></span>
+                        <span class="meta-stage__label">Changes</span>
+                    </button>
+                    <button type="button"
                             class="btn"
                             disabled="@(!CanOpenFullSession)"
                             title="Open this Meta Agent session in the full chat UI"
@@ -331,6 +340,11 @@
                 Service="_vcs"
                 OnClose="ClosePipelines" />
 
+<ChangeStreamModal IsOpen="_changesOpen"
+                   RootSessionId="@(_metaSessionId ?? Guid.Empty)"
+                   WorkRoot="_workDirectoryPath"
+                   OnClose="CloseChanges" />
+
 @code {
     [Parameter] public Guid WorkDirectoryId { get; set; }
 
@@ -374,6 +388,11 @@
     private IDisposable? _pipelinesLease;
     private IDisposable? _pipelinesSub;
     private bool _pipelinesOpen;
+    private bool _changesOpen;
+    private string? _changesFlash;
+    private Guid? _changesBoundId;
+    private IDisposable? _changesSub;
+    private string? _workDirectoryPath;
     private ElementReference _shell;
     private ElementReference _prompt;
     private WorkDirectorySwitcher? _workdirSwitcher;
@@ -507,10 +526,12 @@
         _questionsOpen = false;
         _vizOpen = false;
         _pipelinesOpen = false;
+        _changesOpen = false;
 
         var get = await WorkDirs.GetAsync(WorkDirectoryId);
         _unknownWorkDirectory = get.IsError;
         _workDirectoryName = get.IsSuccess ? get.Value.Name : null;
+        _workDirectoryPath = get.IsSuccess ? get.Value.AbsolutePath : null;
         if (_unknownWorkDirectory)
         {
             Host.Focus?.SetActive(null);
@@ -519,6 +540,7 @@
             _metaSessionId = null;
             BindAgentsListSubscriptions();
             BindQuestionsSubscription();
+            BindChangesSubscription();
             BindPipelines(null);
             return;
         }
@@ -610,6 +632,7 @@
             _metaSessionId = live.PersistenceId;
             BindAgentsListSubscriptions();
             BindQuestionsSubscription();
+            BindChangesSubscription();
             _sessionReady = true;
             await RefreshQuestionCountAsync();
             return;
@@ -632,6 +655,7 @@
                 _metaSessionId = existing.Id;
                 BindAgentsListSubscriptions();
                 BindQuestionsSubscription();
+                BindChangesSubscription();
             }
             else
             {
@@ -645,6 +669,7 @@
                 _metaSessionId = existing.Id;
                 BindAgentsListSubscriptions();
                 BindQuestionsSubscription();
+                BindChangesSubscription();
             }
         }
         else
@@ -662,6 +687,7 @@
             _metaSessionId = Host.ActiveSessionId;
             BindAgentsListSubscriptions();
             BindQuestionsSubscription();
+            BindChangesSubscription();
         }
 
         if (_metaSessionId is not Guid metaId
@@ -826,6 +852,39 @@
         _questionsSub = null;
     }
 
+    private void BindChangesSubscription()
+    {
+        if (_metaSessionId == _changesBoundId)
+            return;
+
+        DisposeChangesSubscription();
+        _changesBoundId = _metaSessionId;
+        if (_metaSessionId is not Guid id || id == Guid.Empty)
+            return;
+
+        var sub = Bus.Subscribe<DysonFileChangedEvent>(
+            DysonBusScopes.Session(id),
+            OnFileChanged);
+        if (sub.IsSuccess)
+            _changesSub = sub.Value;
+    }
+
+    private void OnFileChanged(DysonFileChangedEvent evt) =>
+        _ = InvokeAsync(() =>
+        {
+            if (_metaSessionId is not Guid id || evt.RootSessionId != id)
+                return;
+
+            _changesFlash = _changesFlash == "a" ? "b" : "a";
+            StateHasChanged();
+        });
+
+    private void DisposeChangesSubscription()
+    {
+        _changesSub?.Dispose();
+        _changesSub = null;
+    }
+
     private async Task SendAsync()
     {
         var text = _draft.Trim();
@@ -951,6 +1010,10 @@
     private void TogglePipelines() => _pipelinesOpen = !_pipelinesOpen;
 
     private void ClosePipelines() => _pipelinesOpen = false;
+
+    private void ToggleChanges() => _changesOpen = !_changesOpen;
+
+    private void CloseChanges() => _changesOpen = false;
 
     private static string PipelinesTitle(DysonPipelineSnapshot snap)
     {
@@ -1185,6 +1248,8 @@
         _agentsListBoundId = null;
         DisposeQuestionsSubscription();
         _questionsBoundId = null;
+        DisposeChangesSubscription();
+        _changesBoundId = null;
         DisposePipelines();
         if (_imageCaptureBound)
             await DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.detachImageCapture", _shell);

@@ -74,6 +74,12 @@ public sealed record DysonMetaScratchFilesChangedEvent(Guid WorkDirectoryId, lon
 /// </summary>
 public sealed record DysonPendingUserQuestionsChangedEvent(Guid SessionId) : IDysonMessageBusEvent;
 
+/// <summary>
+/// A <c>file_changes</c> row <paramref name="ChangeId"/> was appended for root session <paramref name="RootSessionId"/>.
+/// Published on <see cref="DysonBusScopes.Session"/> of the root, after the insert. Carries no diff; read the row by id.
+/// </summary>
+public sealed record DysonFileChangedEvent(Guid RootSessionId, ulong ChangeId) : IDysonMessageBusEvent;
+
 /// <summary>Which end of a voice-sidecar pair a bus message is addressed to.</summary>
 public enum DysonVoiceSidecarDirection
 {

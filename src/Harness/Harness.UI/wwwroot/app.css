@@ -391,6 +391,12 @@ code, .mono {
   100% { opacity: 0; transform: scale(1.9); }
 }
 
+/* Change Stream button flash. Reduced motion: the blanket rule stops it. */
+@keyframes dyson-change-flash {
+  from { background-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+  to { background-color: transparent; }
+}
+
 
 /* Shell */
 .app-shell {

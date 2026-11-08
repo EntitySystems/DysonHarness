@@ -459,6 +459,9 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, result.Error);
 
         var (json, created) = result.Value;
+        if (created)
+            await RecordFileChangeAsync("InitializeOpenRules", DysonOpenRules.ManifestFileName, null, json, DysonFileChangeKind.Created, null, cancellationToken).ConfigureAwait(false);
+
         // Embed file JSON as an object (not a string) for easier agent consumption.
         var payload = "{\"created\":" + (created ? "true" : "false") + ",\"openrules\":" + json + "}";
         return Ok(call, payload);
@@ -506,6 +509,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, written.Error);
 
         var planPath = written.Value;
+        await RecordFileChangeAsync("SubmitPlan", planPath, null, markdown, DysonFileChangeKind.Created, null, cancellationToken).ConfigureAwait(false);
         _session.AppendPlanResultTurn(planPath, title);
 
         var absResolved = _fs.ResolvePath(planPath);
@@ -1971,11 +1975,25 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (exists.Value && !overwrite)
                 return Error(call, $"File already exists: {path.Value}");
 
+            // Change Stream only: an unreadable prior file logs as a full-text Overwritten, never fails the write.
+            string? prior = null;
+            if (exists.Value)
+            {
+                var priorRead = await _fs.ReadAllTextAsync(path.Value, cancellationToken).ConfigureAwait(false);
+                if (priorRead.IsSuccess)
+                    prior = priorRead.Value;
+            }
+
             var written = await _fs.WriteAllTextAsync(path.Value, content, cancellationToken)
                 .ConfigureAwait(false);
             if (written.IsError)
                 return Error(call, written.Error);
 
+            await RecordFileChangeAsync(
+                    "CreateFile", path.Value, prior, content,
+                    exists.Value ? DysonFileChangeKind.Overwritten : DysonFileChangeKind.Created,
+                    null, cancellationToken)
+                .ConfigureAwait(false);
             return Ok(call, $"Created {path.Value} ({content.Length} chars).");
         }
         catch (JsonException)
@@ -2193,11 +2211,25 @@ public sealed partial class DysonWorkspaceToolExecutor
                 && !doc.RootElement.TryGetProperty("edits", out _))
             {
                 var full = contentProp.GetString() ?? "";
+                // Change Stream only: an unreadable prior file logs as a full-text Overwritten, never fails the write.
+                string? prior = null;
+                if (exists.Value)
+                {
+                    var priorRead = await _fs.ReadAllTextAsync(path.Value, cancellationToken).ConfigureAwait(false);
+                    if (priorRead.IsSuccess)
+                        prior = priorRead.Value;
+                }
+
                 var written = await _fs.WriteAllTextAsync(path.Value, full, cancellationToken)
                     .ConfigureAwait(false);
                 if (written.IsError)
                     return Error(call, written.Error);
 
+                await RecordFileChangeAsync(
+                        "WriteFile", path.Value, prior, full,
+                        exists.Value ? DysonFileChangeKind.Overwritten : DysonFileChangeKind.Created,
+                        null, cancellationToken)
+                    .ConfigureAwait(false);
                 return Ok(call, $"Wrote full content to {path.Value} ({full.Length} chars).");
             }
 
@@ -2251,6 +2283,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (saved.IsError)
                 return Error(call, saved.Error);
 
+            await RecordFileChangeAsync("WriteFile", path.Value, read.Value, text, DysonFileChangeKind.Edited, null, cancellationToken).ConfigureAwait(false);
             return Ok(
                 call,
                 $"Applied {appliedEdits} edit(s) ({replacementCount} replacement(s)) to {path.Value}.");
@@ -2832,6 +2865,8 @@ public sealed partial class DysonWorkspaceToolExecutor
             .ConfigureAwait(false);
         if (written.IsError)
             return Error(call, written.Error);
+
+        await RecordFileChangeAsync("ConvertImage", outputFile.Value, null, null, DysonFileChangeKind.Binary, converted.Value.Bytes.Length, cancellationToken).ConfigureAwait(false);
 
         var ack = new
         {

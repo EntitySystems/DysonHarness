@@ -1,0 +1,315 @@
+@namespace Harness.UI.Components.Meta
+@using Microsoft.AspNetCore.Components.Web
+@using DysonHarness
+@implements IAsyncDisposable
+@inject DysonMessageBus Bus
+@inject DysonUiHost Host
+@inject IDysonFileChangeRepository FileChanges
+
+<DysonTransition Item="IsOpen" ExitMs="140" RestoreFocus="true"
+                 OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="confirm-dialog-backdrop change-stream-backdrop dyson-fade-scale @ctx.StateClass"
+         role="presentation"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+         @onkeydown="args => { if (!ctx.IsExiting) OnKeyDown(args); }">
+        <div class="confirm-dialog change-stream-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="change-stream-modal-title"
+             @onclick:stopPropagation="true">
+            <div class="confirm-dialog__header">
+                <h3 id="change-stream-modal-title">Change Stream</h3>
+                <button type="button"
+                        class="btn btn-ghost change-stream-modal__close"
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+                        aria-label="Close">×</button>
+            </div>
+
+            <div class="confirm-dialog__body change-stream-modal__body">
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <p class="change-stream-modal__banner">@_error</p>
+                }
+
+                @if (_loading && _items.Count == 0)
+                {
+                    <p class="change-stream-modal__empty">
+                        <span class="subagent-card__spinner" aria-hidden="true"></span>
+                        Loading changes…
+                    </p>
+                }
+                else if (_items.Count == 0)
+                {
+                    <p class="change-stream-modal__empty">No file changes yet.</p>
+                }
+                else
+                {
+                    <ul class="change-stream__list" role="list">
+                        @foreach (var change in _items)
+                        {
+                            <li class="change-stream__item" role="listitem" @key="change.Id">
+                                <div class="change-stream__head">
+                                    <span class="change-stream__kind" data-kind="@change.Kind">@change.Kind</span>
+                                    <span class="change-stream__path mono" title="@change.RelativePath"><bdi dir="ltr">@change.RelativePath</bdi></span>
+                                    <span class="change-stream__time mono">@FormatRelative(change.CreatedUtc)</span>
+                                    <span class="change-stream__pill mono" title="@PillTitle(change)">@Pill(change)</span>
+                                    <button type="button"
+                                            class="btn btn-ghost change-stream__open"
+                                            @onclick="() => OpenFileAsync(change)">Open file</button>
+                                </div>
+                                @if (change.Kind == DysonFileChangeKind.Binary)
+                                {
+                                    <p class="change-stream__binary">Binary file, @(change.ByteLength?.ToString() ?? "0") bytes</p>
+                                }
+                                else
+                                {
+                                    @* div, not pre: Razor keeps whitespace text nodes inside pre, which would add blank lines. *@
+                                    <div class="change-diff">
+                                        @foreach (var line in DysonFileChangeDiff.ToLines(change))
+                                        {
+                                            <div class="change-diff__line @LineClass(line.Kind)">@LinePrefix(line.Kind)@line.Text</div>
+                                        }
+                                    </div>
+                                    @if (change.IsTruncated)
+                                    {
+                                        <p class="change-stream__truncated">Diff truncated.</p>
+                                    }
+                                }
+                            </li>
+                        }
+                    </ul>
+                    @if (_hasMore)
+                    {
+                        <button type="button"
+                                class="btn change-stream__older"
+                                disabled="@_loadingOlder"
+                                @onclick="LoadOlderAsync">@(_loadingOlder ? "Loading…" : "Load older")</button>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+</DysonTransition>
+
+@code {
+    private const int PageSize = 30;
+
+    [Parameter] public bool IsOpen { get; set; }
+
+    [Parameter] public Guid RootSessionId { get; set; }
+
+    /// <summary>Registered work directory path. Open file falls back here when the change root is gone.</summary>
+    [Parameter] public string? WorkRoot { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private ElementReference _backdropEl;
+    private bool _wasOpen;
+    private Guid _boundRoot;
+    private IDisposable? _sub;
+    private readonly List<DysonFileChangeEntity> _items = [];
+    private bool _loading;
+    private bool _loadingOlder;
+    private bool _hasMore;
+    private string? _error;
+
+    protected override void OnParametersSet()
+    {
+        if (IsOpen && (!_wasOpen || _boundRoot != RootSessionId))
+        {
+            ReleaseOpenState();
+            _ = OpenAsync();
+        }
+        else if (!IsOpen && _wasOpen)
+        {
+            ReleaseOpenState();
+        }
+
+        _wasOpen = IsOpen;
+    }
+
+    private async Task OpenAsync()
+    {
+        var root = RootSessionId;
+        _boundRoot = root;
+        _items.Clear();
+        _hasMore = false;
+        _error = null;
+        _loading = true;
+        Subscribe(root);
+
+        var listed = await Task.Run(() => FileChanges.ListAsync(root, beforeId: null, PageSize));
+        if (_boundRoot != root || !IsOpen)
+            return;
+
+        _loading = false;
+        if (listed.IsError)
+        {
+            _error = listed.Error;
+        }
+        else
+        {
+            // A live insert can land before the first page; skip rows it already added.
+            _items.AddRange(listed.Value.Where(row => !_items.Exists(item => item.Id == row.Id)));
+            _hasMore = listed.Value.Count >= PageSize;
+        }
+
+        StateHasChanged();
+    }
+
+    private void Subscribe(Guid root)
+    {
+        if (root == Guid.Empty)
+            return;
+
+        var sub = Bus.Subscribe<DysonFileChangedEvent>(
+            DysonBusScopes.Session(root),
+            OnFileChanged);
+        if (sub.IsSuccess)
+            _sub = sub.Value;
+    }
+
+    private void OnFileChanged(DysonFileChangedEvent evt) =>
+        _ = InvokeAsync(async () =>
+        {
+            if (!IsOpen || evt.RootSessionId != _boundRoot)
+                return;
+
+            var id = evt.ChangeId;
+            var got = await Task.Run(() => FileChanges.GetAsync(id));
+            if (!IsOpen || evt.RootSessionId != _boundRoot)
+                return;
+            if (got.IsError)
+            {
+                _error = got.Error;
+                StateHasChanged();
+                return;
+            }
+
+            if (got.Value is not { } row)
+                return;
+            if (_items.Exists(item => item.Id == row.Id))
+                return;
+
+            // Keep newest-first by id: events from parallel writers can land out of order.
+            var at = _items.FindIndex(item => item.Id < row.Id);
+            _items.Insert(at < 0 ? _items.Count : at, row);
+            StateHasChanged();
+        });
+
+    private async Task LoadOlderAsync()
+    {
+        if (_loadingOlder || _items.Count == 0)
+            return;
+
+        var root = _boundRoot;
+        var before = _items.Min(item => item.Id);
+        _loadingOlder = true;
+        var listed = await Task.Run(() => FileChanges.ListAsync(root, before, PageSize));
+        if (_boundRoot != root || !IsOpen)
+            return;
+
+        _loadingOlder = false;
+        if (listed.IsError)
+        {
+            _error = listed.Error;
+        }
+        else
+        {
+            foreach (var row in listed.Value)
+            {
+                if (!_items.Exists(item => item.Id == row.Id))
+                    _items.Add(row);
+            }
+
+            _hasMore = listed.Value.Count >= PageSize;
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task OpenFileAsync(DysonFileChangeEntity change)
+    {
+        var root = change.RootPath;
+        var exists = !string.IsNullOrWhiteSpace(root)
+            && await Task.Run(() => Directory.Exists(root));
+        var workRoot = exists ? root : WorkRoot;
+        if (string.IsNullOrWhiteSpace(workRoot) || string.IsNullOrWhiteSpace(change.RelativePath))
+            return;
+
+        await Host.OpenFileViewerAsync(change.RelativePath, workRoot: workRoot);
+    }
+
+    private static string Pill(DysonFileChangeEntity change)
+    {
+        var place = change.WorktreeName ?? change.BranchName ?? "—";
+        var who = string.IsNullOrWhiteSpace(change.AgentChain) ? "Meta" : change.AgentChain;
+        return $"{place} · {who}";
+    }
+
+    private static string PillTitle(DysonFileChangeEntity change) =>
+        string.Join(" · ", new[]
+        {
+            string.IsNullOrWhiteSpace(change.RootPath) ? null : change.RootPath,
+            string.IsNullOrWhiteSpace(change.BranchName) ? null : change.BranchName,
+            string.IsNullOrWhiteSpace(change.ToolName) ? null : change.ToolName,
+        }.Where(part => part is not null));
+
+    private static string LineClass(DysonFileChangeLineKind kind) => kind switch
+    {
+        DysonFileChangeLineKind.Removed => "change-diff__line--del",
+        DysonFileChangeLineKind.Added => "change-diff__line--add",
+        _ => "change-diff__line--ctx",
+    };
+
+    private static string LinePrefix(DysonFileChangeLineKind kind) => kind switch
+    {
+        DysonFileChangeLineKind.Removed => "-",
+        DysonFileChangeLineKind.Added => "+",
+        _ => " ",
+    };
+
+    private static string FormatRelative(DateTime utc)
+    {
+        var when = utc.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(utc, DateTimeKind.Utc)
+            : utc.ToUniversalTime();
+        var elapsed = DateTime.UtcNow - when;
+        if (elapsed.TotalSeconds < 45) return "just now";
+        if (elapsed.TotalMinutes < 60) return $"{Math.Max(1, (int)elapsed.TotalMinutes)}m ago";
+        if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h ago";
+        if (elapsed.TotalDays < 7) return $"{(int)elapsed.TotalDays}d ago";
+        return when.ToLocalTime().ToString("d");
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private async Task FocusBackdropAsync()
+    {
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
+    }
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+
+    private void ReleaseOpenState()
+    {
+        _sub?.Dispose();
+        _sub = null;
+        _boundRoot = Guid.Empty;
+        _loading = false;
+        _loadingOlder = false;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        ReleaseOpenState();
+        return ValueTask.CompletedTask;
+    }
+}

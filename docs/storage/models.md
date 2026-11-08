@@ -71,6 +71,7 @@ Shipped SQLite lives in **`Harness.LocalDb`** (not Engine). External hosts may i
 - Entity timestamps are `DateTime` (UTC). Do not use `DateTimeOffset` on EF entities or in EF `OrderBy` queries (SQLite limitation).
 - `UpsertTurnAsync` retries EF concurrent-context / SQLITE_BUSY (5) / locked (6) before failing; other ops rely on the accessor gate + busy `SaveChanges` retry
 - Existing rows migrate to `SubjectId = "local"` (`DysonSubjects.Local`)
+- Change Stream rows (`file_changes`, per root session): [file-changes.md](file-changes.md)
 
 ### Subjects (`subjects`)
 

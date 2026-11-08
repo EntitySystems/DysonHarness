@@ -34,6 +34,8 @@ public abstract class DysonAgentSession
     private readonly ConcurrentDictionary<Guid, DysonParentEvent> _pendingParentEvents = new();
     private readonly HashSet<int> _waitingOnSubagentIds = [];
     private readonly HashSet<int> _waitConsumedCompletionSubagentIds = [];
+    // Child reports enqueued for a SubagentReportProcessing auto-turn that has not run yet (in-memory).
+    private readonly HashSet<int> _undeliveredChildReportIds = [];
     private readonly object _waitingOnGate = new();
     private readonly ConcurrentQueue<DysonAgentTurn> _pendingTurns = new();
     // Parent waits on a positive inject timeout; signalled when KickOffChildPrompt starts that turn.
@@ -166,7 +168,48 @@ public abstract class DysonAgentSession
     internal void MarkWaitConsumedCompletion(int subagentId)
     {
         lock (_waitingOnGate)
+        {
             _waitConsumedCompletionSubagentIds.Add(subagentId);
+            _undeliveredChildReportIds.Remove(subagentId);
+        }
+    }
+
+    /// <summary>True while a child report waits for its SubagentReportProcessing turn on this live session.</summary>
+    internal bool HasUndeliveredChildReport
+    {
+        get
+        {
+            if (IsTerminal)
+                return false;
+            lock (_waitingOnGate)
+                return _undeliveredChildReportIds.Count > 0;
+        }
+    }
+
+    /// <summary>
+    /// Child-report watch hold: a descendant is still Active, or a child report has not been delivered
+    /// as a turn yet. Either wakes this session later, so it must not be reminded or failed now.
+    /// </summary>
+    internal bool IsAwaitingDescendants =>
+        DysonTaskLifecycleFlow.HasActiveDescendant(this) || HasUndeliveredChildReport;
+
+    /// <summary>The SubagentReportProcessing turn for this child's report has started.</summary>
+    internal void MarkChildReportDelivered(int subagentId)
+    {
+        lock (_waitingOnGate)
+            _undeliveredChildReportIds.Remove(subagentId);
+    }
+
+    private void TrackUndeliveredChildReport(int subagentId)
+    {
+        lock (_waitingOnGate)
+        {
+            if (!_waitingOnSubagentIds.Contains(subagentId)
+                && !_waitConsumedCompletionSubagentIds.Contains(subagentId))
+            {
+                _undeliveredChildReportIds.Add(subagentId);
+            }
+        }
     }
 
     internal void ClearWaitConsumedCompletion(int subagentId)
@@ -203,6 +246,21 @@ public abstract class DysonAgentSession
 
     /// <summary>Live parent when this session was spawned via <see cref="RegisterSubagent"/>.</summary>
     public DysonAgentSession? Parent { get; private set; }
+
+    /// <summary>
+    /// <see cref="PersistenceId"/> of the top of the <see cref="Parent"/> chain (walk capped at 8 levels);
+    /// falls back to this session's id when the root is unpersisted.
+    /// </summary>
+    internal Guid RootPersistenceId
+    {
+        get
+        {
+            var current = this;
+            for (var depth = 0; current.Parent is not null && depth < RosterMaxDepth; depth++)
+                current = current.Parent;
+            return current.PersistenceId == Guid.Empty ? PersistenceId : current.PersistenceId;
+        }
+    }
 
     /// <summary>Harness-created voice sidecar of a root Meta session. Not a registered child.</summary>
     public DysonAgentSession? VoiceSidecar { get; internal set; }
@@ -1209,31 +1267,30 @@ public abstract class DysonAgentSession
     }
 
     protected void NotifySubagentCompleted(int subagentId, string? summary, Guid? persistenceId = null) =>
-        EnqueueInterrupt(new DysonAgentInterrupt
-        {
-            Kind = DysonAgentInterruptKind.SubagentCompleted,
-            SubagentId = subagentId,
-            PersistenceId = persistenceId,
-            Summary = summary,
-        });
+        NotifySubagentTerminal(DysonAgentInterruptKind.SubagentCompleted, subagentId, summary, persistenceId);
 
     protected void NotifySubagentStopped(int subagentId, string? summary, Guid? persistenceId = null) =>
-        EnqueueInterrupt(new DysonAgentInterrupt
-        {
-            Kind = DysonAgentInterruptKind.SubagentStopped,
-            SubagentId = subagentId,
-            PersistenceId = persistenceId,
-            Summary = summary,
-        });
+        NotifySubagentTerminal(DysonAgentInterruptKind.SubagentStopped, subagentId, summary, persistenceId);
 
     protected void NotifySubagentFailed(int subagentId, string? summary, Guid? persistenceId = null) =>
+        NotifySubagentTerminal(DysonAgentInterruptKind.SubagentFailed, subagentId, summary, persistenceId);
+
+    // Tracked before the enqueue: the host may start the report turn (and mark it delivered) synchronously.
+    private void NotifySubagentTerminal(
+        DysonAgentInterruptKind kind,
+        int subagentId,
+        string? summary,
+        Guid? persistenceId)
+    {
+        TrackUndeliveredChildReport(subagentId);
         EnqueueInterrupt(new DysonAgentInterrupt
         {
-            Kind = DysonAgentInterruptKind.SubagentFailed,
+            Kind = kind,
             SubagentId = subagentId,
             PersistenceId = persistenceId,
             Summary = summary,
         });
+    }
 
     /// <summary>
     /// Soft spawn policy: Plan banned; Explore never spawns; Drone may spawn Explore only
@@ -3233,10 +3290,15 @@ public abstract class DysonAgentSession
                 || _subagentReportAccepted,
             // A held parent message starts when this run detaches; do not remind or synthesize first.
             hasPendingWork: HasPendingTurn || InFlightPromptTurn is not null || HeldInterruptCount > 0,
-            remindersSent: _childReportRemindersSent);
+            remindersSent: _childReportRemindersSent,
+            hasActiveDescendant: IsAwaitingDescendants);
 
         switch (action)
         {
+            case DysonChildReportAction.Wait:
+                // A worker report (or parent event) wakes this session; the reminder count is left alone.
+                AppendLog("child report watch: holding — descendant active or child report undelivered");
+                break;
             case DysonChildReportAction.Remind:
                 EnqueuePendingTurn(DysonChildReportWatch.CreateReminderTurn());
                 _childReportRemindersSent++;
@@ -3809,7 +3871,9 @@ public abstract class DysonAgentSession
                         return;
                 }
 
-                if (result.IsError)
+                // A no-report finish while workers run falls through to the watch, which holds.
+                if (result.IsError
+                    && !(DysonChildReportWatch.IsHarnessNoReportError(result.Error) && child.IsAwaitingDescendants))
                 {
                     await child.SubmitSyntheticReportAsync(
                             ResolveKickOffFailureSummary(child, result),

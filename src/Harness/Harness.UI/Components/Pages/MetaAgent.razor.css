@@ -141,7 +141,14 @@
   border-radius: var(--radius-full);
   background: var(--warning);
 }
+.meta-stage__icon--changes { --meta-icon: url("icons/change-stream.svg"); }
 .meta-stage__icon--viz { --meta-icon: url("icons/visualization.svg"); }
+
+/* Two identical rules so alternating data-flash restarts the keyframe without JS. */
+.meta-stage__changes[data-flash="a"],
+.meta-stage__changes[data-flash="b"] {
+  animation: dyson-change-flash 900ms var(--ease);
+}
 .meta-stage__icon--open { --meta-icon: url("icons/open-external.svg"); }
 .meta-stage__icon--back { --meta-icon: url("icons/arrow-left.svg"); }
 
