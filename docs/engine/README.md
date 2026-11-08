@@ -172,10 +172,15 @@ Process-local typed pub/sub in `Harness.Engine/Messaging/`. `DysonMessageBus` is
 | `DysonPlansChangedEvent` | WorkDirectory key | `WorkDirectoryId`, `PlanId` |
 | `DysonPipelinesChangedEvent` | WorkDirectory key (published by that work directory's `DysonVersionControlService`) | `WorkDirectoryId` (no body; read `Snapshot`) |
 | `DysonShellVcsCommandRanEvent` | WorkDirectory key (published by `ShellExecute` after a `gh`/`git` command) | `WorkDirectoryId` |
+| `DysonFileChangedEvent` | root session key (published by the file tools after a `file_changes` append) | `RootSessionId`, `ChangeId` (no diff; read the row) |
 
 DI (`DysonUiWebHost`): `AddSingleton<DysonMessageBus>()` then `AddSingleton<DysonSessionEventPublisher>()` next to `DysonSessionRuntimeRegistry`. Runtime Attach on first `EnsureRegistered`; dispose token in UnhookSession. Host Attach tokens disposed in `DetachSessionUiHandlers`.
 
 Covered by `DysonMessageBusTests` + `DysonSessionEventPublisherTests` + `DysonGitRepoChangePublisherTests` + `DysonPlanBusPublishTests` in `Harness.Tests` (`dotnet test src/Harness/Harness.Tests/Harness.Tests.csproj`). Host delegation tests subscribe on `host.Bus` / `host.BusScopeKey`.
+
+## Change Stream
+
+The harness file tools (`CreateFile`, `WriteFile`, `ConvertImage`, `GenerateImage`, `SubmitPlan`, and `InitializeOpenRules` when it creates the file) append one `file_changes` row per write through `DysonWorkspaceToolExecutor.RecordFileChangeAsync` (partial `DysonWorkspaceToolExecutor.ChangeStream.cs`), keyed to the root session (`DysonAgentSession.RootPersistenceId`), then publish `DysonFileChangedEvent` on the root's session key. The row holds a single-hunk diff with one context line (`DysonFileChangeDiff`), the worktree or branch, and the agent chain (`#3->#1`). Logging never fails the tool. Shell commands are not tracked. Storage, caps and retention: [file-changes.md](../storage/file-changes.md).
 
 ## Pipelines (version-control providers)
 

@@ -233,6 +233,12 @@ public class DysonAgentSessionConfig
     public IDysonSessionSecretRepository? SessionSecrets { get; set; }
 
     /// <summary>
+    /// Optional Change Stream log. File tools append a row per write, keyed to the root session.
+    /// Null ⇒ no rows (tests, no DB). Children share this config instance.
+    /// </summary>
+    public IDysonFileChangeRepository? FileChanges { get; set; }
+
+    /// <summary>
     /// Optional workdir-scoped custom MCP host (<c>.dyson/mcp</c>).
     /// When set and <see cref="DysonCustomMcpHost.McpActive"/>, namespaced tools are merged into the catalog.
     /// </summary>

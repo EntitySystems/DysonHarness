@@ -32,6 +32,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory;
     private readonly IDysonPendingUserQuestionRepository? _pendingUserQuestions;
     private readonly IDysonSessionSecretRepository? _sessionSecrets;
+    private readonly IDysonFileChangeRepository? _fileChanges;
     private readonly DysonVersionControlRegistry? _vcs;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
@@ -156,7 +157,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null,
         IDysonPendingUserQuestionRepository? pendingUserQuestions = null,
         IDysonSessionSecretRepository? sessionSecrets = null,
-        DysonVersionControlRegistry? vcs = null)
+        DysonVersionControlRegistry? vcs = null,
+        IDysonFileChangeRepository? fileChanges = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -168,6 +170,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _voiceSidecarMemory = voiceSidecarMemory;
         _pendingUserQuestions = pendingUserQuestions;
         _sessionSecrets = sessionSecrets;
+        _fileChanges = fileChanges;
         _vcs = vcs;
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
@@ -5688,6 +5691,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             VoiceSidecarMemory = _voiceSidecarMemory,
             PendingUserQuestions = _pendingUserQuestions,
             SessionSecrets = _sessionSecrets,
+            FileChanges = _fileChanges,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,

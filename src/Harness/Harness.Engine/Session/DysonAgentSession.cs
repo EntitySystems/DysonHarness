@@ -204,6 +204,21 @@ public abstract class DysonAgentSession
     /// <summary>Live parent when this session was spawned via <see cref="RegisterSubagent"/>.</summary>
     public DysonAgentSession? Parent { get; private set; }
 
+    /// <summary>
+    /// <see cref="PersistenceId"/> of the top of the <see cref="Parent"/> chain (walk capped at 8 levels);
+    /// falls back to this session's id when the root is unpersisted.
+    /// </summary>
+    internal Guid RootPersistenceId
+    {
+        get
+        {
+            var current = this;
+            for (var depth = 0; current.Parent is not null && depth < RosterMaxDepth; depth++)
+                current = current.Parent;
+            return current.PersistenceId == Guid.Empty ? PersistenceId : current.PersistenceId;
+        }
+    }
+
     /// <summary>Harness-created voice sidecar of a root Meta session. Not a registered child.</summary>
     public DysonAgentSession? VoiceSidecar { get; internal set; }
 

@@ -1,0 +1,159 @@
+.change-stream-modal {
+  width: min(720px, 100%);
+  max-height: min(80vh, 720px);
+}
+
+.change-stream-modal__close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.change-stream-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.change-stream-modal__banner {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.change-stream-modal__empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.change-stream__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.change-stream__item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+  animation: dyson-fade-in var(--motion-base) var(--ease) both;
+}
+
+.change-stream__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.change-stream__kind {
+  flex: 0 0 auto;
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  color: var(--text-muted);
+}
+
+.change-stream__kind[data-kind="Created"] { color: var(--success); }
+.change-stream__kind[data-kind="Edited"] { color: var(--accent-text); }
+.change-stream__kind[data-kind="Overwritten"] { color: var(--warning); }
+.change-stream__kind[data-kind="Binary"] { color: var(--text-dim); }
+
+/* Ellipsize from the left so the file name stays visible. */
+.change-stream__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-size: var(--fs-sm);
+}
+
+.change-stream__time {
+  flex: 0 0 auto;
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.change-stream__pill {
+  flex: 0 0 auto;
+  max-width: 22ch;
+  padding: 0 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+}
+
+.change-stream__open {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 8px;
+  font-size: var(--fs-2xs);
+}
+
+.change-stream__binary,
+.change-stream__truncated {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.change-diff {
+  max-height: 250px;
+  margin: 0;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.change-diff__line {
+  min-width: 100%;
+  width: max-content;
+  padding: 0 8px;
+  white-space: pre;
+}
+
+.change-diff__line--ctx {
+  color: var(--text-muted);
+}
+
+.change-diff__line--del {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.change-diff__line--add {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.change-stream__older {
+  align-self: center;
+}

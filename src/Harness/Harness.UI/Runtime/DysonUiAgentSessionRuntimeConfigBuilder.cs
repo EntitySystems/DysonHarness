@@ -75,7 +75,8 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     IDysonMetaScratchFileRepository? scratchFiles = null,
     IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null,
     IDysonPendingUserQuestionRepository? pendingUserQuestions = null,
-    IDysonSessionSecretRepository? sessionSecrets = null)
+    IDysonSessionSecretRepository? sessionSecrets = null,
+    IDysonFileChangeRepository? fileChanges = null)
 {
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
@@ -100,6 +101,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory = voiceSidecarMemory;
     private readonly IDysonPendingUserQuestionRepository? _pendingUserQuestions = pendingUserQuestions;
     private readonly IDysonSessionSecretRepository? _sessionSecrets = sessionSecrets;
+    private readonly IDysonFileChangeRepository? _fileChanges = fileChanges;
 
     public async Task<Result<DysonUiAgentSessionRuntimeConfigLease, string>> BuildAsync(
         DysonUiAgentSessionRuntimeConfigRequest request,
@@ -136,6 +138,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
             VoiceSidecarMemory = _voiceSidecarMemory,
             PendingUserQuestions = _pendingUserQuestions,
             SessionSecrets = _sessionSecrets,
+            FileChanges = _fileChanges,
             Focus = focus,
             AppSettings = _appSettings,
         };

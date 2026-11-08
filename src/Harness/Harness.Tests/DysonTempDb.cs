@@ -106,6 +106,14 @@ internal static class DysonTempDb
         IDysonSubjectContext? subject = null) =>
         new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
 
+    public static DysonFileChangeRepository FileChanges(
+        DysonDbAccessor accessor,
+        IDysonSubjectContext? subject = null,
+        int? retainPerRoot = null) =>
+        retainPerRoot is { } n
+            ? new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance, n)
+            : new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
+
     public static DysonSessionSecretRepository SessionSecrets(
         DysonDbAccessor accessor,
         IDysonSubjectContext? subject = null) =>
