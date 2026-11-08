@@ -210,9 +210,13 @@
   overflow: hidden;
 }
 
-/* Plans | Scratch. No tool-panel chrome — that class is the right rail's panel skin. */
+/* Plans | Scratch. No tool-panel chrome — that class is the right rail's panel skin — but it also
+   supplies the flex column the tabs header + body rely on. Without it .rail-tabs is a block, the
+   body grows to its content, and .meta-plans (overflow hidden) clips the list instead of scrolling. */
 .meta-plans ::deep .rail-tabs {
-  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
   min-height: 0;
 }
 
