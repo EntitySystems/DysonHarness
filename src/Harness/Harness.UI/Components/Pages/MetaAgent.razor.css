@@ -131,6 +131,11 @@
   animation: dyson-glow-pulse var(--motion-pulse) var(--ease-standard) infinite;
 }
 
+/* The animated box-shadow would hide the global focus ring, so stop the glow while keyboard-focused. */
+.meta-stage__pipelines[data-running]:focus-visible {
+  animation: none;
+}
+
 .meta-stage__pipelines[data-error]::after {
   content: "";
   position: absolute;
