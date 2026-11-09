@@ -22,4 +22,15 @@ public static class DysonProviderKinds
             return OpenAICompatible;
         return kind;
     }
+
+    /// <summary>
+    /// True when the provider's effective kind is not <see cref="Demo"/>.
+    /// A credentialed demo row counts (EffectiveKind promotes it); a bare demo row and an empty kind do not.
+    /// No model/slug requirement and no health check.
+    /// </summary>
+    public static bool IsRealProvider(DysonModelProviderEntity provider) =>
+        !string.Equals(
+            EffectiveKind(provider.ProviderKind, provider.BaseUrl, provider.ApiKey),
+            Demo,
+            StringComparison.Ordinal);
 }

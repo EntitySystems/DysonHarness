@@ -58,6 +58,12 @@ public sealed record DysonGitRepoChangedEvent(Guid WorkDirectoryId, string RepoR
 public sealed record DysonPlansChangedEvent(Guid WorkDirectoryId, long PlanId)
     : IDysonMessageBusEvent;
 
+/// <summary>A work directory's pipeline snapshot changed. Carries no body; read <c>DysonVersionControlService.Snapshot</c>.</summary>
+public sealed record DysonPipelinesChangedEvent(Guid WorkDirectoryId) : IDysonMessageBusEvent;
+
+/// <summary>A ShellExecute call ran <c>gh</c> or <c>git</c> in this work directory (published on its work-dir scope).</summary>
+public sealed record DysonShellVcsCommandRanEvent(Guid WorkDirectoryId) : IDysonMessageBusEvent;
+
 /// <summary>A Meta scratch file was created, edited, deleted, or moved. Carries no body.</summary>
 public sealed record DysonMetaScratchFilesChangedEvent(Guid WorkDirectoryId, long ScratchFileId)
     : IDysonMessageBusEvent;
@@ -67,6 +73,12 @@ public sealed record DysonMetaScratchFilesChangedEvent(Guid WorkDirectoryId, lon
 /// Published on <see cref="DysonBusScopes.Session"/>. Carries no row; subscribers re-count.
 /// </summary>
 public sealed record DysonPendingUserQuestionsChangedEvent(Guid SessionId) : IDysonMessageBusEvent;
+
+/// <summary>
+/// A <c>file_changes</c> row <paramref name="ChangeId"/> was appended for root session <paramref name="RootSessionId"/>.
+/// Published on <see cref="DysonBusScopes.Session"/> of the root, after the insert. Carries no diff; read the row by id.
+/// </summary>
+public sealed record DysonFileChangedEvent(Guid RootSessionId, ulong ChangeId) : IDysonMessageBusEvent;
 
 /// <summary>Which end of a voice-sidecar pair a bus message is addressed to.</summary>
 public enum DysonVoiceSidecarDirection

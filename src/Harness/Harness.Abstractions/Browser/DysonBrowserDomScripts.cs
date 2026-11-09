@@ -4,8 +4,10 @@ using System.Text.Json;
 namespace DysonHarness;
 
 /// <summary>
-/// DOM automation scripts shared by the Windows CefSharp tab and the macOS WKWebView tab.
-/// Synthetic JS events, not OS input.
+/// DOM automation scripts shared by the Windows WebView2 tab and the macOS WKWebView tab.
+/// Synthetic JS events, not OS input. Click dispatches exactly one <c>click</c> event: a dispatched click already runs
+/// the element's activation behavior (links navigate, checkboxes toggle), so an extra <c>el.click()</c> would fire
+/// every handler twice.
 /// </summary>
 public static class DysonBrowserDomScripts
 {
@@ -30,7 +32,6 @@ public static class DysonBrowserDomScripts
                     altKey: {{JsBool(request.AltKey)}},
                     metaKey: {{JsBool(request.MetaKey)}}
                   }));
-                  if (typeof el.click === 'function' && {{button}} === 'left') el.click();
                   return 'ok';
                 })()
                 """;
@@ -46,7 +47,6 @@ public static class DysonBrowserDomScripts
                   const el = document.elementFromPoint({{xs}}, {{ys}});
                   if (!el) return 'no element at coordinates';
                   el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: {{xs}}, clientY: {{ys}} }));
-                  if (typeof el.click === 'function') el.click();
                   return 'ok';
                 })()
                 """;

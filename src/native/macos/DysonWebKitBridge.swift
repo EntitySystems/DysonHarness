@@ -4,7 +4,7 @@ import Foundation
 import WebKit
 
 // ponytail: WKWebView has no public WebUSB, WebSerial, WebBluetooth, or WebMIDI.
-// Network log is main-frame didFinish/didFail only (same ceiling as Cef FrameLoadEnd).
+// Network log is main-frame didFinish/didFail only (same ceiling as the Windows NavigationCompleted log).
 // Camera, mic, and location still show the macOS TCC dialog once; Info.plist strings do not skip it.
 // Device-orientation permission is unavailable on macOS. Display capture is not a WKMediaCaptureType.
 // Geolocation grant exists only on macOS 27+; older systems keep WebKit's default prompt.

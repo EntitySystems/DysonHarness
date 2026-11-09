@@ -11,6 +11,8 @@
 @inject IJSRuntime Js
 @inject Harness.UI.Services.ConfirmDialogService ConfirmDialog
 @inject IDysonPendingUserQuestionRepository PendingQuestions
+@inject DysonDemoScenarioRunner DemoRunner
+@inject DysonVersionControlRegistry Vcs
 
 <PageTitle>Meta agent — @(_workDirectoryName ?? "DysonHarness")</PageTitle>
 
@@ -66,6 +68,27 @@
                     <button type="button" class="btn" disabled="@(!IsMetaFocused)" @onclick="OpenVisualizations">
                         <span class="meta-stage__icon meta-stage__icon--viz" aria-hidden="true"></span>
                         <span class="meta-stage__label">Visualizations</span>
+                    </button>
+                    @if (_pipelines is { IsDetected: true } p && _vcs is not null)
+                    {
+                        <button type="button" class="btn meta-stage__pipelines" data-error="@(p.Error is null ? null : "true")"
+                                title="@PipelinesTitle(p)" aria-label="@PipelinesTitle(p)" @onclick="TogglePipelines">
+                            <span class="meta-stage__icon" style="--meta-icon: url('icons/providers/@(p.ProviderId).svg')" aria-hidden="true"></span>
+                            <span class="meta-stage__label">Pipelines</span>
+                            @if (p.ActiveCount > 0)
+                            {
+                                <span class="meta-stage__count" data-running="@(p.RunningCount > 0 ? "true" : null)">@p.ActiveCount</span>
+                            }
+                        </button>
+                    }
+                    <button type="button"
+                            class="btn meta-stage__changes"
+                            disabled="@(!IsMetaFocused)"
+                            title="Change Stream"
+                            data-flash="@_changesFlash"
+                            @onclick="ToggleChanges">
+                        <span class="meta-stage__icon meta-stage__icon--changes" aria-hidden="true"></span>
+                        <span class="meta-stage__label">Changes</span>
                     </button>
                     <button type="button"
                             class="btn"
@@ -137,6 +160,14 @@
                                           OnUserQuestion="OnUserQuestionAsync"
                                           OnOpenVisualization="OpenFocusedVisualization" />
                         </div>
+
+                        @if (!_hasRealProvider)
+                        {
+                            <div class="meta-provider-gate">
+                                <p>Connect a model provider to use the Meta Agent.</p>
+                                <button type="button" class="btn btn-primary" @onclick="GoToModelsAsync">Connect a model provider</button>
+                            </div>
+                        }
 
                         <div class="composer meta-composer">
                             <div @ref="_shell"
@@ -305,6 +336,15 @@
                              FocusId="_vizFocusId"
                              OnClose="CloseVisualizations" />
 
+<PipelinesModal IsOpen="_pipelinesOpen"
+                Service="_vcs"
+                OnClose="ClosePipelines" />
+
+<ChangeStreamModal IsOpen="_changesOpen"
+                   RootSessionId="@(_metaSessionId ?? Guid.Empty)"
+                   WorkRoot="_workDirectoryPath"
+                   OnClose="CloseChanges" />
+
 @code {
     [Parameter] public Guid WorkDirectoryId { get; set; }
 
@@ -315,6 +355,7 @@
     private string? _error;
     private string? _workDirectoryName;
     private bool _unknownWorkDirectory;
+    private bool _hasRealProvider = true;
     private Guid _loadedWorkDirectoryId;
     private Guid? _metaSessionId;
     private bool _sessionReady;
@@ -342,11 +383,22 @@
     private IDisposable? _questionsSub;
     private bool _vizOpen;
     private Guid? _vizFocusId;
+    private DysonVersionControlService? _vcs;
+    private DysonPipelineSnapshot? _pipelines;
+    private IDisposable? _pipelinesLease;
+    private IDisposable? _pipelinesSub;
+    private bool _pipelinesOpen;
+    private bool _changesOpen;
+    private string? _changesFlash;
+    private Guid? _changesBoundId;
+    private IDisposable? _changesSub;
+    private string? _workDirectoryPath;
     private ElementReference _shell;
     private ElementReference _prompt;
     private WorkDirectorySwitcher? _workdirSwitcher;
     private Func<Task>? _openPanelHook;
     private Func<Guid, Task>? _switchHook;
+    private Func<long, Task<VoidResult<string>>>? _openPlanHook;
     private bool _voiceOn;
     private bool _imageCaptureBound;
     private bool _dragOver;
@@ -370,7 +422,7 @@
 
     private bool CanOpenFullSession => _metaSessionId is Guid id && id != Guid.Empty;
 
-    private bool ComposerDisabled => _unknownWorkDirectory || !IsMetaFocused;
+    private bool ComposerDisabled => _unknownWorkDirectory || !IsMetaFocused || !_hasRealProvider;
 
     private bool CanSend =>
         !string.IsNullOrWhiteSpace(_draft)
@@ -420,6 +472,24 @@
             _error = attached.Error;
 
         await Host.EnsureDefaultModelAsync();
+        await RefreshRealProviderAsync();
+    }
+
+    private async Task GoToModelsAsync() =>
+        await DysonCircuitJs.NavigateAsync(Js, "/settings/models");
+
+    private async Task RefreshRealProviderAsync()
+    {
+        // Scripted demo has no real provider; the gate would kill the scenario.
+        // The runner is a no-op (and IsRunning is always false) when preview is compiled out.
+        if (DemoRunner.IsRunning)
+        {
+            _hasRealProvider = true;
+            return;
+        }
+
+        var listed = await ModelStore.ListProvidersAsync();
+        _hasRealProvider = listed.IsSuccess && listed.Value.Any(DysonProviderKinds.IsRealProvider);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -455,10 +525,13 @@
         _tasksOpen = false;
         _questionsOpen = false;
         _vizOpen = false;
+        _pipelinesOpen = false;
+        _changesOpen = false;
 
         var get = await WorkDirs.GetAsync(WorkDirectoryId);
         _unknownWorkDirectory = get.IsError;
         _workDirectoryName = get.IsSuccess ? get.Value.Name : null;
+        _workDirectoryPath = get.IsSuccess ? get.Value.AbsolutePath : null;
         if (_unknownWorkDirectory)
         {
             Host.Focus?.SetActive(null);
@@ -467,8 +540,12 @@
             _metaSessionId = null;
             BindAgentsListSubscriptions();
             BindQuestionsSubscription();
+            BindChangesSubscription();
+            BindPipelines(null);
             return;
         }
+
+        BindPipelines(get.Value);
 
         // Keep the stored workdir in step with the screen so a later visit to "/" does not hydrate an old one.
         await PersistWorkDirectoryAsync(WorkDirectoryId);
@@ -555,6 +632,7 @@
             _metaSessionId = live.PersistenceId;
             BindAgentsListSubscriptions();
             BindQuestionsSubscription();
+            BindChangesSubscription();
             _sessionReady = true;
             await RefreshQuestionCountAsync();
             return;
@@ -577,6 +655,7 @@
                 _metaSessionId = existing.Id;
                 BindAgentsListSubscriptions();
                 BindQuestionsSubscription();
+                BindChangesSubscription();
             }
             else
             {
@@ -590,6 +669,7 @@
                 _metaSessionId = existing.Id;
                 BindAgentsListSubscriptions();
                 BindQuestionsSubscription();
+                BindChangesSubscription();
             }
         }
         else
@@ -607,6 +687,7 @@
             _metaSessionId = Host.ActiveSessionId;
             BindAgentsListSubscriptions();
             BindQuestionsSubscription();
+            BindChangesSubscription();
         }
 
         if (_metaSessionId is not Guid metaId
@@ -676,6 +757,7 @@
         if ((evt.Kind & PlanRefreshMask) != 0)
             await (_planList?.RefreshAsync() ?? Task.CompletedTask);
         await SyncModelFromHostAsync();
+        await RefreshRealProviderAsync();
         StateHasChanged();
     });
 
@@ -770,11 +852,44 @@
         _questionsSub = null;
     }
 
+    private void BindChangesSubscription()
+    {
+        if (_metaSessionId == _changesBoundId)
+            return;
+
+        DisposeChangesSubscription();
+        _changesBoundId = _metaSessionId;
+        if (_metaSessionId is not Guid id || id == Guid.Empty)
+            return;
+
+        var sub = Bus.Subscribe<DysonFileChangedEvent>(
+            DysonBusScopes.Session(id),
+            OnFileChanged);
+        if (sub.IsSuccess)
+            _changesSub = sub.Value;
+    }
+
+    private void OnFileChanged(DysonFileChangedEvent evt) =>
+        _ = InvokeAsync(() =>
+        {
+            if (_metaSessionId is not Guid id || evt.RootSessionId != id)
+                return;
+
+            _changesFlash = _changesFlash == "a" ? "b" : "a";
+            StateHasChanged();
+        });
+
+    private void DisposeChangesSubscription()
+    {
+        _changesSub?.Dispose();
+        _changesSub = null;
+    }
+
     private async Task SendAsync()
     {
         var text = _draft.Trim();
         var hasAttachments = Host.PendingImages.Count > 0 || Host.PendingFilePaths.Count > 0;
-        if ((string.IsNullOrWhiteSpace(text) && !hasAttachments) || !IsMetaFocused || Host.Session is null)
+        if ((string.IsNullOrWhiteSpace(text) && !hasAttachments) || ComposerDisabled || Host.Session is null)
             return;
 
         _error = null;
@@ -891,6 +1006,68 @@
     }
 
     private void CloseVisualizations() => _vizOpen = false;
+
+    private void TogglePipelines() => _pipelinesOpen = !_pipelinesOpen;
+
+    private void ClosePipelines() => _pipelinesOpen = false;
+
+    private void ToggleChanges() => _changesOpen = !_changesOpen;
+
+    private void CloseChanges() => _changesOpen = false;
+
+    private static string PipelinesTitle(DysonPipelineSnapshot snap)
+    {
+        if (snap.Error is { } error)
+            return error.Message;
+        var name = snap.ProviderName ?? "Pipelines";
+        if (snap.ActiveCount == 0)
+            return $"{name} \u00b7 no active runs";
+        var parts = new List<string> { name };
+        if (snap.RunningCount > 0)
+            parts.Add($"{snap.RunningCount} running");
+        if (snap.QueuedCount > 0)
+            parts.Add($"{snap.QueuedCount} queued");
+        return string.Join(" \u00b7 ", parts);
+    }
+
+    private void BindPipelines(DysonWorkDirectoryEntity? entity)
+    {
+        DisposePipelines();
+        if (entity is null)
+            return;
+
+        var svc = Vcs.GetOrCreate(entity);
+        if (svc.IsError)
+            return;
+
+        _vcs = svc.Value;
+        _pipelinesLease = _vcs.Watch(panelOpen: false);
+        var sub = Bus.Subscribe<DysonPipelinesChangedEvent>(
+            DysonBusScopes.WorkDirectory(entity.Id),
+            OnPipelinesChanged);
+        if (sub.IsSuccess)
+            _pipelinesSub = sub.Value;
+        _pipelines = _vcs.Snapshot;
+    }
+
+    private void OnPipelinesChanged(DysonPipelinesChangedEvent evt) => _ = InvokeAsync(() =>
+    {
+        if (_vcs is not { } service || evt.WorkDirectoryId != service.WorkDirectoryId)
+            return;
+
+        _pipelines = service.Snapshot;
+        StateHasChanged();
+    });
+
+    private void DisposePipelines()
+    {
+        _pipelinesLease?.Dispose();
+        _pipelinesLease = null;
+        _pipelinesSub?.Dispose();
+        _pipelinesSub = null;
+        _vcs = null;
+        _pipelines = null;
+    }
 
     private void OpenFocusedVisualization(Guid id)
     {
@@ -1040,9 +1217,14 @@
             if (_workdirSwitcher is not null)
                 await _workdirSwitcher.SelectAsync(id);
         });
+        _openPlanHook ??= OpenPlanOnScreenAsync;
         focus.OpenPanel = _openPanelHook;
         focus.SwitchTo = _switchHook;
+        focus.OpenPlan = _openPlanHook;
     }
+
+    private Task<VoidResult<string>> OpenPlanOnScreenAsync(long planId) =>
+        Host.OpenMetaPlanAsync(planId, WorkDirectoryId);
 
     private void UnbindFocusHooks()
     {
@@ -1053,6 +1235,8 @@
             focus.OpenPanel = null;
         if (ReferenceEquals(focus.SwitchTo, _switchHook))
             focus.SwitchTo = null;
+        if (ReferenceEquals(focus.OpenPlan, _openPlanHook))
+            focus.OpenPlan = null;
     }
 
     public async ValueTask DisposeAsync()
@@ -1064,6 +1248,9 @@
         _agentsListBoundId = null;
         DisposeQuestionsSubscription();
         _questionsBoundId = null;
+        DisposeChangesSubscription();
+        _changesBoundId = null;
+        DisposePipelines();
         if (_imageCaptureBound)
             await DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.detachImageCapture", _shell);
 

@@ -1,6 +1,6 @@
 namespace DysonHarness;
 
-/// <summary>One top-level agent browser window (WPF chrome + CEF content).</summary>
+/// <summary>One top-level agent browser window (native chrome + web content).</summary>
 public interface IDysonBrowserWindow
 {
     string Id { get; }

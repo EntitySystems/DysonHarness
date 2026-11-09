@@ -121,6 +121,118 @@ public class DysonSyntheticReportTests
     }
 
     [Fact]
+    public async Task Drone_with_active_worker_is_held_not_failed()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var drone = new StubSession(DysonAgentModes.MetaAgentDrone);
+        var worker = new StubSession(DysonAgentModes.Drone);
+        root.RegisterForTest(drone);
+        drone.RegisterForTest(worker);
+
+        // Worker Active: hold, however often the watch runs.
+        for (var i = 0; i < 3; i++)
+            await drone.ApplyChildReportWatchAsync().ConfigureAwait(false);
+        Assert.False(drone.HasPendingTurn);
+        Assert.Equal(0, drone.ChildReportRemindersSent);
+        Assert.Equal(DysonSessionStatus.Active, drone.Status);
+        Assert.False(root.TryDequeueInterrupt(out _));
+
+        // Worker reports: its report is undelivered until the report turn starts, so still hold.
+        Assert.True((await worker.SubmitSubagentReportAsync("done").ConfigureAwait(false)).IsSuccess);
+        Assert.True(drone.TryDequeueInterrupt(out var completed));
+        Assert.Equal(DysonAgentInterruptKind.SubagentCompleted, completed.Kind);
+        Assert.True(drone.HasUndeliveredChildReport);
+        await drone.ApplyChildReportWatchAsync().ConfigureAwait(false);
+        Assert.False(drone.HasPendingTurn);
+        Assert.Equal(0, drone.ChildReportRemindersSent);
+
+        // Delivered: the old rule applies again (remind).
+        await drone.PromptSubagentReportProcessingAsync(completed).ConfigureAwait(false);
+        Assert.False(drone.HasUndeliveredChildReport);
+        await drone.ApplyChildReportWatchAsync().ConfigureAwait(false);
+        Assert.Equal(1, drone.ChildReportRemindersSent);
+        Assert.True(drone.TryDequeuePendingTurn(out var reminder));
+        Assert.Equal(DysonAgentTurnKind.ChildReportReminder, reminder.Kind);
+        Assert.False(root.TryDequeueInterrupt(out _));
+    }
+
+    [Fact]
+    public void Wait_consumed_completion_is_not_undelivered()
+    {
+        var drone = new StubSession(DysonAgentModes.MetaAgentDrone);
+        var worker = new StubSession(DysonAgentModes.Drone);
+        drone.RegisterForTest(worker);
+
+        drone.MarkWaitConsumedCompletion(worker.Id);
+        drone.NotifyCompletedForTest(worker.Id);
+        Assert.False(drone.HasUndeliveredChildReport);
+
+        // A report that lands first is cleared when a later Wait consumes it.
+        drone.ClearWaitConsumedCompletion(worker.Id);
+        drone.NotifyCompletedForTest(worker.Id);
+        Assert.True(drone.HasUndeliveredChildReport);
+        drone.MarkWaitConsumedCompletion(worker.Id);
+        Assert.False(drone.HasUndeliveredChildReport);
+    }
+
+    [Theory]
+    [InlineData(DysonSessionStatus.Stopped)]
+    [InlineData(DysonSessionStatus.Interrupted)]
+    public async Task Halted_drone_with_active_worker_still_synthesizes(DysonSessionStatus halt)
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var drone = new StubSession(DysonAgentModes.MetaAgentDrone);
+        var worker = new StubSession(DysonAgentModes.Drone);
+        root.RegisterForTest(drone);
+        drone.RegisterForTest(worker);
+
+        Assert.True(drone.TryMarkTerminal(halt, "halted"));
+        await drone.ApplyChildReportWatchAsync().ConfigureAwait(false);
+
+        Assert.Equal(halt, drone.Status);
+        Assert.True(root.TryDequeueInterrupt(out var failed));
+        Assert.Equal(DysonAgentInterruptKind.SubagentFailed, failed.Kind);
+    }
+
+    [Fact]
+    public async Task KickOff_no_report_with_active_worker_holds_the_drone()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var drone = new StubSession(DysonAgentModes.MetaAgentDrone)
+        {
+            PromptResult = new VoidResult<string>(DysonChildReportWatch.PromptEndedWithoutReportReason),
+        };
+        var worker = new StubSession(DysonAgentModes.Drone);
+        root.RegisterForTest(drone);
+        drone.RegisterForTest(worker);
+
+        Assert.True((await root.TriggerSubagentEventAsync(drone.Id, "go").ConfigureAwait(false)).IsSuccess);
+        await drone.WaitForBackgroundRunIdleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(DysonSessionStatus.Active, drone.Status);
+        Assert.Equal(0, drone.ChildReportRemindersSent);
+        Assert.False(root.TryDequeueInterrupt(out _));
+    }
+
+    [Fact]
+    public async Task KickOff_no_report_without_workers_still_fails_the_drone()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var drone = new StubSession(DysonAgentModes.MetaAgentDrone)
+        {
+            PromptResult = new VoidResult<string>(DysonChildReportWatch.PromptEndedWithoutReportReason),
+        };
+        root.RegisterForTest(drone);
+
+        Assert.True((await root.TriggerSubagentEventAsync(drone.Id, "go").ConfigureAwait(false)).IsSuccess);
+        await drone.WaitForBackgroundRunIdleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(DysonSessionStatus.Failed, drone.Status);
+        Assert.True(root.TryDequeueInterrupt(out var failed));
+        Assert.Equal(DysonAgentInterruptKind.SubagentFailed, failed.Kind);
+    }
+
+    [Fact]
     public async Task Root_session_watch_is_a_no_op()
     {
         var root = new StubSession();
@@ -140,6 +252,10 @@ public class DysonSyntheticReportTests
         }
 
         public void RegisterForTest(DysonAgentSession child) => RegisterSubagent(child);
+
+        public void NotifyCompletedForTest(int subagentId) => NotifySubagentCompleted(subagentId, "done");
+
+        public VoidResult<string> PromptResult { get; init; } = VoidResult<string>.Success;
 
         public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
             string agentMode,
@@ -170,7 +286,7 @@ public class DysonSyntheticReportTests
         public override Task<VoidResult<string>> PromptHarnessTurnAsync(
             DysonAgentTurn turn,
             CancellationToken cancellationToken = default)
-            => Task.FromResult(VoidResult<string>.Success);
+            => Task.FromResult(PromptResult);
 
         public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
             string planRelativePath,
@@ -182,7 +298,10 @@ public class DysonSyntheticReportTests
             DysonAgentInterrupt interrupt,
             string? title = null,
             CancellationToken cancellationToken = default)
-            => Task.FromResult(VoidResult<string>.Success);
+        {
+            MarkChildReportDelivered(interrupt.SubagentId);
+            return Task.FromResult(VoidResult<string>.Success);
+        }
 
         public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
             string instruction,

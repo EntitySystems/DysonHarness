@@ -2,7 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Harness.UI;
 
-/// <summary>Optional overrides when embedding the Blazor host (e.g. Windows CEF shell).</summary>
+/// <summary>Optional overrides when embedding the Blazor host (e.g. Windows WebView2 shell).</summary>
 public sealed class DysonUiWebHostOptions
 {
     /// <summary>Kestrel bind URLs (e.g. <c>http://127.0.0.1:0</c> for an ephemeral loopback port).</summary>
@@ -19,7 +19,7 @@ public sealed class DysonUiWebHostOptions
 
     /// <summary>
     /// Extra host services. The macOS shell registers <c>IDysonBrowserControl</c> here.
-    /// Invoked after the Windows CefSharp registration.
+    /// Invoked after the Windows WebView2 registration.
     /// </summary>
     public Action<IServiceCollection>? ConfigureServices { get; init; }
 }

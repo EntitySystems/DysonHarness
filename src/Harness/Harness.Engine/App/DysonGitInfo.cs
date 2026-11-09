@@ -1222,75 +1222,34 @@ public static class DysonGitInfo
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        // Same early return as before the DysonCliProcess extract: a cancelled token never starts git.
         if (cancellationToken.IsCancellationRequested)
             return Result<(int, string, string), string>.AsError("git cancelled.");
 
-        Process? process = null;
-        try
-        {
-            process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "git",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                },
-            };
+        var gitArgs = new string[args.Count + 2];
+        gitArgs[0] = "-C";
+        gitArgs[1] = workingDirectory;
+        for (var i = 0; i < args.Count; i++)
+            gitArgs[i + 2] = args[i];
 
-            process.StartInfo.ArgumentList.Add("-C");
-            process.StartInfo.ArgumentList.Add(workingDirectory);
-            foreach (var arg in args)
-                process.StartInfo.ArgumentList.Add(arg);
-            ApplyOptionalLocksPolicy(process.StartInfo, args);
+        Dictionary<string, string?>? environment = null;
+        if (!GitCommandAllowsOptionalLocks(args))
+            environment = new Dictionary<string, string?> { [OptionalLocksEnvironmentVariable] = "0" };
 
-            if (!process.Start())
-                return Result<(int, string, string), string>.AsError("Failed to start git.");
+        var run = await DysonCliProcess.RunAsync(
+            "git",
+            gitArgs,
+            workingDirectory: null,
+            environment,
+            timeout,
+            "git",
+            cancellationToken).ConfigureAwait(false);
 
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(timeout);
-            var token = timeoutCts.Token;
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(token);
-            var stderrTask = process.StandardError.ReadToEndAsync(token);
+        if (run.IsError)
+            return Result<(int, string, string), string>.AsError(run.Error);
 
-            string stdout;
-            string stderr;
-            try
-            {
-                await process.WaitForExitAsync(token).ConfigureAwait(false);
-                stdout = await stdoutTask.ConfigureAwait(false);
-                stderr = await stderrTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch
-                {
-                    // Best-effort kill on timeout.
-                }
-
-                // ponytail: 250ms post-kill drain. stderr may still be empty if the pipe outlives the cap.
-                // Upgrade is a cancellable Process wrapper if kill does not reap.
-                await ObservePipesAsync(stdoutTask, stderrTask).ConfigureAwait(false);
-                return Result<(int, string, string), string>.AsError(
-                    cancellationToken.IsCancellationRequested ? "git cancelled." : "git timed out.");
-            }
-
-            return Result<(int, string, string), string>.AsValue((process.ExitCode, stdout, stderr));
-        }
-        catch (Exception ex)
-        {
-            return Result<(int, string, string), string>.AsError($"git failed: {ex.Message}");
-        }
-        finally
-        {
-            process?.Dispose();
-        }
+        var output = run.Value;
+        return Result<(int, string, string), string>.AsValue((output.ExitCode, output.Stdout, output.Stderr));
     }
 
     internal const string OptionalLocksEnvironmentVariable = "GIT_OPTIONAL_LOCKS";
@@ -1332,21 +1291,6 @@ public static class DysonGitInfo
     {
         var trimmed = stderr.Trim();
         return IsGitLockFailure(trimmed) ? $"{trimmed} {LockHeldSuffix}" : trimmed;
-    }
-
-    private static async Task ObservePipesAsync(Task stdout, Task stderr)
-    {
-        try
-        {
-            var pending = Task.WhenAll(stdout, stderr);
-            var finished = await Task.WhenAny(pending, Task.Delay(250)).ConfigureAwait(false);
-            if (ReferenceEquals(finished, pending))
-                await pending.ConfigureAwait(false);
-        }
-        catch
-        {
-            // Drain best-effort after kill.
-        }
     }
 
     private static string? TryParseRemoteHost(string? origin)

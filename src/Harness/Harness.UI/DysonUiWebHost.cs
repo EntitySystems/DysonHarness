@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Harness.UI;
 
-/// <summary>Shared Blazor Interactive Server host used by CLI <c>Harness.UI</c> and the Windows CEF shell.</summary>
+/// <summary>Shared Blazor Interactive Server host used by CLI <c>Harness.UI</c> and the Windows WebView2 shell.</summary>
 public static class DysonUiWebHost
 {
     public static WebApplication Create(string[] args, DysonUiWebHostOptions? options = null)
@@ -174,7 +174,7 @@ public static class DysonUiWebHost
             .AddHttpMessageHandler<OpenAiCodexRequestHandler>();
         builder.Services.AddScoped<ManagedInferenceProviderCatalog>();
 #if WINDOWS
-        builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
+        builder.Services.AddSingleton<IDysonBrowserControl, DysonWebView2BrowserControl>();
         builder.Services.AddSingleton<IDysonAudioPlayback, DysonWindowsAudioPlayback>();
         builder.Services.AddSingleton<IDysonAudioCapture, DysonWindowsAudioCapture>();
 #endif
@@ -183,6 +183,10 @@ public static class DysonUiWebHost
         builder.Services.AddSingleton<DysonSessionRuntimeRegistry>();
         builder.Services.AddSingleton<DysonMessageBus>();
         builder.Services.AddSingleton<DysonGitRepoChangePublisher>();
+        // Cloud registers no provider: gh would carry the operator's credentials across subjects.
+        if (hostingMode == DysonHostingMode.Local)
+            builder.Services.AddSingleton<DysonVersionControlProviderFactory>(_ => () => new DysonGitHubVersionControlProvider());
+        builder.Services.AddSingleton<DysonVersionControlRegistry>();
         builder.Services.AddSingleton<DysonSessionEventPublisher>();
         builder.Services.AddScoped<DysonUiRuntimeAttachment>();
         builder.Services.AddScoped<IDysonAgentSessionRuntimeFactory, DysonUiAgentSessionRuntimeFactory>();
@@ -193,8 +197,9 @@ public static class DysonUiWebHost
         builder.Services.AddScoped<DysonUiHost>();
 #if DYSON_PREVIEW
         builder.Services.AddScoped<IDysonDemoHooks, DysonUiDemoHooks>();
-        builder.Services.AddScoped<DysonDemoScenarioRunner>();
 #endif
+        // Stub on stable (IsRunning is always false); real runner when DYSON_PREVIEW is defined.
+        builder.Services.AddScoped<DysonDemoScenarioRunner>();
         builder.Services.AddSingleton<DysonFilePreviewStore>();
         builder.Services.AddScoped<ThemeService>();
         builder.Services.AddScoped<ConfirmDialogService>();
@@ -330,6 +335,26 @@ public static class DysonUiWebHost
             // ponytail: unguessable GUID tokens only; no subject binding — fine for local, tighten if cloud shares previews.
             if (!store.TryGet(id, out var entry))
                 return Results.NotFound();
+
+            // On-disk entries were validated under the work root at open time; stream with ranges (seeking).
+            if (entry.FilePath is { } filePath)
+            {
+                try
+                {
+                    var stream = new FileStream(
+                        filePath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete,
+                        64 * 1024,
+                        useAsync: true);
+                    return Results.Stream(stream, entry.ContentType, enableRangeProcessing: true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    return Results.NotFound();
+                }
+            }
 
             return Results.File(entry.Bytes, entry.ContentType, enableRangeProcessing: true);
         });

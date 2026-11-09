@@ -22,15 +22,41 @@ public class DysonPostUserQuestionTests
             meta.Tools["PostConversationMessage"].Description,
             StringComparison.Ordinal);
 
+        foreach (var name in new[] { "ListUserQuestions", "UpdateUserQuestion", "DeleteUserQuestion" })
+            Assert.True(meta.Tools.ContainsKey(name), name);
+
+        foreach (var name in new[] { "UpdateUserQuestion", "DeleteUserQuestion" })
+            Assert.Contains("call ListUserQuestions", meta.Tools[name].Description, StringComparison.Ordinal);
+
+        Assert.Contains("call ListUserQuestions", tool.Description, StringComparison.Ordinal);
+        Assert.Contains(
+            "whenever you are not sure which questions are still open",
+            meta.Tools["ListUserQuestions"].Description,
+            StringComparison.Ordinal);
+        Assert.Contains("outdated", meta.Tools["UpdateUserQuestion"].Description, StringComparison.Ordinal);
+        Assert.Contains("outdated", meta.Tools["DeleteUserQuestion"].Description, StringComparison.Ordinal);
+
         var work = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.Work);
         Assert.False(work.Tools.ContainsKey("PostUserQuestion"));
 
+        var explore = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.Explore);
         var drone = DysonSessionToolsetBuilder.Build(
+            new DysonAgentSessionConfig(),
+            DysonAgentModes.Drone,
+            interAgentDepth: 1,
+            omitRootTaskCompletionTools: true);
+        var metaDrone = DysonSessionToolsetBuilder.Build(
             new DysonAgentSessionConfig(),
             DysonAgentModes.MetaAgentDrone,
             interAgentDepth: 1,
             omitRootTaskCompletionTools: true);
-        Assert.False(drone.Tools.ContainsKey("PostUserQuestion"));
+        var sidecar = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.VoiceSidecar);
+        foreach (var pipeline in new[] { work, explore, drone, metaDrone, sidecar })
+        {
+            Assert.False(pipeline.Tools.ContainsKey("ListUserQuestions"));
+            Assert.False(pipeline.Tools.ContainsKey("UpdateUserQuestion"));
+            Assert.False(pipeline.Tools.ContainsKey("DeleteUserQuestion"));
+        }
     }
 
     [Fact]
@@ -363,31 +389,440 @@ public class DysonPostUserQuestionTests
     private static string ValidArgs(string message) =>
         "{\"message\":" + JsonSerializer.Serialize(message) + ",\"question\":\"Pick\",\"choices\":[\"A\",\"B\"]}";
 
-    private static async Task<(StubSession Session, DysonWorkspaceToolExecutor Executor)> MetaExecutorAsync()
+    private static Task<(StubSession Session, DysonWorkspaceToolExecutor Executor)> MetaExecutorAsync() =>
+        MetaExecutorAsync(pending: null, persistenceId: Guid.Empty);
+
+    private static async Task<(StubSession Session, DysonWorkspaceToolExecutor Executor)> MetaExecutorAsync(
+        IDysonPendingUserQuestionRepository? pending,
+        Guid persistenceId)
     {
-        var session = new StubSession(DysonAgentModes.MetaAgent);
+        var session = new StubSession(DysonAgentModes.MetaAgent, pending, persistenceId);
+        var meta = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent);
+        foreach (var name in new[] { "ListUserQuestions", "UpdateUserQuestion", "DeleteUserQuestion" })
+            session.McpPipeline.Tools[name] = meta.Tools[name];
         var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), new HttpClient());
         return (session, executor);
+    }
+
+    [Fact]
+    public async Task Update_replaces_the_card_and_the_pending_row()
+    {
+        var (accessor, path) = DysonTempDb.OpenFileAccessor();
+        try
+        {
+            var sessionId = await NewSessionAsync(accessor);
+            var repo = DysonTempDb.PendingUserQuestions(accessor);
+            var (session, executor) = await MetaExecutorAsync(repo, sessionId);
+            var posted = await ExecuteAsync(executor, ValidArgs("Old body"));
+            var id = QuestionId(posted);
+            var turnId = Assert.Single(session.Turns).Id;
+            await DysonPendingUserQuestionHooks.InsertAsync(session, session.Turns[0]);
+            var before = (await repo.ListAsync(sessionId)).Value[0];
+
+            var updated = await ExecuteNamedAsync(
+                executor,
+                "UpdateUserQuestion",
+                "{\"questionId\":\"" + id.ToString("D") + "\",\"message\":\"New body\",\"question\":\"New title\","
+                + "\"choices\":[\"Yes\",\"No\"],\"multiSelect\":true,\"allowCustomAnswer\":false,"
+                + "\"actions\":[{\"name\":\"Open\",\"func\":\"open_plan:1\"}]}");
+            Assert.False(updated.IsError, updated.Content);
+            Assert.Contains(id.ToString("D"), updated.Content, StringComparison.Ordinal);
+
+            var bubble = Assert.Single(session.Turns);
+            Assert.Equal(turnId, bubble.Id);
+            Assert.Equal("New body", bubble.AssistantText);
+            Assert.Equal(id, bubble.UserQuestion!.Id);
+            Assert.Equal("New title", bubble.UserQuestion.Question);
+            Assert.Equal(["Yes", "No"], bubble.UserQuestion.Choices);
+            Assert.True(bubble.UserQuestion.MultiSelect);
+            Assert.False(bubble.UserQuestion.AllowCustomAnswer);
+            Assert.Null(bubble.UserQuestion.Answer);
+            Assert.Equal("open_plan:1", Assert.Single(bubble.ConversationActions).FuncKey);
+
+            var row = (await repo.ListAsync(sessionId)).Value[0];
+            Assert.Equal("New body", row.Message);
+            Assert.Equal("New title", row.Question);
+            Assert.Equal(["Yes", "No"], row.Choices);
+            Assert.True(row.MultiSelect);
+            Assert.False(row.AllowCustomAnswer);
+            Assert.Equal(before.CreatedUtc, row.CreatedUtc);
+            Assert.Equal(before.Kind, row.Kind);
+            Assert.Equal(before.Id, row.Id);
+        }
+        finally
+        {
+            DeleteTemp(path);
+        }
+    }
+
+    [Fact]
+    public async Task Delete_clears_the_card_and_the_pending_row()
+    {
+        var (accessor, path) = DysonTempDb.OpenFileAccessor();
+        try
+        {
+            var sessionId = await NewSessionAsync(accessor);
+            var repo = DysonTempDb.PendingUserQuestions(accessor);
+            var (session, executor) = await MetaExecutorAsync(repo, sessionId);
+            var id = QuestionId(await ExecuteAsync(executor, ValidArgs("Keep the bubble")));
+            await DysonPendingUserQuestionHooks.InsertAsync(session, session.Turns[0]);
+
+            var deleted = await ExecuteNamedAsync(
+                executor, "DeleteUserQuestion", "{\"questionId\":\"" + id.ToString("D") + "\"}");
+            Assert.False(deleted.IsError, deleted.Content);
+
+            var bubble = Assert.Single(session.Turns);
+            Assert.Null(bubble.UserQuestion);
+            Assert.EndsWith("Withdrawn.", bubble.AssistantText, StringComparison.Ordinal);
+            Assert.Equal(0, (await repo.CountAsync(sessionId)).Value);
+        }
+        finally
+        {
+            DeleteTemp(path);
+        }
+    }
+
+    [Fact]
+    public async Task Update_and_delete_refuse_an_answered_card()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        var id = QuestionId(await ExecuteAsync(executor, ValidArgs("body")));
+        Assert.False(session.TryRecordUserQuestionAnswer(id, ["A"], null).IsError);
+        var before = session.Turns[0].UserQuestion;
+
+        var updated = await ExecuteNamedAsync(executor, "UpdateUserQuestion", UpdateArgs(id));
+        Assert.Equal("UpdateUserQuestion: already answered.", updated.Content);
+        var deleted = await ExecuteNamedAsync(
+            executor, "DeleteUserQuestion", "{\"questionId\":\"" + id.ToString("D") + "\"}");
+        Assert.Equal("DeleteUserQuestion: already answered.", deleted.Content);
+        Assert.Equal(before, session.Turns[0].UserQuestion);
+    }
+
+    [Fact]
+    public async Task Unknown_question_id_is_not_found()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        var id = Guid.NewGuid();
+        var updated = await ExecuteNamedAsync(executor, "UpdateUserQuestion", UpdateArgs(id));
+        Assert.Equal("UpdateUserQuestion: not found.", updated.Content);
+        var deleted = await ExecuteNamedAsync(
+            executor, "DeleteUserQuestion", "{\"questionId\":\"" + id.ToString("D") + "\"}");
+        Assert.Equal("DeleteUserQuestion: not found.", deleted.Content);
+        Assert.Empty(session.Turns);
+    }
+
+    [Fact]
+    public async Task A_question_from_another_session_is_not_found()
+    {
+        var (other, otherExecutor) = await MetaExecutorAsync();
+        var id = QuestionId(await ExecuteAsync(otherExecutor, ValidArgs("theirs")));
+        var snapshot = other.Turns[0].UserQuestion;
+
+        var (session, executor) = await MetaExecutorAsync();
+        var updated = await ExecuteNamedAsync(executor, "UpdateUserQuestion", UpdateArgs(id));
+        Assert.Equal("UpdateUserQuestion: not found.", updated.Content);
+        Assert.Empty(session.Turns);
+        Assert.Equal(snapshot, other.Turns[0].UserQuestion);
+    }
+
+    [Fact]
+    public async Task Secure_data_id_is_refused()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        var requestId = Guid.NewGuid();
+        session.AppendDisplayInfoTurn(
+            "Enter secrets",
+            secureDataRequest: new DysonSecureDataRequest(
+                requestId,
+                [new DysonSecureDataField("api_key", "The API key")],
+                Outcome: null));
+
+        var updated = await ExecuteNamedAsync(executor, "UpdateUserQuestion", UpdateArgs(requestId));
+        Assert.Equal(
+            "UpdateUserQuestion: that id is a secure data request. Use RequestSecureData.",
+            updated.Content);
+        var deleted = await ExecuteNamedAsync(
+            executor, "DeleteUserQuestion", "{\"questionId\":\"" + requestId.ToString("D") + "\"}");
+        Assert.Equal(
+            "DeleteUserQuestion: that id is a secure data request. Use RequestSecureData.",
+            deleted.Content);
+        Assert.Equal(requestId, session.Turns[0].SecureDataRequest!.Id);
+        Assert.Null(session.Turns[0].SecureDataRequest.Outcome);
+    }
+
+    [Fact]
+    public async Task Delete_refuses_a_secure_data_row_when_the_turn_is_gone()
+    {
+        var (accessor, path) = DysonTempDb.OpenFileAccessor();
+        try
+        {
+            var sessionId = await NewSessionAsync(accessor);
+            var repo = DysonTempDb.PendingUserQuestions(accessor);
+            var (_, executor) = await MetaExecutorAsync(repo, sessionId);
+            var requestId = Guid.NewGuid();
+            var inserted = await repo.CreateAsync(new DysonPendingUserQuestion(
+                0,
+                sessionId,
+                Guid.NewGuid(),
+                requestId,
+                "Enter secrets",
+                DysonSecureDataRequest.PendingTitle,
+                [],
+                false,
+                false,
+                null,
+                null,
+                DateTime.UtcNow,
+                DysonPendingUserQuestionKind.SecureData));
+            Assert.True(inserted.IsSuccess, inserted.IsError ? inserted.Error : null);
+
+            var deleted = await ExecuteNamedAsync(
+                executor, "DeleteUserQuestion", "{\"questionId\":\"" + requestId.ToString("D") + "\"}");
+            Assert.Equal(
+                "DeleteUserQuestion: that id is a secure data request. Use RequestSecureData.",
+                deleted.Content);
+            Assert.Equal(1, (await repo.CountAsync(sessionId)).Value);
+        }
+        finally
+        {
+            DeleteTemp(path);
+        }
+    }
+
+    [Fact]
+    public async Task Update_and_delete_and_list_reject_when_not_meta_agent()
+    {
+        using var http = new HttpClient();
+        var work = new StubSession(DysonAgentModes.Work);
+        var meta = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent);
+        foreach (var name in new[] { "ListUserQuestions", "UpdateUserQuestion", "DeleteUserQuestion" })
+            work.McpPipeline.Tools[name] = meta.Tools[name];
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(work, Path.GetTempPath(), http);
+
+        var listed = await ExecuteNamedAsync(executor, "ListUserQuestions", "{}");
+        Assert.Equal("ListUserQuestions is only available in Meta Agent mode.", listed.Content);
+        var updated = await ExecuteNamedAsync(executor, "UpdateUserQuestion", UpdateArgs(Guid.NewGuid()));
+        Assert.Equal("UpdateUserQuestion is only available in Meta Agent mode.", updated.Content);
+        var deleted = await ExecuteNamedAsync(
+            executor, "DeleteUserQuestion", "{\"questionId\":\"" + Guid.NewGuid().ToString("D") + "\"}");
+        Assert.Equal("DeleteUserQuestion is only available in Meta Agent mode.", deleted.Content);
+        Assert.Empty(work.Turns);
+    }
+
+    [Fact]
+    public async Task Answer_and_replace_cannot_both_win()
+    {
+        var session = new StubSession(DysonAgentModes.MetaAgent);
+        var posted = session.AppendDisplayInfoTurn("body", userQuestion: Sample(multi: false, allowCustom: true));
+        var id = posted.UserQuestion!.Id;
+        var replacement = new DysonUserQuestion(id, "New", ["Yes", "No"], false, true, null);
+
+        var gate = new Barrier(2);
+        Result<DysonUserQuestionAnswer, string> answered = default;
+        VoidResult<string> replaced = default;
+        var answerThread = new Thread(() =>
+        {
+            gate.SignalAndWait();
+            answered = session.TryRecordUserQuestionAnswer(id, ["A"], null);
+        });
+        var replaceThread = new Thread(() =>
+        {
+            gate.SignalAndWait();
+            replaced = session.TryReplaceUserQuestion(id, replacement, "New body", null);
+        });
+        answerThread.Start();
+        replaceThread.Start();
+        Assert.True(answerThread.Join(TimeSpan.FromSeconds(5)));
+        Assert.True(replaceThread.Join(TimeSpan.FromSeconds(5)));
+
+        var winners = (answered.IsSuccess ? 1 : 0) + (replaced.IsSuccess ? 1 : 0);
+        Assert.Equal(1, winners);
+        var card = session.Turns[0].UserQuestion!;
+        if (answered.IsSuccess)
+        {
+            Assert.NotNull(card.Answer);
+            Assert.Equal(["A", "B"], card.Choices);
+        }
+        else
+        {
+            Assert.Null(card.Answer);
+            Assert.Equal(["Yes", "No"], card.Choices);
+        }
+    }
+
+    [Fact]
+    public async Task Update_validation_keeps_the_post_prefix_intact()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        var id = QuestionId(await ExecuteAsync(executor, ValidArgs("body")));
+        var before = session.Turns[0].UserQuestion;
+
+        var one = await ExecuteNamedAsync(
+            executor,
+            "UpdateUserQuestion",
+            "{\"questionId\":\"" + id.ToString("D") + "\",\"message\":\"body\",\"question\":\"Pick\",\"choices\":[\"A\"]}");
+        Assert.Equal("UpdateUserQuestion: choices require at least 2.", one.Content);
+        Assert.Equal(before, session.Turns[0].UserQuestion);
+
+        var post = await ExecuteAsync(executor, """{"message":"body","question":"Pick","choices":["A"]}""");
+        Assert.Equal("PostUserQuestion: choices require at least 2.", post.Content);
+    }
+
+    [Fact]
+    public async Task List_returns_pending_only_unless_includeAnswered()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        var open = QuestionId(await ExecuteAsync(executor, ValidArgs("open")));
+        var answered = QuestionId(await ExecuteAsync(executor, ValidArgs("answered")));
+        Assert.False(session.TryRecordUserQuestionAnswer(answered, ["A"], null).IsError);
+        var withdrawn = QuestionId(await ExecuteAsync(executor, ValidArgs("withdrawn")));
+        Assert.False((await ExecuteNamedAsync(
+            executor, "DeleteUserQuestion", "{\"questionId\":\"" + withdrawn.ToString("D") + "\"}")).IsError);
+        session.AppendDisplayInfoTurn(
+            "Enter secrets",
+            secureDataRequest: new DysonSecureDataRequest(
+                Guid.NewGuid(),
+                [new DysonSecureDataField("k", "label")],
+                Outcome: null));
+
+        var pending = await ExecuteNamedAsync(executor, "ListUserQuestions", "{}");
+        Assert.False(pending.IsError, pending.Content);
+        using var doc = JsonDocument.Parse(pending.Content);
+        var rows = doc.RootElement.GetProperty("questions");
+        Assert.Equal(1, rows.GetArrayLength());
+        Assert.Equal(open.ToString("D"), rows[0].GetProperty("questionId").GetString());
+        Assert.Equal("Pick", rows[0].GetProperty("question").GetString());
+        Assert.Equal("pending", rows[0].GetProperty("state").GetString());
+        Assert.False(rows[0].GetProperty("multiSelect").GetBoolean());
+        Assert.Equal(2, rows[0].GetProperty("choices").GetArrayLength());
+        Assert.False(string.IsNullOrWhiteSpace(rows[0].GetProperty("postedUtc").GetString()));
+        Assert.False(doc.RootElement.GetProperty("truncated").GetBoolean());
+
+        var all = await ExecuteNamedAsync(executor, "ListUserQuestions", "{\"includeAnswered\":true}");
+        using var allDoc = JsonDocument.Parse(all.Content);
+        var allRows = allDoc.RootElement.GetProperty("questions");
+        Assert.Equal(3, allRows.GetArrayLength());
+        Assert.Equal("pending", allRows[0].GetProperty("state").GetString());
+        Assert.Equal("answered", allRows[1].GetProperty("state").GetString());
+        Assert.Equal("withdrawn", allRows[2].GetProperty("state").GetString());
+        Assert.Equal(0, allRows[2].GetProperty("choices").GetArrayLength());
+        Assert.Equal(all.Content, (await ExecuteNamedAsync(executor, "ListUserQuestions", "{\"includeAnswered\":true}")).Content);
+    }
+
+    [Fact]
+    public async Task List_empty_and_answered_only_are_an_empty_array()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        var empty = await ExecuteNamedAsync(executor, "ListUserQuestions", "{}");
+        Assert.Equal("{\"questions\":[]}", empty.Content);
+
+        QuestionId(await ExecuteAsync(executor, ValidArgs("done")));
+        Assert.False(session.TryRecordUserQuestionAnswer(session.Turns[0].UserQuestion!.Id, ["A"], null).IsError);
+        var answeredOnly = await ExecuteNamedAsync(executor, "ListUserQuestions", "{}");
+        Assert.Equal("{\"questions\":[]}", answeredOnly.Content);
+    }
+
+    [Fact]
+    public async Task List_caps_at_fifty_oldest()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        for (var i = 0; i < 51; i++)
+        {
+            var turn = session.AppendDisplayInfoTurn(
+                "body " + i,
+                userQuestion: new DysonUserQuestion(Guid.NewGuid(), "Q" + i, ["A", "B"], false, true, null));
+            turn.StartedUtc = DateTime.UnixEpoch.AddMinutes(i);
+        }
+
+        var listed = await ExecuteNamedAsync(executor, "ListUserQuestions", "{}");
+        using var doc = JsonDocument.Parse(listed.Content);
+        var rows = doc.RootElement.GetProperty("questions");
+        Assert.Equal(50, rows.GetArrayLength());
+        Assert.True(doc.RootElement.GetProperty("truncated").GetBoolean());
+        Assert.Equal("Q0", rows[0].GetProperty("question").GetString());
+        Assert.Equal("Q49", rows[49].GetProperty("question").GetString());
+    }
+
+    [Fact]
+    public async Task List_does_not_write()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        QuestionId(await ExecuteAsync(executor, ValidArgs("body")));
+        var updates = 0;
+        session.TurnUpdated += (_, _) => updates++;
+        var before = session.Turns.Count;
+
+        Assert.False((await ExecuteNamedAsync(executor, "ListUserQuestions", "{}")).IsError);
+        Assert.Equal(before, session.Turns.Count);
+        Assert.NotNull(session.Turns[0].UserQuestion);
+        Assert.Equal(0, updates);
+    }
+
+    private static Guid QuestionId(DysonToolCallResult result)
+    {
+        Assert.False(result.IsError, result.Content);
+        using var doc = JsonDocument.Parse(result.Content);
+        return Guid.Parse(doc.RootElement.GetProperty("questionId").GetString()!);
+    }
+
+    private static string UpdateArgs(Guid id) =>
+        "{\"questionId\":\"" + id.ToString("D") + "\",\"message\":\"next\",\"question\":\"Next\",\"choices\":[\"Yes\",\"No\"]}";
+
+    private static async Task<Guid> NewSessionAsync(DysonDbAccessor accessor)
+    {
+        var created = await DysonTempDb.Sessions(accessor).CreateSessionAsync(new DysonSessionCreateRequest
+        {
+            AgentMode = DysonAgentModes.MetaAgent,
+            SystemPromptSnapshot = "root",
+            Title = "questions",
+        });
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        return created.Value;
+    }
+
+    private static void DeleteTemp(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
     }
 
     private static Task<DysonToolCallResult> ExecuteAsync(
         DysonWorkspaceToolExecutor executor,
         string argumentsJson) =>
+        ExecuteNamedAsync(executor, "PostUserQuestion", argumentsJson);
+
+    private static Task<DysonToolCallResult> ExecuteNamedAsync(
+        DysonWorkspaceToolExecutor executor,
+        string toolName,
+        string argumentsJson) =>
         executor.ExecuteAsync(new DysonToolCall
         {
             CallId = Guid.NewGuid().ToString("N"),
-            ToolName = "PostUserQuestion",
+            ToolName = toolName,
             Stage = 1,
             ArgumentsJson = argumentsJson,
         });
 
     private sealed class StubProvider : DysonAgentProvider;
 
-    private sealed class StubSession(string mode) : DysonAgentSession(
-        mode,
-        new DysonAgentSessionConfig(),
-        new StubProvider())
+    private sealed class StubSession : DysonAgentSession
     {
+        public StubSession(
+            string mode,
+            IDysonPendingUserQuestionRepository? pending = null,
+            Guid persistenceId = default)
+            : base(mode, new DysonAgentSessionConfig { PendingUserQuestions = pending }, new StubProvider())
+        {
+            if (persistenceId != Guid.Empty)
+                PersistenceId = persistenceId;
+        }
+
         public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
             string agentMode,
             string task,

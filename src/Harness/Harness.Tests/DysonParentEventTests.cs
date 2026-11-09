@@ -144,6 +144,194 @@ public class DysonParentEventTests
     }
 
     [Fact]
+    public async Task Interrupt_during_summary_is_held_and_delivered_after_the_continuation_starts()
+    {
+        var parent = new StubSession();
+        var child = new SummarizingChildSession(queueContinuation: true);
+        parent.RegisterForTest(child);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.SummaryStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            var urgent = await parent.TriggerSubagentEventAsync(child.Id, "urgent");
+            Assert.True(urgent.IsSuccess, urgent.IsError ? urgent.Error : null);
+            Assert.Contains(HeldStatus, urgent.Value, StringComparison.Ordinal);
+            Assert.Equal(1, child.HeldInterruptCount);
+
+            child.ReleaseSummary.TrySetResult();
+            Assert.False(await child.SummaryTokenCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30)));
+            await child.ContinuationCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            await child.Seen("urgent").WaitAsync(TimeSpan.FromSeconds(30));
+            await child.WaitForTerminalAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            // The released interrupt's run detaches: the child is not left busy forever.
+            await child.WaitForBackgroundRunIdleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
+
+            var order = child.Instructions.ToList();
+            Assert.Single(order, i => i.EndsWith("urgent", StringComparison.Ordinal));
+            Assert.True(
+                order.IndexOf(SummarizingChildSession.ContinuationMarker)
+                < order.FindIndex(i => i.EndsWith("urgent", StringComparison.Ordinal)));
+            Assert.Equal(0, child.HeldInterruptCount);
+        }
+        finally
+        {
+            child.ReleaseSummary.TrySetResult();
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Fact]
+    public async Task Two_held_interrupts_are_each_delivered_once()
+    {
+        var parent = new StubSession();
+        var child = new SummarizingChildSession(queueContinuation: true);
+        parent.RegisterForTest(child);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.SummaryStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            Assert.Contains(HeldStatus, (await parent.TriggerSubagentEventAsync(child.Id, "urgent one")).Value, StringComparison.Ordinal);
+            Assert.Contains(HeldStatus, (await parent.TriggerSubagentEventAsync(child.Id, "urgent two")).Value, StringComparison.Ordinal);
+            Assert.Equal(2, child.HeldInterruptCount);
+
+            child.ReleaseSummary.TrySetResult();
+            await child.Seen("urgent one").WaitAsync(TimeSpan.FromSeconds(30));
+            await child.Seen("urgent two").WaitAsync(TimeSpan.FromSeconds(30));
+            await child.WaitForTerminalAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            // The released interrupt's run detaches: the child is not left busy forever.
+            await child.WaitForBackgroundRunIdleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
+
+            var order = child.Instructions.ToList();
+            Assert.Single(order, i => i.EndsWith("urgent one", StringComparison.Ordinal));
+            Assert.Single(order, i => i.EndsWith("urgent two", StringComparison.Ordinal));
+            // The newest interrupts the continuation; the older one follows FIFO.
+            Assert.True(
+                order.FindIndex(i => i.EndsWith("urgent two", StringComparison.Ordinal))
+                < order.FindIndex(i => i.EndsWith("urgent one", StringComparison.Ordinal)));
+            Assert.Equal(0, child.HeldInterruptCount);
+        }
+        finally
+        {
+            child.ReleaseSummary.TrySetResult();
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Fact]
+    public async Task Held_interrupt_without_a_continuation_is_delivered_when_the_run_ends()
+    {
+        var parent = new StubSession();
+        var child = new SummarizingChildSession(queueContinuation: false);
+        parent.RegisterForTest(child);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.SummaryStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Contains(HeldStatus, (await parent.TriggerSubagentEventAsync(child.Id, "urgent")).Value, StringComparison.Ordinal);
+
+            child.ReleaseSummary.TrySetResult();
+            Assert.False(await child.SummaryTokenCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30)));
+            await child.Seen("urgent").WaitAsync(TimeSpan.FromSeconds(30));
+            await child.WaitForTerminalAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            // The released interrupt's run detaches: the child is not left busy forever.
+            await child.WaitForBackgroundRunIdleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
+
+            var order = child.Instructions.ToList();
+            Assert.Single(order, i => i.EndsWith("urgent", StringComparison.Ordinal));
+            Assert.DoesNotContain(SummarizingChildSession.ContinuationMarker, order);
+            Assert.Equal(0, child.HeldInterruptCount);
+        }
+        finally
+        {
+            child.ReleaseSummary.TrySetResult();
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Fact]
+    public async Task Stop_during_summary_cancels_it_and_drops_held_messages()
+    {
+        var parent = new StubSession();
+        var child = new SummarizingChildSession(queueContinuation: true);
+        parent.RegisterForTest(child);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.SummaryStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Contains(HeldStatus, (await parent.TriggerSubagentEventAsync(child.Id, "urgent")).Value, StringComparison.Ordinal);
+
+            Assert.True((await parent.StopSubagentAsync(child.Id, "stop")).IsSuccess);
+            Assert.Equal(0, child.HeldInterruptCount);
+            Assert.True(await child.SummaryTokenCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30)));
+            await child.FirstTurnExited.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            Assert.Equal(DysonSessionStatus.Stopped, child.Status);
+            Assert.DoesNotContain(child.Instructions, i => i.EndsWith("urgent", StringComparison.Ordinal));
+        }
+        finally
+        {
+            child.ReleaseSummary.TrySetResult();
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Fact]
+    public async Task Positive_timeout_during_summary_returns_held()
+    {
+        var parent = new StubSession();
+        var child = new SummarizingChildSession(queueContinuation: true);
+        parent.RegisterForTest(child);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.SummaryStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            var late = await parent.TriggerSubagentEventAsync(child.Id, "later", timeoutSeconds: 1);
+            Assert.True(late.IsSuccess, late.IsError ? late.Error : null);
+            Assert.Contains(HeldStatus, late.Value, StringComparison.Ordinal);
+            Assert.False(child.HasPendingTurn);
+
+            child.ReleaseSummary.TrySetResult();
+            Assert.False(await child.SummaryTokenCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30)));
+            await child.Seen("later").WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            child.ReleaseSummary.TrySetResult();
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Fact]
+    public void IsSummarizingForInterrupt_matches_summary_turns()
+    {
+        var session = new StubSession();
+        Assert.False(session.IsSummarizingForInterrupt);
+
+        Assert.Null(session.BeginOrAttachSummary(null, resume: false, out var owner));
+        Assert.True(session.IsSummarizingForInterrupt);
+        session.EndSummary(owner!, succeeded: true);
+        Assert.False(session.IsSummarizingForInterrupt);
+
+        foreach (var (kind, expected) in new[]
+                 {
+                     (DysonAgentTurnKind.FullSummarize, true),
+                     (DysonAgentTurnKind.ReportSummary, true),
+                     (DysonAgentTurnKind.Normal, false),
+                     (DysonAgentTurnKind.Continuation, false),
+                     (DysonAgentTurnKind.ExpandThoughtProcess, false),
+                 })
+        {
+            using (session.BeginInFlightPrompt(new DysonAgentTurn { Kind = kind, Instruction = "x", StartedUtc = DateTime.UtcNow }))
+                Assert.Equal(expected, session.IsSummarizingForInterrupt);
+        }
+    }
+
+    private const string HeldStatus = "\"status\":\"held\"";
+
+    [Fact]
     public async Task Idle_inject_with_timeout_omitted_is_delivered_without_waiting()
     {
         var parent = new StubSession();
@@ -972,6 +1160,94 @@ public class DysonParentEventTests
             FirstStarted.TrySetResult();
             await ReleaseFirst.Task.ConfigureAwait(false);
             return VoidResult<string>.Success;
+        }
+    }
+
+    /// <summary>
+    /// First turn owns a compaction summary until <see cref="ReleaseSummary"/> (cancellable), then optionally
+    /// queues the after-summary Continuation. The Continuation hangs until cancelled. Other turns return at once.
+    /// Every turn runs inside <see cref="DysonAgentSession.BeginInFlightPrompt"/> like the real loop.
+    /// </summary>
+    private sealed class SummarizingChildSession(bool queueContinuation) : StubSession
+    {
+        public const string ContinuationMarker = "[continuation]";
+        public readonly System.Collections.Concurrent.ConcurrentQueue<string> Instructions = new();
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource> _seen = new();
+        public readonly TaskCompletionSource SummaryStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource ReleaseSummary = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource<bool> SummaryTokenCancelled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource FirstTurnExited = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource ContinuationCancelled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _calls;
+
+        public Task Seen(string ending)
+        {
+            var signal = _seen.GetOrAdd(
+                ending, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            if (Instructions.Any(i => i.EndsWith(ending, StringComparison.Ordinal)))
+                signal.TrySetResult();
+            return signal.Task;
+        }
+
+        public void CancelBackgroundRunForTest() => CancelBackgroundRun();
+
+        public override async Task<VoidResult<string>> PromptHarnessTurnAsync(
+            DysonAgentTurn turn,
+            CancellationToken cancellationToken = default)
+        {
+            using var inFlight = BeginInFlightPrompt(turn);
+            var instruction = turn.Kind == DysonAgentTurnKind.Continuation ? ContinuationMarker : turn.Instruction ?? "";
+            Instructions.Enqueue(instruction);
+            foreach (var pair in _seen)
+            {
+                if (instruction.EndsWith(pair.Key, StringComparison.Ordinal))
+                    pair.Value.TrySetResult();
+            }
+
+            if (turn.Kind == DysonAgentTurnKind.Continuation)
+            {
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    ContinuationCancelled.TrySetResult();
+                }
+            }
+
+            if (Interlocked.Increment(ref _calls) != 1)
+                return VoidResult<string>.Success;
+
+            try
+            {
+                Assert.Null(BeginOrAttachSummary(null, resume: false, out var owner));
+                var succeeded = false;
+                try
+                {
+                    SummaryStarted.TrySetResult();
+                    await ReleaseSummary.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    SummaryTokenCancelled.TrySetResult(cancellationToken.IsCancellationRequested);
+                    succeeded = true;
+                }
+                catch (OperationCanceledException)
+                {
+                    SummaryTokenCancelled.TrySetResult(true);
+                    throw;
+                }
+                finally
+                {
+                    EndSummary(owner!, succeeded);
+                }
+
+                if (queueContinuation)
+                    DysonCompactionFlow.QueueFreshContinuationIfNeeded(this, resume: true);
+                return VoidResult<string>.Success;
+            }
+            finally
+            {
+                FirstTurnExited.TrySetResult();
+            }
         }
     }
 

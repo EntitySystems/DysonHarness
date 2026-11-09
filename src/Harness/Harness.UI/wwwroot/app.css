@@ -186,6 +186,9 @@ html, body {
   margin: 0;
   padding: 0;
   height: 100%;
+  /* Shells are 100vh. Anything rendered outside them (a stray text node, the reconnect
+     modal) must not grow the document and clip the sidebar footer. Panes scroll themselves. */
+  overflow: hidden;
   background: var(--bg-0);
   color: var(--text);
   font-family: var(--font-sans);
@@ -388,6 +391,12 @@ code, .mono {
   100% { opacity: 0; transform: scale(1.9); }
 }
 
+/* Change Stream button flash. Reduced motion: the blanket rule stops it. */
+@keyframes dyson-change-flash {
+  from { background-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+  to { background-color: transparent; }
+}
+
 
 /* Shell */
 .app-shell {
@@ -395,7 +404,9 @@ code, .mono {
   display: grid;
   grid-template-columns: 260px 1fr 300px;
   height: 100vh;
-  min-height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
   background: var(--bg-0);
   overflow: hidden;
 }
@@ -654,7 +665,9 @@ code, .mono {
   display: grid;
   grid-template-columns: 220px 1fr;
   height: 100vh;
-  min-height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
   background: var(--bg-0);
   overflow: hidden;
 }

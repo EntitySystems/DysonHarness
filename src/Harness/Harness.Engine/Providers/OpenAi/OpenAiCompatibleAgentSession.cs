@@ -670,6 +670,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string? title = null,
         CancellationToken cancellationToken = default)
     {
+        MarkChildReportDelivered(interrupt.SubagentId);
         var turn = DysonSubagentReportPrompt.CreateTurn(interrupt, title);
         return PromptWithTurnAsync(turn, [], cancellationToken);
     }
@@ -1129,7 +1130,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
                 var text = ResolveFinalAssistantContent(reply.Content);
 
-                if (Parent is not null && !TurnHasSubmitSubagentReport(turn))
+                // Workers still running: a plain reply ends the turn normally and the watch holds
+                // (no nudge; the drone must not report while a worker runs).
+                if (Parent is not null && !TurnHasSubmitSubagentReport(turn) && !IsAwaitingDescendants)
                 {
                     if (!childReportNudged)
                     {
@@ -1167,7 +1170,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 // Title parse only at finalize — preview stays raw (incl. mid-stream H1) until then.
                 CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
                 turn.RecordReasoningItems(reply.ReasoningOutputItems, OpenAiProvider.ReasoningSourceTag, finalRound: true);
-                ApplyAssistantText(turn, text);
+                // Sidecar replies are never heard; trimming stops the model copying a growing run of blank lines from its history.
+                ApplyAssistantText(turn, IsVoiceSidecar ? text.Trim() : text);
                 turn.FinishStreaming();
                 turn.FinishReasoningStreaming();
                 AppendLog($"turn complete: {turn.AgentTitle ?? turn.Id.ToString("N")[..8]}");

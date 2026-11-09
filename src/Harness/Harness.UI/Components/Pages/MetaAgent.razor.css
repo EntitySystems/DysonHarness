@@ -121,7 +121,34 @@
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
+
+.meta-stage__count[data-running] {
+  box-shadow: 0 0 0 0 var(--accent);
+  animation: dyson-status-pulse var(--motion-pulse) var(--ease-standard) infinite;
+}
+
+.meta-stage__pipelines {
+  position: relative;
+}
+
+.meta-stage__pipelines[data-error]::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--warning);
+}
+.meta-stage__icon--changes { --meta-icon: url("icons/change-stream.svg"); }
 .meta-stage__icon--viz { --meta-icon: url("icons/visualization.svg"); }
+
+/* Two identical rules so alternating data-flash restarts the keyframe without JS. */
+.meta-stage__changes[data-flash="a"],
+.meta-stage__changes[data-flash="b"] {
+  animation: dyson-change-flash 900ms var(--ease);
+}
 .meta-stage__icon--open { --meta-icon: url("icons/open-external.svg"); }
 .meta-stage__icon--back { --meta-icon: url("icons/arrow-left.svg"); }
 
@@ -443,4 +470,24 @@
 @media (max-width: 1100px) {
   .meta-agents { display: none; }
   .meta-stage__body { grid-template-columns: minmax(0, 1fr); }
+}
+
+.meta-provider-gate {
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto 8px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+
+.meta-provider-gate p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
 }

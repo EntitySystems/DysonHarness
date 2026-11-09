@@ -124,6 +124,10 @@ public class DysonMetaAgentDirectiveTests
             "Meta Agent ForMode");
         MustContain(
             text,
+            "When you are not sure which questions are still open — after compaction, after a restart, or before you update or delete one — call ListUserQuestions. It returns pending questionIds. When a question you posted is outdated — superseded, already decided another way, or no longer relevant — call UpdateUserQuestion with its questionId, or DeleteUserQuestion to withdraw it. Do not leave it open and do not post a duplicate. UpdateUserQuestion replaces the card in place. DeleteUserQuestion removes it from the Questions list and marks the bubble Withdrawn.",
+            "Meta Agent ForMode");
+        MustContain(
+            text,
             "Conversation actions are required whenever a posted message names something the user would open. When you PostConversationMessage or PostUserQuestion and the message names a plan, a workspace file, or an http(s) URL the user would reasonably want to open, attach one action per target. Do this on status updates, questions, and results — not only when a plan is first submitted. A message may carry several actions, up to 8 (the tool maximum; do not ask for more). name is a short human label; func is one of these built-in keys and needs no RegisterConversationAction call: open_plan:{planId} opens that plan, open_file:{path} opens a work-relative file, and open_url:{url} opens an http or https link. Do not attach actions for data that is not a plan id, a workspace file, or an http(s) URL. Do not invent func keys.",
             "Meta Agent ForMode");
         MustContain(text, "visualizationId", "Meta Agent ForMode");
@@ -153,6 +157,7 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "Before B, write in the dispatch todo why the slices do not overlap", "Meta Agent ForMode");
         MustContain(text, $"refuses a new useWorktree true drone while {DysonMetaAgentTools.MaxRunningWorktreeDrones} are running", "Meta Agent ForMode");
         MustNotContain(text, "Create a new drone only for genuinely independent work", "Meta Agent ForMode");
+        MustContain(text, "todos is required", "Meta Agent ForMode");
     }
 
     private static void AssertMetaAgentDroneForMode()
@@ -177,6 +182,10 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "No file belongs to two slices", "Meta Agent Drone ForMode");
         MustContain(text, "Workers do not commit. You commit once.", "Meta Agent Drone ForMode");
         MustContain(text, "Never SubmitSubagentReport while a worker is still running", "Meta Agent Drone ForMode");
+        // Plan 252: the Todos block lives in the system prompt so it survives compaction.
+        MustContain(text, "ListTodos at the start of your first turn", "Meta Agent Drone ForMode");
+        MustContain(text, "do not call ListTodos just to re-read it", "Meta Agent Drone ForMode");
+        MustNotContain(text, "again after every compaction", "Meta Agent Drone ForMode");
     }
 
     private static void AssertBothDifferFromWork()

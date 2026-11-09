@@ -1,15 +1,16 @@
 using System.Collections.Concurrent;
-using CefSharp;
+using Microsoft.Web.WebView2.Core;
 
 namespace DysonHarness;
 
 /// <summary>
-/// Windows CefSharp implementation of <see cref="IDysonBrowserControl"/>.
+/// Windows WebView2 implementation of <see cref="IDysonBrowserControl"/>.
+/// Agent tabs use the WebView2 profile <c>agent</c>, separate from the desktop shell's <c>shell</c> profile.
 /// Register as a process-wide DI singleton from Harness.UI on Windows.
 /// </summary>
-public sealed class DysonCefBrowserControl : IDysonBrowserControl
+public sealed class DysonWebView2BrowserControl : IDysonBrowserControl
 {
-    private readonly ConcurrentDictionary<string, DysonCefBrowserWindow> _windows = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DysonWindowsBrowserWindow> _windows = new(StringComparer.Ordinal);
 
     public event Action<DysonBrowserSnipPayload>? SnipCaptured;
 
@@ -27,13 +28,13 @@ public sealed class DysonCefBrowserControl : IDysonBrowserControl
     {
         try
         {
-            DysonCefStaHost.EnsureStarted();
+            DysonWindowsStaHost.EnsureStarted();
             var w = width is > 0 ? width.Value : 1280;
             var h = height is > 0 ? height.Value : 800;
 
-            var window = await DysonCefStaHost.InvokeAsync(() =>
+            var window = await DysonWindowsStaHost.InvokeAsync(() =>
             {
-                var win = new DysonCefBrowserWindow(this, url, w, h);
+                var win = new DysonWindowsBrowserWindow(this, url, w, h);
                 win.Show();
                 return win;
             }).ConfigureAwait(false);
@@ -96,11 +97,19 @@ public sealed class DysonCefBrowserControl : IDysonBrowserControl
 
         try
         {
-            await DysonCefStaHost.InvokeAsync(async () =>
+            // All agent tabs share one profile; clearing it once covers every tab. The shell profile is untouched.
+            var cleared = await DysonWindowsStaHost.InvokeAsync(async () =>
             {
-                using var client = tabs[0].BrowserControl.GetDevToolsClient();
-                await client.Network.ClearBrowserCacheAsync().ConfigureAwait(true);
+                var profile = tabs.Select(t => t.Profile).FirstOrDefault(p => p is not null);
+                if (profile is null)
+                    return false;
+                await profile.ClearBrowsingDataAsync(
+                    CoreWebView2BrowsingDataKinds.DiskCache | CoreWebView2BrowsingDataKinds.CacheStorage)
+                    .ConfigureAwait(true);
+                return true;
             }).ConfigureAwait(false);
+            if (!cleared)
+                return Result<DysonBrowserCacheClearResult, string>.AsError("ClearBrowserCache failed: no initialized agent tab.");
         }
         catch (Exception ex)
         {
@@ -114,18 +123,11 @@ public sealed class DysonCefBrowserControl : IDysonBrowserControl
         foreach (var tab in tabs)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                await DysonCefStaHost.InvokeAsync(() =>
-                {
-                    tab.BrowserControl.Reload(ignoreCache: true);
-                }).ConfigureAwait(false);
+            var reload = await tab.HardReloadAsync().ConfigureAwait(false);
+            if (reload.IsError)
+                firstError ??= reload.Error;
+            else
                 reloaded++;
-            }
-            catch (Exception ex)
-            {
-                firstError ??= ex.Message;
-            }
         }
 
         if (reloaded == 0)
@@ -144,6 +146,6 @@ public sealed class DysonCefBrowserControl : IDysonBrowserControl
 
     internal void NotifyWindowClosed(string windowId) => _windows.TryRemove(windowId, out _);
 
-    internal DysonCefBrowserWindow? TryGetWindow(string windowId) =>
+    internal DysonWindowsBrowserWindow? TryGetWindow(string windowId) =>
         _windows.TryGetValue(windowId, out var w) ? w : null;
 }

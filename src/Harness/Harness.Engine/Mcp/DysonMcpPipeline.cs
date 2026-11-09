@@ -601,7 +601,8 @@ public sealed class DysonMcpPipeline
                 "that also cancels a pending parent-event wait and discards the child's question. " +
                 "timeoutSeconds 1–20 waits for the child to start the payload at its next turn boundary, then interrupts (above 20 clamps to 20). " +
                 "A positive timeout fails immediately while the child awaits a parent-event reply. " +
-                "An idle child starts the payload at once. Result status: delivered or interrupted, with waitedMs. " +
+                "An idle child starts the payload at once. Result status: delivered or interrupted, with waitedMs, " +
+                "or held (the child is summarizing; the payload interrupts the turn that starts after the summary). " +
                 "Injecting into a child that already submitted a report reopens it (`Active`) so SubmitSubagentReport works again.",
             InputSchemaJson = """
                 {
@@ -642,7 +643,7 @@ public sealed class DysonMcpPipeline
         {
             Name = "OpenBrowser",
             Description =
-                "Open a new agent browser window (Windows CefSharp WPF chrome). " +
+                "Open a new agent browser window (Windows WebView2 WPF chrome). " +
                 "Optional url, width, height. Returns windowId and initial tabId.",
             InputSchemaJson = $$"""
                 {
@@ -841,11 +842,10 @@ public sealed class DysonMcpPipeline
         {
             Name = "ClearBrowserCache",
             Description =
-                "Clear the shared CEF HTTP cache for open agent browser windows, then hard-reload every tab. " +
-                "Does not clear cookies or site storage. " +
+                "Clear the agent browser HTTP cache (Windows: the agent WebView2 profile), then hard-reload every tab " +
+                "in every open agent window. Does not clear cookies or site storage. " +
                 "Empty window list returns success with windows=0, tabsReloaded=0. " +
-                "Agent windows and the Windows shell UI share %LocalAppData%\\DysonHarness\\cef-cache; " +
-                "CDP cache clear is profile-wide (shell is not hard-reloaded).",
+                "The Windows shell UI uses a separate profile and is untouched.",
             InputSchemaJson = """
                 {
                   "type": "object",

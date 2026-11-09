@@ -7,6 +7,7 @@
 @inject DysonCliProxyHost CliProxy
 @inject ManagedInferenceProviderCatalog ManagedCatalog
 @inject ConfirmDialogService ConfirmDialog
+@inject DysonUiHost Host
 
 <div class="models-panel panel">
     <div class="tool-panel__title">Providers &amp; slugs</div>
@@ -411,6 +412,7 @@
             _cliProxyInstalled = CliProxy.IsInstalled;
             await RefreshAsync();
             await OnChanged.InvokeAsync();
+            Host.NotifyModelCatalogChanged();
         }
         finally
         {
@@ -584,6 +586,7 @@
             _cliProxyInstalled = CliProxy.IsInstalled;
             await RefreshAsync();
             await OnChanged.InvokeAsync();
+            Host.NotifyModelCatalogChanged();
         }
         finally
         {
@@ -612,6 +615,7 @@
 
             _status = $"{provider.DisplayName}: signed out (stored credential deleted). Slugs are kept — Connect to sign in again.";
             await RefreshAsync();
+            Host.NotifyModelCatalogChanged();
             return;
         }
 
@@ -1064,6 +1068,7 @@
             _directKeyOpen = false;
             await RefreshAsync();
             await OnChanged.InvokeAsync();
+            Host.NotifyModelCatalogChanged();
         }
         finally
         {
@@ -1184,6 +1189,7 @@
 
         await RefreshAsync();
         await OnChanged.InvokeAsync();
+        Host.NotifyModelCatalogChanged();
     }
 
     private async Task SaveEditProviderAsync(Guid id, ProviderFormModal.ProviderFormResult result)
@@ -1222,6 +1228,7 @@
         _editingProviderId = null;
         await RefreshAsync();
         await OnChanged.InvokeAsync();
+        Host.NotifyModelCatalogChanged();
     }
 
     private async Task ConfirmDeleteProviderAsync(DysonModelProviderEntity provider)
@@ -1275,6 +1282,7 @@
 
         await RefreshAsync();
         await OnChanged.InvokeAsync();
+        Host.NotifyModelCatalogChanged();
     }
 
     // --- Slug add/edit/remove (modal-driven) ---

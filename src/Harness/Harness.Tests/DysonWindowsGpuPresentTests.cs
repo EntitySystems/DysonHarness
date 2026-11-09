@@ -7,12 +7,12 @@ using ImageMagick;
 namespace Harness.Tests;
 
 /// <summary>
-/// Windows CEF integration gate: HwndHost agent browser must obtain WebGPU + WebGL and present non-black pixels.
-/// Requires a fresh Cef.Initialize (kill Harness.UI / DysonHarness / CefSharp.BrowserSubprocess first).
+/// Windows WebView2 integration gate: the HWND-hosted agent browser must obtain WebGPU + WebGL and present
+/// non-black pixels. Uses a temp WebView2 user data folder, so it never collides with a running DysonHarness.exe.
 /// WebGPU path must create a canvas context, configure, and present — adapter/device alone is insufficient
 /// (SharedImageBackingFactory / WebGPUSwapBufferProvider can still fail after requestDevice).
 /// </summary>
-public class DysonCefGpuPresentTests
+public class DysonWindowsGpuPresentTests
 {
     private static readonly string ProbeHtml = """
         <!DOCTYPE html>
@@ -111,10 +111,140 @@ public class DysonCefGpuPresentTests
         </body></html>
         """;
 
+    // One WebView2 environment per process: every test in this class shares the same temp user data folder.
+    private static readonly string TestUserData =
+        Path.Combine(Path.GetTempPath(), "dyson-webview2-test-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+
+    private const string ToolsPageHtml = """
+        <!DOCTYPE html>
+        <html><head><meta charset="utf-8"><title>dyson-tools-a</title></head>
+        <body>
+        <input id="box" value="">
+        <button id="btn" onclick="window.__clicked=(window.__clicked||0)+1">go</button>
+        <div id="hov" onmouseover="window.__hovered=true" style="width:80px;height:40px">hover</div>
+        <script>
+          window.__keys = [];
+          document.addEventListener('keydown', e => window.__keys.push(e.key));
+          console.log('dyson-console-marker');
+          setTimeout(() => { const d = document.createElement('div'); d.id = 'late'; document.body.appendChild(d); }, 300);
+        </script>
+        </body></html>
+        """;
+
+    [Fact]
+    public async Task Agent_tools_round_trip()
+    {
+        DysonWindowsStaHost.UserDataFolderOverride = TestUserData;
+        var control = new DysonWebView2BrowserControl();
+        var pageA = Path.Combine(Path.GetTempPath(), "dyson-tools-a-" + Guid.NewGuid().ToString("N") + ".html");
+        var pageB = Path.Combine(Path.GetTempPath(), "dyson-tools-b-" + Guid.NewGuid().ToString("N") + ".html");
+        await File.WriteAllTextAsync(pageA, ToolsPageHtml);
+        await File.WriteAllTextAsync(pageB, "<!DOCTYPE html><html><head><title>dyson-tools-b</title></head><body>b</body></html>");
+        var urlA = new Uri(pageA).AbsoluteUri;
+        var urlB = new Uri(pageB).AbsoluteUri;
+        IDysonBrowserWindow? window = null;
+        try
+        {
+            window = Ok(await control.OpenBrowserAsync(urlA, 800, 600));
+            Assert.Contains(Ok(await control.ListWindowsAsync()), w => w.Id == window.Id);
+            Assert.Equal(window.Id, Ok(await control.GetWindowAsync(window.Id)).Id);
+            var tab = Assert.Single(Ok(await window.ListTabsAsync()));
+            await WaitForTitleAsync(tab, "dyson-tools-a");
+
+            // ExecuteJavaScript: string unwrapped, number / object raw JSON.
+            Assert.Equal("abc", Ok(await tab.ExecuteJavaScriptAsync("'abc'")));
+            Assert.Equal("42", Ok(await tab.ExecuteJavaScriptAsync("40 + 2")));
+            Assert.Equal("{\"a\":1}", Ok(await tab.ExecuteJavaScriptAsync("({a:1})")));
+            Assert.Contains("id=\"btn\"", Ok(await tab.GetHtmlAsync()));
+
+            Ok(await tab.WaitForSelectorAsync("#late", 10_000));
+            Ok(await tab.FillAsync("#box", "filled"));
+            Assert.Equal("filled", Ok(await tab.ExecuteJavaScriptAsync("document.getElementById('box').value")));
+            Ok(await tab.TypeAsync(new DysonBrowserTypeRequest { Selector = "#box", Text = "xy", ClearFirst = true }));
+            Assert.Equal("xy", Ok(await tab.ExecuteJavaScriptAsync("document.getElementById('box').value")));
+            Ok(await tab.ClickAsync(new DysonBrowserClickRequest { Selector = "#btn" }));
+            // One agent click fires the page handler exactly once.
+            Assert.Equal("1", Ok(await tab.ExecuteJavaScriptAsync("window.__clicked||0")));
+            Ok(await tab.HoverAsync("#hov"));
+            Assert.Equal("true", Ok(await tab.ExecuteJavaScriptAsync("!!window.__hovered")));
+            Ok(await tab.PressKeyAsync(new DysonBrowserKeyRequest { Selector = "#box", Key = "Enter" }));
+            Assert.Contains("Enter", Ok(await tab.ExecuteJavaScriptAsync("window.__keys.join(',')")));
+
+            var console = Ok(await tab.ReadConsoleLogAsync());
+            Assert.Contains(console, e => e.Message.Contains("dyson-console-marker", StringComparison.Ordinal));
+            Ok(await tab.ClearConsoleLogAsync());
+            Assert.Empty(Ok(await tab.ReadConsoleLogAsync()));
+
+            var shot = Ok(await tab.TakeScreenshotAsync(30_000));
+            Assert.True(shot.Length > 8 && shot[0] == 0x89 && shot[1] == (byte)'P', "expected PNG bytes");
+
+            // Navigation + history.
+            Ok(await tab.NavigateAsync(urlB));
+            await WaitForTitleAsync(tab, "dyson-tools-b");
+            Assert.Contains(Ok(await tab.ReadNetworkLogAsync()), e => e.Url.Contains("dyson-tools-b", StringComparison.OrdinalIgnoreCase));
+            Ok(await tab.ClearNetworkLogAsync());
+            Ok(await tab.GoBackAsync());
+            await WaitForTitleAsync(tab, "dyson-tools-a");
+            Ok(await tab.GoForwardAsync());
+            await WaitForTitleAsync(tab, "dyson-tools-b");
+            Ok(await tab.ExecuteJavaScriptAsync("window.__reloadMarker = 1"));
+            Ok(await tab.ReloadAsync());
+            Ok(await tab.WaitForNavigationAsync(10_000));
+            await WaitForAsync(async () => Ok(await tab.ExecuteJavaScriptAsync("typeof window.__reloadMarker")) == "undefined");
+
+            // Tabs: new (background ops), activate, close.
+            var second = Ok(await window.NewTabAsync(urlA));
+            await WaitForTitleAsync(second, "dyson-tools-a");
+            Assert.Equal(2, Ok(await window.ListTabsAsync()).Count);
+            Ok(await window.ActivateTabAsync(tab.Id));
+            Assert.Equal("abc", Ok(await second.ExecuteJavaScriptAsync("'abc'")));
+            Ok(await window.ActivateTabAsync(second.Id));
+            Ok(await window.ResizeAsync(900, 650));
+            Ok(await window.BringToFrontAsync());
+
+            var cleared = Ok(await control.ClearBrowserCacheAsync());
+            Assert.True(cleared.Windows >= 1 && cleared.TabsReloaded >= 2, $"windows={cleared.Windows} tabs={cleared.TabsReloaded}");
+
+            Ok(await window.CloseTabAsync(second.Id));
+            Assert.Single(Ok(await window.ListTabsAsync()));
+        }
+        finally
+        {
+            if (window is not null)
+                await window.CloseAsync();
+            File.Delete(pageA);
+            File.Delete(pageB);
+        }
+    }
+
+    private static T Ok<T>(Result<T, string> result) =>
+        result.IsError ? throw new InvalidOperationException(result.Error) : result.Value;
+
+    private static void Ok(VoidResult<string> result)
+    {
+        if (result.IsError)
+            throw new InvalidOperationException(result.Error);
+    }
+
+    private static Task WaitForTitleAsync(IDysonBrowserTab tab, string title) =>
+        WaitForAsync(async () => (await tab.GetTitleAsync()) is { IsError: false } t && t.Value == title);
+
+    private static async Task WaitForAsync(Func<Task<bool>> condition)
+    {
+        var deadline = Environment.TickCount64 + 30_000;
+        while (!await condition())
+        {
+            if (Environment.TickCount64 > deadline)
+                throw new TimeoutException("Condition not met within 30s.");
+            await Task.Delay(100);
+        }
+    }
+
     [Fact]
     public async Task WebGpu_WebGl_And_NonBlack_Present()
     {
-        var control = new DysonCefBrowserControl();
+        DysonWindowsStaHost.UserDataFolderOverride = TestUserData;
+        var control = new DysonWebView2BrowserControl();
         IDysonBrowserWindow? window = null;
         string? probePath = null;
         try
@@ -137,7 +267,7 @@ public class DysonCefGpuPresentTests
 
             var tab = tabs.Value[0];
 
-            // Wait until the HwndHost browser can evaluate JS against our fixture.
+            // Wait until the WebView2 tab can evaluate JS against our fixture.
             await WaitForBrowserAddressAsync(tab, "dyson-gpu-probe", TimeSpan.FromSeconds(30));
             await WaitForProbeReadyAsync(tab, TimeSpan.FromSeconds(60));
 
@@ -168,7 +298,7 @@ public class DysonCefGpuPresentTests
                     "WebGPU adapter/device unavailable. Probe=" + probeJson.Value
                     + (string.IsNullOrEmpty(error) ? "" : " error=" + error)
                     + (string.IsNullOrEmpty(stage) ? "" : " stage=" + stage)
-                    + " Check chrome://gpu and %LocalAppData%\\DysonHarness\\cef-debug.log after a fresh CEF restart.");
+                    + " Check edge://gpu.");
             }
 
             if (!webgpuPresent)
@@ -178,7 +308,7 @@ public class DysonCefGpuPresentTests
                     + (string.IsNullOrEmpty(error) ? "" : " error=" + error)
                     + (string.IsNullOrEmpty(deviceLost) ? "" : " deviceLost=" + deviceLost)
                     + (string.IsNullOrEmpty(stage) ? "" : " stage=" + stage)
-                    + " Check cef-debug.log for WebGPUSwapBufferProvider / SharedImageBackingFactory.");
+                    + " Check edge://gpu for WebGPU / SharedImage status.");
             }
 
             if (!string.IsNullOrEmpty(deviceLost))
@@ -219,7 +349,7 @@ public class DysonCefGpuPresentTests
                 }
                 catch
                 {
-                    // best-effort so the shared CEF RootCachePath lock is released for later hosts
+                    // best-effort close
                 }
             }
 
@@ -354,11 +484,16 @@ public class DysonCefGpuPresentTests
 #else
 namespace Harness.Tests;
 
-/// <summary>CEF GPU present gate is Windows-only.</summary>
-public class DysonCefGpuPresentTests
+/// <summary>WebView2 GPU present gate is Windows-only.</summary>
+public class DysonWindowsGpuPresentTests
 {
-    [Fact(Skip = "Windows CEF / HwndHost only")]
+    [Fact(Skip = "Windows WebView2 only")]
     public void WebGpu_WebGl_And_NonBlack_Present()
+    {
+    }
+
+    [Fact(Skip = "Windows WebView2 only")]
+    public void Agent_tools_round_trip()
     {
     }
 }

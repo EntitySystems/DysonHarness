@@ -44,6 +44,7 @@ public static class DysonMetaAgentTools
         "DeleteNote",
         "DeletePlan",
         "DeleteSecureData",
+        "DeleteUserQuestion",
         "EditMetaPlan",
         "EditMetaScratchFile",
         "GetOpenRulesConfig",
@@ -52,6 +53,7 @@ public static class DysonMetaAgentTools
         "ListPlans",
         "ListSecureDataKeys",
         "ListTodos",
+        "ListUserQuestions",
         "ListWorkdirs",
         "LoadSkill",
         "MessageMetaAgentDrone",
@@ -76,6 +78,7 @@ public static class DysonMetaAgentTools
         "SwitchWorkdir",
         "UpdateNote",
         "UpdateTodo",
+        "UpdateUserQuestion",
         "WriteSecureDataToFile",
         "WriteTempFile",
     ];
@@ -280,6 +283,7 @@ public static class DysonMetaAgentTools
                 "Returns immediately with droneId / persistenceId / worktreeBranch (null when useWorktree is false); never waits. " +
                 "When other useWorktree true drones are running, the result also lists them in runningWorktreeDrones. " +
                 "purpose=build (default) implements; purpose=plan explores then SubmitMetaPlan. " +
+                "todos is required (at least one item): the drone's starting checklist. " +
                 "Call ListMetaAgentDrones before dispatching. Reuse an existing drone with MessageMetaAgentDrone " +
                 "instead of spawning a second one for the same work.",
             InputSchemaJson = """
@@ -303,7 +307,9 @@ public static class DysonMetaAgentTools
                     "context": { "type": "string", "description": "Optional extra context or constraints." },
                     "todos": {
                       "type": "array",
-                      "description": "Optional seed checklist for the drone's own session todo list.",
+                      "description": "Required, at least 1 item (max 50). The drone's starting checklist, written into its own session todo list before its first turn: one item per step or acceptance criterion. The drone keeps it current and adds items as scope grows.",
+                      "minItems": 1,
+                      "maxItems": 50,
                       "items": {
                         "type": "object",
                         "properties": {
@@ -337,7 +343,7 @@ public static class DysonMetaAgentTools
                       "items": { "type": "string", "description": "Work-relative or workspace file path." }
                     }
                   },
-                  "required": ["task", "useWorktree"]
+                  "required": ["task", "useWorktree", "todos"]
                 }
                 """,
         };
@@ -432,7 +438,8 @@ public static class DysonMetaAgentTools
                 "Prefer this over creating a second drone for the same work. " +
                 "Default (timeoutSeconds omitted) interrupts the drone's in-flight turn and runs the message now, which also cancels a pending parent-event wait. " +
                 "Returns immediately unless timeoutSeconds ≥ 1 (max 20): then it waits for the drone to start the message at its next turn boundary, and interrupts after the timeout. " +
-                "A positive timeout fails immediately while the drone awaits a parent-event reply.",
+                "A positive timeout fails immediately while the drone awaits a parent-event reply. " +
+                "Status held: the drone is summarizing; the message interrupts the turn that starts after the summary.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -524,10 +531,14 @@ public static class DysonMetaAgentTools
         {
             Name = "PostUserQuestion",
             Description =
-                "Post a question card inside a meta-chat bubble. " +
+                "Post a question card inside a meta-chat bubble and return its questionId. " +
                 "When asking the user a question, do not use PostConversationMessage; use PostUserQuestion instead, with a custom message. " +
                 "Does not block and does not end the turn. " +
-                "The answer comes back later as a user turn.",
+                "The answer comes back later as a user turn. " +
+                "questionId is the id ListUserQuestions returns and UpdateUserQuestion and DeleteUserQuestion take. " +
+                "When you are not sure which questions are still open, call ListUserQuestions before posting another. " +
+                "When a question you posted becomes outdated — superseded, already decided another way, or no longer relevant — " +
+                "you must UpdateUserQuestion it in place or DeleteUserQuestion it. Do not leave it open and do not post a duplicate.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -564,6 +575,108 @@ public static class DysonMetaAgentTools
                     }
                   },
                   "required": ["message", "question", "choices"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ListUserQuestions",
+            Description =
+                "List this session's question cards. " +
+                "Call ListUserQuestions whenever you are not sure which questions are still open: after compaction, after a restart, or before UpdateUserQuestion or DeleteUserQuestion. " +
+                "Then update or delete every card that is outdated — superseded, already decided another way, or no longer relevant. " +
+                "Do not leave an outdated card open and do not post a duplicate. " +
+                "Read-only. Does not block and does not end the turn. " +
+                "Returns pending cards only, unless includeAnswered is true, in which case answered and withdrawn cards are included too. " +
+                "RequestSecureData credential requests are not listed. " +
+                "questionId is the id UpdateUserQuestion and DeleteUserQuestion take.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "includeAnswered": {
+                      "type": "boolean",
+                      "description": "When true, include answered and withdrawn cards as well as pending ones. Default false, which returns pending cards only."
+                    }
+                  }
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "UpdateUserQuestion",
+            Description =
+                "Replace an open question card in place. " +
+                "Pass the questionId PostUserQuestion returned, or that ListUserQuestions shows as pending, and the full new card: message, question, choices, and any multiSelect, allowCustomAnswer, and actions. " +
+                "Same rules as PostUserQuestion. The questionId does not change. " +
+                "Does not block, does not end the turn, and does not post a second card. " +
+                "Omit actions to clear the buttons. " +
+                "When you are not sure of the questionId or whether the card is still open, call ListUserQuestions first. " +
+                "When a question you posted is outdated — superseded, already decided another way, or no longer relevant — you must call UpdateUserQuestion or DeleteUserQuestion. " +
+                "Do not leave it open and do not post a duplicate. " +
+                "Refuses a question that is already answered, unknown, or a RequestSecureData card.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "questionId": { "type": "string", "description": "The questionId returned by PostUserQuestion." },
+                    "message": { "type": "string", "description": "Markdown bubble body. Replaces the posted bubble text." },
+                    "question": { "type": "string", "description": "Card title. Not the bubble body. Replaces the posted title." },
+                    "choices": {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 12,
+                      "description": "Choices the user can pick. At least 2, at most 12. Each entry is a non-empty unique string. Replaces the posted choices.",
+                      "items": { "type": "string" }
+                    },
+                    "multiSelect": {
+                      "type": "boolean",
+                      "description": "When true, more than one choice may apply. Default false. Replaces the posted value."
+                    },
+                    "allowCustomAnswer": {
+                      "type": "boolean",
+                      "description": "When true, the user may type a custom answer. Default true. Replaces the posted value."
+                    },
+                    "actions": {
+                      "type": "array",
+                      "maxItems": 8,
+                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_scratch:{id}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] to clear the buttons.",
+                      "items": {
+                        "type": "object",
+                        "required": ["name", "func"],
+                        "properties": {
+                          "name": { "type": "string", "description": "Button label." },
+                          "func": { "type": "string", "description": "Lookup key. Not source code." }
+                        }
+                      }
+                    }
+                  },
+                  "required": ["questionId", "message", "question", "choices"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "DeleteUserQuestion",
+            Description =
+                "Withdraw an open question card. " +
+                "Pass the questionId PostUserQuestion returned, or that ListUserQuestions shows as pending. " +
+                "The card leaves the Questions list and the bubble stays in the chat marked Withdrawn. " +
+                "Does not block and does not end the turn. " +
+                "When you are not sure of the questionId or whether the card is still open, call ListUserQuestions first. " +
+                "When a question you posted is outdated — superseded, already decided another way, or no longer relevant — you must call DeleteUserQuestion or UpdateUserQuestion. " +
+                "Do not leave it open and do not post a duplicate. " +
+                "Refuses a question that is already answered, unknown, or a RequestSecureData card.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "questionId": { "type": "string", "description": "The questionId returned by PostUserQuestion." }
+                  },
+                  "required": ["questionId"]
                 }
                 """,
         };

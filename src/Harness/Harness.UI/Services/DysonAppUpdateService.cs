@@ -35,8 +35,11 @@ public sealed record DysonManualUpdateCheckResult(
 /// </summary>
 public sealed class DysonAppUpdateService(HttpClient http)
 {
-    /// <summary>Installed app the macOS helper reopens after <c>installer</c> finishes or fails.</summary>
-    public const string MacAppPath = "/Applications/DysonHarness.app";
+    /// <summary>Stable install. Preview installs beside it as "Dyson Harness (Preview).app".</summary>
+    public const string MacAppPath = "/Applications/Dyson Harness.app";
+
+    /// <summary>Preview install. The helper reopens the one that matches the local channel.</summary>
+    public const string MacPreviewAppPath = "/Applications/Dyson Harness (Preview).app";
     /// <summary>Progress repaints are throttled so a fast download does not flood the Blazor circuit.</summary>
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(150);
 
@@ -173,13 +176,23 @@ public sealed class DysonAppUpdateService(HttpClient http)
         return VoidResult<string>.Success;
     }
 
+    /// <summary>
+    /// Installer asset suffix for this host. macOS uses the stamped <c>version.json</c> rid
+    /// (<c>-osx-arm64.pkg</c> / <c>-osx-x64.pkg</c>). Windows uses the running process architecture:
+    /// an arm64 process looks for <c>-win-arm64.msi</c>, every other Windows process looks for the
+    /// existing <c>-win-x64.msi</c>. An x64 install running under emulation on an ARM device stays on
+    /// the x64 MSI; it does not switch until the user installs the arm64 package.
+    /// </summary>
+    internal static string InstallerAssetSuffix(DysonAppVersionInfo local) =>
+        OperatingSystem.IsMacOS() && DysonGitHubReleaseClient.IsMacPkgRid(local.Rid)
+            ? DysonGitHubReleaseClient.MacPkgAssetSuffix(local.Rid)
+            : DysonGitHubReleaseClient.WindowsMsiAssetSuffixForProcess();
+
     private async Task<Result<DysonGitHubMsiRelease?, string>> FindNewestForHostAsync(
         DysonAppVersionInfo local,
         CancellationToken cancellationToken)
     {
-        var suffix = OperatingSystem.IsMacOS() && DysonGitHubReleaseClient.IsMacPkgRid(local.Rid)
-            ? DysonGitHubReleaseClient.MacPkgAssetSuffix(local.Rid)
-            : DysonGitHubReleaseClient.MsiAssetSuffix;
+        var suffix = InstallerAssetSuffix(local);
         return await _releases
             .FindNewestReleaseAsync(local.EffectiveRepo, local.EffectiveChannel, suffix, cancellationToken)
             .ConfigureAwait(false);
@@ -272,6 +285,7 @@ public sealed class DysonAppUpdateService(HttpClient http)
     internal static string BuildMacUpdateScript(string pkgPath)
     {
         var pkg = BashSingleQuote(pkgPath);
+        var app = BashSingleQuote(MacAppPathForChannel(DysonAppVersionInfo.Local.EffectiveChannel));
         var pid = Environment.ProcessId;
         return $$"""
             #!/bin/bash
@@ -287,10 +301,16 @@ public sealed class DysonAppUpdateService(HttpClient http)
               do shell script "installer -pkg " & quoted form of (item 1 of argv) & " -target /" with administrator privileges
             end run
             EOF
-            open {{MacAppPath}}
+            open {{app}}
             rm -f -- "$0"
             """;
     }
+
+    /// <summary>Installed bundle the helper reopens. Preview and stable no longer share a path.</summary>
+    internal static string MacAppPathForChannel(string channel) =>
+        DysonAppVersionInfo.NormalizeChannel(channel) == DysonAppVersionInfo.ChannelPreview
+            ? MacPreviewAppPath
+            : MacAppPath;
 
     private static string BashSingleQuote(string value) =>
         "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";

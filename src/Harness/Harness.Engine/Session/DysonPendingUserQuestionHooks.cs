@@ -71,8 +71,17 @@ public static class DysonPendingUserQuestionHooks
             return Result<ulong, string>.AsError("Pending user questions are not configured.");
         if (session.PersistenceId == Guid.Empty)
             return Result<ulong, string>.AsError("Session is not persisted.");
-        if (!IsPendingQuestionTurn(turn) || turn.UserQuestion is not { Answer: null } question)
-            return Result<ulong, string>.AsError("Turn is not an unanswered question.");
+        // Re-read under the question gate. An update that landed before this insert must be copied,
+        // or the row keeps the pre-update card.
+        DysonUserQuestion question;
+        string message;
+        lock (session.UserQuestionGate)
+        {
+            if (!IsPendingQuestionTurn(turn) || turn.UserQuestion is not { Answer: null } live)
+                return Result<ulong, string>.AsError("Turn is not an unanswered question.");
+            question = live;
+            message = turn.AssistantText ?? "";
+        }
 
         int? subagentId = null;
         Guid? eventId = null;
@@ -97,7 +106,7 @@ public static class DysonPendingUserQuestionHooks
                 session.PersistenceId,
                 turn.Id,
                 question.Id,
-                turn.AssistantText ?? "",
+                message,
                 question.Question,
                 question.Choices,
                 question.MultiSelect,
@@ -113,6 +122,44 @@ public static class DysonPendingUserQuestionHooks
                 new DysonPendingUserQuestionsChangedEvent(session.PersistenceId));
 
         return created;
+    }
+
+    /// <summary>
+    /// Rewrites the pending question row and publishes <see cref="DysonPendingUserQuestionsChangedEvent"/>
+    /// on success. A null repository or an unpersisted session is success and does not publish.
+    /// A repository error is returned and does not publish.
+    /// </summary>
+    public static async Task<VoidResult<string>> UpdateAsync(
+        DysonAgentSession session,
+        Guid questionGuid,
+        string message,
+        string question,
+        IReadOnlyList<string> choices,
+        bool multiSelect,
+        bool allowCustomAnswer,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        var repo = session.Config.PendingUserQuestions;
+        if (repo is null || session.PersistenceId == Guid.Empty)
+            return VoidResult<string>.Success;
+
+        var updated = await repo.UpdateByQuestionGuidAsync(
+            questionGuid,
+            session.PersistenceId,
+            message,
+            question,
+            choices,
+            multiSelect,
+            allowCustomAnswer,
+            ct).ConfigureAwait(false);
+        if (updated.IsError)
+            return updated;
+
+        session.Config.Bus?.Publish(
+            DysonBusScopes.Session(session.PersistenceId),
+            new DysonPendingUserQuestionsChangedEvent(session.PersistenceId));
+        return VoidResult<string>.Success;
     }
 
     public static async Task<ulong?> FindPendingIdAsync(

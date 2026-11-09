@@ -32,6 +32,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory;
     private readonly IDysonPendingUserQuestionRepository? _pendingUserQuestions;
     private readonly IDysonSessionSecretRepository? _sessionSecrets;
+    private readonly IDysonFileChangeRepository? _fileChanges;
+    private readonly DysonVersionControlRegistry? _vcs;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -154,7 +156,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         IDysonMetaScratchFileRepository? scratchFiles = null,
         IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null,
         IDysonPendingUserQuestionRepository? pendingUserQuestions = null,
-        IDysonSessionSecretRepository? sessionSecrets = null)
+        IDysonSessionSecretRepository? sessionSecrets = null,
+        DysonVersionControlRegistry? vcs = null,
+        IDysonFileChangeRepository? fileChanges = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -166,6 +170,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         _voiceSidecarMemory = voiceSidecarMemory;
         _pendingUserQuestions = pendingUserQuestions;
         _sessionSecrets = sessionSecrets;
+        _fileChanges = fileChanges;
+        _vcs = vcs;
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -1219,6 +1225,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         Notify(DysonHostChangeKind.Catalogs);
     }
 
+    /// <summary>Signals that the provider list changed so the Meta page can re-check its real-provider gate.</summary>
+    public void NotifyModelCatalogChanged() => Notify(DysonHostChangeKind.Catalogs);
+
     /// <summary>The app-data mode used for global plugin installation paths.</summary>
     public DysonAppMode CurrentAppMode => DysonBuildInfo.Current;
 
@@ -1863,7 +1872,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// </summary>
     public string? FocusedSessionWorkRootPath => SessionWorkDirectoryPath(_session);
 
-    /// <summary>True when a process-wide browser control is registered (Windows CefSharp).</summary>
+    /// <summary>True when a process-wide browser control is registered (Windows WebView2 / macOS WKWebView).</summary>
     public bool IsBrowserControlAvailable => _browserControl is not null;
 
     /// <summary>True when the long-running shells modal is open.</summary>
@@ -1897,7 +1906,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             : DysonLongRunningShellRegistry.List(wd, path);
     }
 
-    /// <summary>Opens a CefSharp browser window (default blank page). Maps failures to <see cref="LastError"/>.</summary>
+    /// <summary>Opens an agent browser window (default blank page). Maps failures to <see cref="LastError"/>.</summary>
     public async Task OpenBrowserAsync(CancellationToken cancellationToken = default)
     {
         if (_browserControl is null)
@@ -2136,10 +2145,53 @@ public sealed class DysonUiHost : IAsyncDisposable
         var isMd = IsMarkdownPath(path);
         var isPdf = DysonFileViewerState.IsPdfPath(path);
         var isImage = DysonComposerUploads.LooksLikeImage(contentType: null, path);
+        var audioContentType = DysonAudioFiles.ContentTypeFor(path);
 
         var resolved = fs.ResolvePath(path);
         if (resolved.IsSuccess)
             absolutePath = resolved.Value;
+
+        if (audioContentType is not null)
+        {
+            // Stream from disk (range requests for seeking); ResolvePath already rejected paths outside the work root.
+            var exists = resolved.IsError
+                ? Result<bool, string>.AsError(resolved.Error)
+                : await fs.FileExistsAsync(path, cancellationToken).ConfigureAwait(true);
+            if (exists.IsError || !exists.Value)
+            {
+                SetFileViewer(new DysonFileViewerState
+                {
+                    RelativePath = path,
+                    Title = title,
+                    Content = "",
+                    IsMarkdown = false,
+                    IsAudio = true,
+                    AbsolutePath = absolutePath,
+                    CanOpenInDefaultEditor = false,
+                    MarkdownBlocks = [],
+                    Error = exists.IsError ? exists.Error : $"File not found: {path}",
+                    Actions = actionList,
+                });
+                return;
+            }
+
+            var previewId = _filePreviews.PutFile(resolved.Value, audioContentType);
+            SetFileViewer(new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = title,
+                Content = "",
+                IsMarkdown = false,
+                IsAudio = true,
+                AudioPreviewId = previewId,
+                AudioPreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
+                AbsolutePath = absolutePath,
+                CanOpenInDefaultEditor = true,
+                MarkdownBlocks = [],
+                Actions = actionList,
+            });
+            return;
+        }
 
         if (isPdf)
         {
@@ -2608,6 +2660,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             _filePreviews.Remove(imageId);
         if (viewer?.TextPreviewId is { } textId)
             _filePreviews.Remove(textId);
+        if (viewer?.AudioPreviewId is { } audioId)
+            _filePreviews.Remove(audioId);
     }
 
     private static IReadOnlyList<DysonFileViewerAction> NormalizeFileViewerActions(
@@ -2974,6 +3028,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var deleted = await _workDirectories.DeleteAsync(workDirectoryId, cancellationToken)
             .ConfigureAwait(false);
+        if (deleted.IsSuccess)
+            _vcs?.Remove(workDirectoryId);
         Notify(DysonHostChangeKind.SessionGraph);
         return deleted;
     }
@@ -4963,7 +5019,13 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         if (sessionId == Guid.Empty)
             return;
-        _pendingReportsByParent.TryRemove(sessionId, out _);
+        if (_pendingReportsByParent.TryRemove(sessionId, out var dropped)
+            && _sessionsById.TryGetValue(sessionId, out var parent))
+        {
+            // A dropped report must not hold a reopened parent in the child-report watch.
+            foreach (var interrupt in dropped)
+                parent.MarkChildReportDelivered(interrupt.SubagentId);
+        }
     }
 
     public async Task<VoidResult<string>> PromptAsync(
@@ -5635,6 +5697,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             VoiceSidecarMemory = _voiceSidecarMemory,
             PendingUserQuestions = _pendingUserQuestions,
             SessionSecrets = _sessionSecrets,
+            FileChanges = _fileChanges,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,
@@ -6699,6 +6762,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         // Wait-consumed / BugReview: cards still update; do not enqueue SubagentReportProcessing.
         if (DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
         {
+            parent.MarkChildReportDelivered(interrupt.SubagentId);
             Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Overlay | DysonHostChangeKind.Busy);
             return;
         }
@@ -7359,6 +7423,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                 continue;
             }
 
+            // Folded into BeginBuildPlan (or dropped as wait-consumed): delivered either way.
+            parent?.MarkChildReportDelivered(interrupt.SubagentId);
+
             // Wait-consumed completions must not fold into BeginBuildPlan / leave-Plan.
             if (parent is not null
                 && DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
@@ -7433,6 +7500,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 if (DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind)
                     && DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
                 {
+                    parent.MarkChildReportDelivered(interrupt.SubagentId);
                     continue;
                 }
 
@@ -7849,7 +7917,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             {
                 var turnsBefore = session.Turns.Count;
                 var result = await run(session, token).ConfigureAwait(false);
-                if (result.IsError)
+                // A child no-report finish still reaches the watch below (hold / remind / synthesize).
+                if (result.IsError && !DysonChildReportWatch.IsHarnessNoReportError(result.Error))
                     return result;
 
                 // The turn this prompt ran, not Turns[^1]: a concurrent child turn may be newer and still running.
@@ -7897,7 +7966,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     EnqueueHostFollowUpWork(session);
                 }
 
-                return VoidResult<string>.Success;
+                return result;
             }
             finally
             {

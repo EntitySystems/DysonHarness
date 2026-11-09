@@ -196,7 +196,7 @@ public class DysonAgentSessionConfig
     }
 
     /// <summary>
-    /// Optional process-wide browser control (Windows CefSharp host).
+    /// Optional process-wide browser control (Windows WebView2 host, macOS WKWebView host).
     /// Null ⇒ browser MCP tools are omitted from the catalog.
     /// </summary>
     public IDysonBrowserControl? BrowserControl { get; set; }
@@ -231,6 +231,12 @@ public class DysonAgentSessionConfig
     /// "not available". Children share this config instance.
     /// </summary>
     public IDysonSessionSecretRepository? SessionSecrets { get; set; }
+
+    /// <summary>
+    /// Optional Change Stream log. File tools append a row per write, keyed to the root session.
+    /// Null ⇒ no rows (tests, no DB). Children share this config instance.
+    /// </summary>
+    public IDysonFileChangeRepository? FileChanges { get; set; }
 
     /// <summary>
     /// Optional workdir-scoped custom MCP host (<c>.dyson/mcp</c>).

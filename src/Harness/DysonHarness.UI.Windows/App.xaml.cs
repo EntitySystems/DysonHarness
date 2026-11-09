@@ -1,5 +1,5 @@
+using System.Diagnostics;
 using System.Windows;
-using CefSharp;
 using Harness.UI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -14,6 +14,7 @@ public partial class App : Application
     private CancellationTokenSource? _webHostCts;
     private WebApplication? _webApp;
     private Task? _webHostTask;
+    private DysonSingleInstance? _singleInstance;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -21,13 +22,30 @@ public partial class App : Application
 
         try
         {
-            DysonCefStaHost.AttachToExistingApplication();
-            if (DysonCefStaHost.ShutdownBecauseAlreadyRunning)
+            // One shell per user and app mode (Dev / Test / Prod): a second launch activates the first and exits.
+            var claim = DysonSingleInstance.Claim(
+                "DysonHarness-" + DysonAppPaths.GetModeFolderName(DysonBuildInfo.Current),
+                () => Dispatcher.BeginInvoke(ActivateExistingWindow));
+            if (claim.IsError)
+                throw new InvalidOperationException(claim.Error);
+            _singleInstance = claim.Value;
+            if (!_singleInstance.IsFirst)
             {
-                // Chromium process singleton: existing instance was activated via OnAlreadyRunningAppRelaunch.
                 Shutdown(0);
                 return;
             }
+
+            var runtime = DysonWindowsStaHost.RuntimeVersion();
+            if (runtime.IsError)
+            {
+                ShowRuntimeMissing(runtime.Error);
+                Shutdown(1);
+                return;
+            }
+
+            DysonWindowsStaHost.AttachToExistingApplication();
+            // Pre-WebView2 builds left a Chromium cache here; drop it once nothing holds it.
+            _ = Task.Run(DysonWindowsStaHost.TryDeleteLegacyCefCache);
 
             _webHostCts = new CancellationTokenSource();
             var options = new DysonUiWebHostOptions
@@ -94,11 +112,48 @@ public partial class App : Application
         }
         finally
         {
-            if (Cef.IsInitialized.GetValueOrDefault())
-                Cef.Shutdown();
+            _singleInstance?.Dispose();
         }
 
         base.OnExit(e);
+    }
+
+    private static void ShowRuntimeMissing(string detail)
+    {
+        var answer = MessageBox.Show(
+            "Dyson Harness needs the Microsoft Edge WebView2 Runtime." + Environment.NewLine + Environment.NewLine
+            + detail + Environment.NewLine + Environment.NewLine
+            + "Open the download page now?" + Environment.NewLine + DysonWindowsStaHost.RuntimeDownloadUrl,
+            "DysonHarness",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Error);
+        if (answer != MessageBoxResult.Yes)
+            return;
+        try
+        {
+            Process.Start(new ProcessStartInfo { FileName = DysonWindowsStaHost.RuntimeDownloadUrl, UseShellExecute = true });
+        }
+        catch
+        {
+            // the URL is in the dialog text
+        }
+    }
+
+    /// <summary>Second launch: focus the existing shell (or any visible agent window).</summary>
+    private void ActivateExistingWindow()
+    {
+        Window? target = MainWindow;
+        if (target is null || !target.IsVisible)
+            target = Windows.OfType<Window>().FirstOrDefault(w => w.IsVisible);
+        if (target is null)
+            return;
+
+        if (target.WindowState == WindowState.Minimized)
+            target.WindowState = WindowState.Normal;
+        target.Activate();
+        target.Topmost = true;
+        target.Topmost = false;
+        _ = target.Focus();
     }
 
     private static string ResolveListeningUrl(WebApplication app)

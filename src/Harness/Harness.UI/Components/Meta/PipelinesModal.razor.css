@@ -1,0 +1,469 @@
+.pipelines-modal {
+  width: min(560px, 100%);
+  max-height: min(80vh, 720px);
+}
+
+.pipelines-modal__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.pipelines-modal__title-row h3 {
+  flex: 0 0 auto;
+}
+
+.pipelines-modal__icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  -webkit-mask: var(--meta-icon) center / contain no-repeat;
+  mask: var(--meta-icon) center / contain no-repeat;
+}
+
+.pipelines-modal__repo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--accent-text);
+}
+
+.pipelines-modal__counts {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.pipelines-modal__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.pipelines-modal__refresh,
+.pipelines-modal__close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.pipelines-modal__refresh img {
+  width: 14px;
+  height: 14px;
+}
+
+.pipelines-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pipelines-modal__banner {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.pipelines-modal__notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.pipelines-modal__notice p {
+  margin: 0;
+}
+
+.pipelines-modal__hint {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.pipelines-modal__mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+
+.pipelines-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pipelines-modal__empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.pipelines-modal__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Raised card, copied from .meta-agents__item. */
+.pipeline-run {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+  overflow: visible;
+  transition: box-shadow var(--motion-fast) var(--ease);
+}
+
+.pipeline-run:hover {
+  box-shadow: var(--shadow-2);
+}
+
+.pipeline-run[data-active] {
+  box-shadow: inset 3px 0 0 var(--accent), var(--shadow-1);
+}
+
+.pipeline-run[data-state="Failed"] {
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface-raised));
+}
+
+.pipeline-run__row {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.pipeline-run__main {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px 4px 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pipeline-run__main:hover {
+  background: var(--bg-hover);
+}
+
+.pipeline-run__main:focus-visible,
+.pipeline-run__toggle:focus-visible,
+.pipeline-job:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* 26px tile and status dot, copied from .subagent-card__tile. */
+.pipeline-run__tile {
+  position: relative;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+}
+
+.pipeline-run__tile::after,
+.pipeline-run__tile::before {
+  content: "";
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border-radius: var(--radius-full);
+}
+
+.pipeline-run__tile::after {
+  border: 2px solid var(--text-dim);
+  background: var(--surface-raised);
+}
+
+.pipeline-run[data-state="Succeeded"] .pipeline-run__tile::after {
+  border-color: var(--surface-raised);
+  background: var(--success);
+}
+
+.pipeline-run[data-state="Failed"] .pipeline-run__tile::after {
+  border-color: var(--surface-raised);
+  background: var(--danger);
+}
+
+.pipeline-run[data-state="Queued"] .pipeline-run__tile::after,
+.pipeline-run[data-state="Waiting"] .pipeline-run__tile::after {
+  background: var(--surface-raised);
+}
+
+.pipeline-run[data-state="Queued"] .pipeline-run__tile::after {
+  border-color: var(--accent-border);
+}
+
+.pipeline-run[data-state="Waiting"] .pipeline-run__tile::after {
+  border-color: var(--warning);
+}
+
+.pipeline-run[data-state="Running"] .pipeline-run__tile::after {
+  border-color: var(--surface-raised);
+  background: var(--accent);
+}
+
+.pipeline-run[data-state="Running"] .pipeline-run__tile::before {
+  background: var(--accent);
+  animation: dyson-status-pulse var(--motion-pulse) var(--ease-standard) infinite;
+}
+
+.pipeline-run__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pipeline-run__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.pipeline-run__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipeline-run__badge {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+}
+
+.pipeline-run__attempt {
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-regular);
+  color: var(--text-muted);
+}
+
+.pipeline-run__step {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-regular);
+  color: var(--text-muted);
+}
+
+.pipeline-run__meta {
+  display: block;
+  margin-top: var(--sp-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
+.pipeline-run__trail {
+  flex: 0 0 auto;
+  align-self: center;
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.pipeline-run[data-state="Succeeded"] .pipeline-run__trail {
+  color: color-mix(in srgb, var(--success) 78%, var(--text));
+}
+
+.pipeline-run[data-state="Failed"] .pipeline-run__trail {
+  color: color-mix(in srgb, var(--danger) 78%, var(--text));
+}
+
+.pipeline-run[data-state="Running"] .pipeline-run__trail,
+.pipeline-run[data-state="Queued"] .pipeline-run__trail {
+  color: var(--accent-text);
+}
+
+.pipeline-run[data-state="Waiting"] .pipeline-run__trail {
+  color: var(--warning);
+}
+
+.pipeline-run__toggle {
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.pipeline-run__toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.pipeline-run__toggle img {
+  width: 14px;
+  height: 14px;
+  transition: transform var(--motion-fast) var(--ease);
+}
+
+.pipeline-run__toggle[aria-expanded="true"] img {
+  transform: rotate(90deg);
+}
+
+/* Tree guide, copied from .meta-child-rows. */
+.pipeline-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 var(--sp-2) var(--sp-2) 22px;
+  padding-left: var(--sp-2);
+  border-left: 1px solid var(--border-subtle);
+}
+
+.pipeline-job {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pipeline-job::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--sp-2) - 1px);
+  top: 50%;
+  width: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pipeline-job:hover {
+  background: var(--bg-hover);
+}
+
+.pipeline-job--loading,
+.pipeline-job--more {
+  color: var(--text-muted);
+}
+
+.pipeline-job--loading {
+  cursor: default;
+}
+
+.pipeline-job--more {
+  color: var(--accent-text);
+  font-size: var(--fs-xs);
+}
+
+.pipeline-job--more:hover {
+  text-decoration: underline;
+}
+
+.pipeline-job__dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  box-sizing: border-box;
+  border: 2px solid var(--text-dim);
+  background: transparent;
+}
+
+.pipeline-job[data-state="Running"] .pipeline-job__dot {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.pipeline-job[data-state="Queued"] .pipeline-job__dot {
+  border-color: var(--accent-border);
+}
+
+.pipeline-job[data-state="Waiting"] .pipeline-job__dot {
+  border-color: var(--warning);
+}
+
+.pipeline-job[data-state="Succeeded"] .pipeline-job__dot {
+  border-color: var(--success);
+  background: var(--success);
+}
+
+.pipeline-job[data-state="Failed"] .pipeline-job__dot {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.pipeline-job__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipeline-job__state {
+  flex: 0 0 auto;
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.pipeline-job[data-state="Succeeded"] .pipeline-job__state {
+  color: color-mix(in srgb, var(--success) 78%, var(--text));
+}
+
+.pipeline-job[data-state="Failed"] .pipeline-job__state {
+  color: color-mix(in srgb, var(--danger) 78%, var(--text));
+}
+
+.pipeline-job[data-state="Running"] .pipeline-job__state {
+  color: var(--accent-text);
+}

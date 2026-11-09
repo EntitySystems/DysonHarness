@@ -36,6 +36,7 @@ Deleting a work directory cascades these rows, archived or not. That is the only
 | --- | --- |
 | `ListAsync` default | Excluded. `includeArchived: true` returns them too (the UI list uses this). |
 | `ListPlans` tool | Default list only; archived plans are omitted. Payload unchanged. |
+| `ListMetaPlans` (voice sidecar) | Same `ListAsync` default (archived omitted), scoped to the sidecar's own work directory. JSON is only `planId`, `title`, `status`. It does not widen the Meta `ListPlans` contract. |
 | `GetAsync` / `ReadMetaPlan` | Allowed (open-from-list works). |
 | `UpdateAsync` (`SetPlanStatus`, `EditMetaPlan`, `SubmitMetaPlan` revise) | Error `Plan '{id}' is archived.` before any mutation. |
 | `BeginBuildPlan` | Error before any drone spawn: `BeginBuildPlan: plan {id} is archived. The user restores it from the Archived section.` |
@@ -119,7 +120,7 @@ Every plan tool in `DysonWorkspaceToolExecutor.MetaAgent` is scoped by the sessi
 
 **`ListPlans` JSON is a closed property set:** `planId`, `title`, `status`, `buildAgentId`, `updatedUtc` — **no `planRelativePath`, no `markdown`, no `note`**, even though `ListAsync` still projects `PlanRelativePath` / `Note` onto `DysonPlan`. `DysonPlanStatusTests.ListPlans_serialized_json_omits_path_and_markdown` asserts the serialized names. Widening that payload is a regression (filesystem leak + prompt-cache churn).
 
-**`BeginBuildPlan`** briefs the drone **by reference** (`DysonMetaBuildBrief`: planId + "call `ReadMetaPlan`"), never by inlining markdown. Unrelated to `DysonBeginBuildPlanFlow`. The spawn accepts optional `modelSlug` and `reasoningEffort` and threads them into `CreateMetaAgentDroneChildAsync` (omit is null/null, the Settings Meta Agent Drone default). Refuses a second spawn while a **non-terminal** child still matches `BuildAgentId`; pass that `agentId` to extend. Refuses an archived plan before spawning. **`DeletePlan`** archives (`ArchiveAsync`; returns `{ ok, planId, archived: true }`) and refuses while `Status == Building` (Status is the gate).
+**`BeginBuildPlan`** briefs the drone **by reference** (`DysonMetaBuildBrief`: planId + "call `ReadMetaPlan`"), never by inlining markdown. Unrelated to `DysonBeginBuildPlanFlow`. The spawn accepts optional `modelSlug` and `reasoningEffort` and threads them into `CreateMetaAgentDroneChildAsync` (omit is null/null, the Settings Meta Agent Drone default). A new spawn seeds one `build-plan-{planId}` todo (`DysonMetaBuildBrief.SeedTodo`); `agentId` reuse does not seed. Refuses a second spawn while a **non-terminal** child still matches `BuildAgentId`; pass that `agentId` to extend. Refuses an archived plan before spawning. **`DeletePlan`** archives (`ArchiveAsync`; returns `{ ok, planId, archived: true }`) and refuses while `Status == Building` (Status is the gate).
 
 **`SubmitMetaPlan`** (drone-only) creates a `Draft` `MetaPlan`, or replaces `Title`/`Markdown` of an existing row in place when `planId` is given (never a new row). It does **not** satisfy `SubmitSubagentReport`. No parent interrupt — the drone still reports.
 

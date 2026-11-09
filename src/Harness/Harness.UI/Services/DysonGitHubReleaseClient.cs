@@ -21,6 +21,9 @@ public sealed record DysonGitHubMsiRelease(
 public sealed class DysonGitHubReleaseClient(HttpClient http)
 {
     public const string HttpClientName = "github-releases";
+    public const string WindowsX64Rid = "win-x64";
+    public const string WindowsArm64Rid = "win-arm64";
+    /// <summary>Asset suffix for the existing Windows x64 MSI. Unchanged so current installs keep updating.</summary>
     public const string MsiAssetSuffix = "-win-x64.msi";
     public const string MacArm64Rid = "osx-arm64";
     public const string MacX64Rid = "osx-x64";
@@ -34,6 +37,28 @@ public sealed class DysonGitHubReleaseClient(HttpClient http)
 
     /// <summary>Asset suffix for a macOS pkg, e.g. <c>-osx-arm64.pkg</c>.</summary>
     public static string MacPkgAssetSuffix(string rid) => $"-{rid}.pkg";
+
+    /// <summary>
+    /// MSI suffix for a Windows publish rid. <c>win-arm64</c> is <c>-win-arm64.msi</c>;
+    /// everything else (including a missing rid) stays <see cref="MsiAssetSuffix"/>.
+    /// </summary>
+    public static string WindowsMsiAssetSuffix(string? rid) =>
+        string.Equals(rid, WindowsArm64Rid, StringComparison.OrdinalIgnoreCase)
+            ? $"-{WindowsArm64Rid}.msi"
+            : MsiAssetSuffix;
+
+    /// <summary>
+    /// Windows MSI suffix for the running process. <see cref="System.Runtime.InteropServices.RuntimeInformation.OSArchitecture"/>
+    /// is not used: an x64 build running under emulation on an ARM device reports Arm64 for the OS and
+    /// must keep the x64 MSI. <see cref="System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture"/>
+    /// is the process the user is actually running.
+    /// </summary>
+    public static string WindowsMsiAssetSuffixForProcess() =>
+        WindowsMsiAssetSuffix(
+            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
+                == System.Runtime.InteropServices.Architecture.Arm64
+                ? WindowsArm64Rid
+                : WindowsX64Rid);
 
     /// <summary>Newest non-draft release on <paramref name="channel"/> with an MSI asset; success with a null value when none qualifies.</summary>
     public Task<Result<DysonGitHubMsiRelease?, string>> FindNewestMsiReleaseAsync(
