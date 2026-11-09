@@ -23,6 +23,11 @@ jobs:
       - name: Test
         run: dotnet test src/Harness/Harness.Tests/Harness.Tests.csproj -c Release --nologo
 
+      # The stable release publishes Release with DysonReleaseChannel=stable (no DYSON_PREVIEW, Demo/Scenarios removed).
+      # Compile that configuration here so a preview-only reference fails on dev, not on master.
+      - name: Build (stable channel)
+        run: dotnet build src/Harness/Harness.Tests/Harness.Tests.csproj -c Release -p:DysonReleaseChannel=stable --nologo
+
   windows-arm64:
     name: Windows ARM64 (compile)
     runs-on: windows-latest
@@ -45,6 +50,7 @@ jobs:
             --self-contained false `
             -p:SelfContained=false `
             -p:PublishSingleFile=false `
+            -p:DysonReleaseChannel=stable `
             -o artifacts/win-arm64
           if ($LASTEXITCODE -ne 0) { throw "win-arm64 publish failed with exit $LASTEXITCODE" }
           foreach ($native in "WebView2Loader.dll", "Microsoft.Web.WebView2.Core.dll") {
@@ -75,6 +81,7 @@ jobs:
             --self-contained false \
             -p:SelfContained=false \
             -p:PublishSingleFile=false \
+            -p:DysonReleaseChannel=stable \
             -o artifacts/macos
 
       - name: Bundle and verify signature
