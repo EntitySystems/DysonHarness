@@ -122,13 +122,13 @@
   line-height: 1;
 }
 
-.meta-stage__count[data-running] {
-  box-shadow: 0 0 0 0 var(--accent);
-  animation: dyson-status-pulse var(--motion-pulse) var(--ease-standard) infinite;
-}
-
 .meta-stage__pipelines {
   position: relative;
+}
+
+/* Running pipelines: the whole button breathes (box-shadow only, no size change); the count pill stays static. */
+.meta-stage__pipelines[data-running] {
+  animation: dyson-glow-pulse var(--motion-pulse) var(--ease-standard) infinite;
 }
 
 .meta-stage__pipelines[data-error]::after {
