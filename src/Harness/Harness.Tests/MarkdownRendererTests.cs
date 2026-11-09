@@ -20,6 +20,14 @@ public class MarkdownRendererTests
         Assert.Contains("<pre><code class=\"language-csharp\">", html, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ToHtml_concurrent_cache_overflow_does_not_throw()
+    {
+        var prefix = Guid.NewGuid().ToString("N");
+        Parallel.For(0, 4000, new ParallelOptions { MaxDegreeOfParallelism = 8 }, i =>
+            Assert.Contains("<p>", MarkdownRenderer.ToHtml($"{prefix} line {i}").Value, StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData("```go\npackage main\n```")]
     [InlineData("```\nplain fence\n```")]
