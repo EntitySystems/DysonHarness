@@ -1,7 +1,8 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using DysonHarness;
 using Harness.UI.Demo;
+using Harness.UI.Markdown;
 using Harness.UI.Theme;
 using Microsoft.Data.Sqlite;
 using Microsoft.JSInterop;
@@ -101,11 +102,30 @@ public class DysonFileViewerContentTests
     }
 
     [Fact]
-    public async Task Large_markdown_uses_text_preview_not_circuit_body()
+    public async Task Long_markdown_renders_blocks_not_text_preview()
     {
         await using var ctx = await HostContext.CreateAsync();
         var host = ctx.Host;
-        var hugeMd = "# " + new string('x', 70 * 1024);
+        var longMd = LongPlan(100_000);
+
+        await host.OpenFileViewerContentAsync("notes.md", longMd);
+
+        Assert.NotNull(host.FileViewer);
+        Assert.Null(host.FileViewer.Error); Assert.False(host.FileViewer.IsLoading); Assert.True(host.FileViewer.IsMarkdown);
+        Assert.False(host.FileViewer.IsTextPreview);
+        Assert.Null(host.FileViewer.TextPreviewId);
+        Assert.Equal(longMd, host.FileViewer.Content);
+        Assert.True(host.FileViewer.MarkdownBlocks.Count > 100);
+        Assert.Contains(host.FileViewer.MarkdownBlocks, b => b.Html.ToString().Contains("<table>", StringComparison.Ordinal));
+        Assert.Contains(host.FileViewer.MarkdownBlocks, b => b.Html.ToString().Contains("<h2", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Markdown_over_render_ceiling_uses_text_preview()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var host = ctx.Host;
+        var hugeMd = "# " + new string('x', DysonFileViewerMarkdown.MaxRenderChars + 1);
 
         await host.OpenFileViewerContentAsync("notes.md", hugeMd);
 
@@ -266,6 +286,39 @@ public class DysonFileViewerContentTests
         {
             try { Directory.Delete(parent, recursive: true); } catch { /* best-effort */ }
         }
+    }
+
+    [Fact]
+    public async Task Workspace_markdown_over_render_ceiling_opens_as_code()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var workRoot = Path.Combine(Path.GetTempPath(), $"dyson-fv-md-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workRoot);
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(workRoot, "huge.md"),
+                "# " + new string('x', DysonFileViewerMarkdown.MaxRenderChars + 1));
+
+            await ctx.Host.OpenFileViewerAsync("huge.md", workRoot);
+
+            Assert.NotNull(ctx.Host.FileViewer);
+            Assert.Null(ctx.Host.FileViewer.Error);
+            Assert.False(ctx.Host.FileViewer.IsMarkdown);
+            Assert.Empty(ctx.Host.FileViewer.MarkdownBlocks);
+        }
+        finally
+        {
+            try { Directory.Delete(workRoot, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    private static string LongPlan(int minChars)
+    {
+        var sb = new StringBuilder("# Long plan\n\n");
+        for (var i = 0; sb.Length < minChars; i++)
+            sb.Append($"## {i}. Section\n\nSome **bold** and `code` text.\n\n| Col | Value |\n|---|---|\n| a{i} | **b** |\n\n");
+        return sb.ToString();
     }
 
     private sealed class HostContext : IAsyncDisposable

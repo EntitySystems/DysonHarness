@@ -54,6 +54,47 @@ public class DysonMetaPlanViewerTests
     }
 
     [Fact]
+    public async Task OpenMetaPlan_renders_long_markdown()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var workRoot = Path.Combine(Path.GetTempPath(), $"dyson-meta-plan-long-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workRoot);
+        try
+        {
+            var wd = await ctx.WorkDirectories.CreateAsync(workRoot, "MetaPlanLong");
+            Assert.True(wd.IsSuccess, wd.IsError ? wd.Error : null);
+
+            var created = await ctx.Plans.CreateAsync(
+                wd.Value,
+                DysonPlanKind.MetaPlan,
+                "Long plan",
+                LongPlan(100_000),
+                planRelativePath: null);
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+
+            var opened = await ctx.Host.OpenMetaPlanAsync(created.Value, wd.Value);
+            Assert.True(opened.IsSuccess, opened.IsError ? opened.Error : null);
+
+            Assert.NotNull(ctx.Host.FileViewer);
+            Assert.False(ctx.Host.FileViewer.IsTextPreview);
+            Assert.NotEmpty(ctx.Host.FileViewer.MarkdownBlocks);
+            Assert.Contains(ctx.Host.FileViewer.MarkdownBlocks, b => b.Html.ToString().Contains("<table>", StringComparison.Ordinal));
+        }
+        finally
+        {
+            try { Directory.Delete(workRoot, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    private static string LongPlan(int minChars)
+    {
+        var sb = new System.Text.StringBuilder("# Long plan\n\n");
+        for (var i = 0; sb.Length < minChars; i++)
+            sb.Append($"## {i}. Section\n\nSome **bold** and `code` text.\n\n| Col | Value |\n|---|---|\n| a{i} | **b** |\n\n");
+        return sb.ToString();
+    }
+
+    [Fact]
     public async Task PromptMetaPlanBuild_enqueues_message_and_leaves_status()
     {
         await using var ctx = await HostContext.CreateAsync();

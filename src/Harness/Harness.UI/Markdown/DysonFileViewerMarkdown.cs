@@ -10,6 +10,11 @@ public static class DysonFileViewerMarkdown
 {
     // ponytail: selection is paragraph/heading/pre blocks only (split on blank lines), not AST-precise; upgrade to Markdig block walker when comments persist.
 
+    // ponytail: 1 MiB render ceiling for the block viewer (plans are uncapped, scratch is 128K,
+    // remote SKILL.md is unbounded). Above it the viewer shows text/plain. Measured: 161K chars -> 205 blocks
+    // in ~40 ms off-circuit. Upgrade: virtualize blocks if multi-MB markdown becomes normal.
+    public const int MaxRenderChars = 1024 * 1024;
+
     public static IReadOnlyList<DysonFileViewerMarkdownBlock> Build(string? content)
     {
         if (string.IsNullOrEmpty(content))

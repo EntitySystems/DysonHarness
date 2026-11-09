@@ -2310,6 +2310,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         }
 
+        if (read.Value.Length > DysonFileViewerMarkdown.MaxRenderChars)
+            isMd = false;
+
         IReadOnlyList<DysonFileViewerMarkdownBlock> markdownBlocks = [];
         if (isMd)
         {
@@ -2571,7 +2574,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private static (bool SmallMarkdown, IReadOnlyList<DysonFileViewerMarkdownBlock> MarkdownBlocks, byte[] PreviewBytes)
         PrepareInMemoryFileViewerContent(string path, string content, bool isMd)
     {
-        if (isMd && content.Length <= ColorCodeHtml.MaxHighlightedChars)
+        if (isMd && content.Length <= DysonFileViewerMarkdown.MaxRenderChars)
             return (true, DysonFileViewerMarkdown.Build(content), []);
 
         var text = content;

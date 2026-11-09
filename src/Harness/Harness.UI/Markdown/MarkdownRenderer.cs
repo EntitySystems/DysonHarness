@@ -67,7 +67,9 @@ public static class MarkdownRenderer
         // stays plain until this entry is evicted.
         if (HtmlCache.Count >= 256)
         {
-            var oldest = HtmlCache.OrderBy(static entry => entry.Value.Seq).Take(64);
+            // ToArray() is ConcurrentDictionary's atomic snapshot. LINQ over the dictionary buffers via
+            // Count + CopyTo, which races concurrent evictions and yields null-key entries.
+            var oldest = HtmlCache.ToArray().OrderBy(static entry => entry.Value.Seq).Take(64);
             foreach (var entry in oldest)
                 HtmlCache.TryRemove(entry.Key, out _);
         }
