@@ -391,6 +391,12 @@ code, .mono {
   100% { opacity: 0; transform: scale(1.9); }
 }
 
+/* Subtle accent glow for a whole button (box-shadow only: no layout shift). Reduced motion: the blanket rule stops it. */
+@keyframes dyson-glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 15%, transparent), 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent), 0 0 8px 0 color-mix(in srgb, var(--accent) 30%, transparent); }
+}
+
 /* Change Stream button flash. Reduced motion: the blanket rule stops it. */
 @keyframes dyson-change-flash {
   from { background-color: color-mix(in srgb, var(--accent) 25%, transparent); }

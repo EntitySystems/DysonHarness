@@ -71,13 +71,13 @@
                     </button>
                     @if (_pipelines is { IsDetected: true } p && _vcs is not null)
                     {
-                        <button type="button" class="btn meta-stage__pipelines" data-error="@(p.Error is null ? null : "true")"
+                        <button type="button" class="btn meta-stage__pipelines" data-error="@(p.Error is null ? null : "true")" data-running="@(p.RunningCount > 0 ? "true" : null)"
                                 title="@PipelinesTitle(p)" aria-label="@PipelinesTitle(p)" @onclick="TogglePipelines">
                             <span class="meta-stage__icon" style="--meta-icon: url('icons/providers/@(p.ProviderId).svg')" aria-hidden="true"></span>
                             <span class="meta-stage__label">Pipelines</span>
                             @if (p.ActiveCount > 0)
                             {
-                                <span class="meta-stage__count" data-running="@(p.RunningCount > 0 ? "true" : null)">@p.ActiveCount</span>
+                                <span class="meta-stage__count">@p.ActiveCount</span>
                             }
                         </button>
                     }
