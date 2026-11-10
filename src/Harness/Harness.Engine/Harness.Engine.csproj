@@ -31,6 +31,11 @@
     <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
     <PackageReference Include="Microsoft.ML.Tokenizers.Data.Cl100kBase" Version="2.0.0" />
     <PackageReference Include="ModelContextProtocol.Core" Version="1.4.1" />
+    <!-- PDF → PNG for ConvertImage (DysonPdf). PDFium pinned above PDFtoImage's floor for security fixes. -->
+    <PackageReference Include="PDFtoImage" Version="5.4.0" />
+    <PackageReference Include="bblanchon.PDFium.Win32" Version="159.0.8152" />
+    <PackageReference Include="bblanchon.PDFium.Linux" Version="159.0.8152" />
+    <PackageReference Include="bblanchon.PDFium.macOS" Version="159.0.8152" />
   </ItemGroup>
 
   <!-- Prebuild: git branch → DysonAppMode → obj/.../DysonBuildInfo.g.cs -->

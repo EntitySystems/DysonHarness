@@ -111,18 +111,25 @@ internal static class DysonCliProcess
         }
     }
 
-    private static async Task ObservePipesAsync(Task stdout, Task stderr)
+    /// <summary>
+    /// Waits at most <paramref name="graceMs"/> for both pipe readers. True when both ended (EOF or fault),
+    /// false when a pipe is still held (e.g. by an orphaned or detached descendant).
+    /// </summary>
+    internal static async Task<bool> ObservePipesAsync(Task stdout, Task stderr, int graceMs = 250)
     {
         try
         {
             var pending = Task.WhenAll(stdout, stderr);
-            var finished = await Task.WhenAny(pending, Task.Delay(250)).ConfigureAwait(false);
-            if (ReferenceEquals(finished, pending))
-                await pending.ConfigureAwait(false);
+            var finished = await Task.WhenAny(pending, Task.Delay(graceMs)).ConfigureAwait(false);
+            if (!ReferenceEquals(finished, pending))
+                return false;
+            await pending.ConfigureAwait(false);
+            return true;
         }
         catch
         {
-            // Drain best-effort after kill.
+            // Drain best-effort after kill; a faulted reader has still ended.
+            return true;
         }
     }
 }

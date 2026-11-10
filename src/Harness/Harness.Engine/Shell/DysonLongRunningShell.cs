@@ -24,6 +24,8 @@ public sealed class DysonLongRunningShell : IDisposable
     private long _combinedEndOffset;
     private readonly SemaphoreSlim _combinedSignal = new(0, int.MaxValue);
     private Process? _process;
+    private nint _job;
+    private bool _adopted;
     private StreamWriter? _stdin;
     private Task? _stdoutPump;
     private Task? _stderrPump;
@@ -94,6 +96,51 @@ public sealed class DysonLongRunningShell : IDisposable
         _stdoutPump = PumpAsync(process.StandardOutput, isStderr: false);
         _stderrPump = PumpAsync(process.StandardError, isStderr: true);
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Take over a promoted ShellExecute run: its readers already feed <see cref="AppendOutput"/>.
+    /// Terminal once both pipes hit EOF and the shell process has exited (the shell may exit first while a
+    /// background child keeps the pipes open). <paramref name="job"/> is owned from here: Abort terminates it.
+    /// </summary>
+    internal void AttachAdopted(Process process, nint job, Task pipesClosed)
+    {
+        lock (_gate)
+        {
+            _process = process;
+            _job = job;
+            _adopted = true;
+        }
+
+        _stdoutPump = CompleteWhenDrainedAsync(process, pipesClosed);
+    }
+
+    private async Task CompleteWhenDrainedAsync(Process process, Task pipesClosed)
+    {
+        try
+        {
+            await pipesClosed.ConfigureAwait(false);
+            await process.WaitForExitAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // Disposed or never started; still terminal.
+        }
+        finally
+        {
+            MarkExitedIfNeeded(aborted: false);
+
+            // Exit code is captured; release the handed-over job and process now (the registry never disposes shells).
+            nint job;
+            lock (_gate)
+            {
+                job = _job;
+                _job = 0;
+            }
+
+            DysonWindowsShell.WindowsJob.Close(job);
+            try { process.Dispose(); } catch { /* ignore */ }
+        }
     }
 
     /// <summary>
@@ -263,15 +310,19 @@ public sealed class DysonLongRunningShell : IDisposable
         CancellationToken cancellationToken = default)
     {
         Process? process;
+        nint job;
         lock (_gate)
         {
             if (Status is DysonLongRunningShellStatus.Exited or DysonLongRunningShellStatus.Aborted)
                 return VoidResult<string>.Success;
 
             process = _process;
+            job = _job;
             Status = DysonLongRunningShellStatus.Aborted;
         }
 
+        // Promoted runs: the job also holds orphans whose parent shell already exited.
+        DysonWindowsShell.WindowsJob.Terminate(job);
         if (process is not null)
         {
             try
@@ -297,14 +348,18 @@ public sealed class DysonLongRunningShell : IDisposable
 
         Process? process;
         StreamWriter? writer;
+        nint job;
         lock (_gate)
         {
             process = _process;
             writer = _stdin;
             _stdin = null;
+            job = _job;
+            _job = 0;
         }
 
         try { writer?.Dispose(); } catch { /* ignore */ }
+        DysonWindowsShell.WindowsJob.Close(job);
 
         if (process is not null)
         {
@@ -326,15 +381,18 @@ public sealed class DysonLongRunningShell : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             Process? process;
+            bool adopted;
             lock (_gate)
             {
                 if (Status is not (DysonLongRunningShellStatus.Running or DysonLongRunningShellStatus.CancelRequested))
                     return VoidResult<string>.Success;
                 process = _process;
+                adopted = _adopted;
             }
 
             // HasExited can raise Exited (Process lock); never call it under _gate (ABBA with OnProcessExited).
-            if (ProcessHasExited(process))
+            // Adopted shells may exit before their background child; their drain task marks them terminal.
+            if (!adopted && ProcessHasExited(process))
             {
                 bool aborted;
                 lock (_gate)
@@ -430,7 +488,7 @@ public sealed class DysonLongRunningShell : IDisposable
                 if (n <= 0)
                     break;
 
-                Append(buf.AsSpan(0, n), isStderr);
+                AppendOutput(buf.AsSpan(0, n), isStderr);
             }
         }
         catch
@@ -443,7 +501,7 @@ public sealed class DysonLongRunningShell : IDisposable
         }
     }
 
-    private void Append(ReadOnlySpan<char> chunk, bool isStderr)
+    internal void AppendOutput(ReadOnlySpan<char> chunk, bool isStderr)
     {
         lock (_gate)
         {

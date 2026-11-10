@@ -382,7 +382,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 contextFiles,
                 _workDirectoryPath,
                 Config.PluginContributions,
-                cancellationToken)
+                cancellationToken,
+                Mode)
             .ConfigureAwait(false);
         if (attached.IsError)
             return Result<DysonStartSubagentResult, string>.AsError(attached.Error);

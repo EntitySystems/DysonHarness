@@ -393,6 +393,14 @@ public static class DysonSkillLoader
 
         if (fileExists.Value)
         {
+            var head = await fs.ReadFileHeadAsync(relativePath, DysonPdf.HeadBytes, cancellationToken).ConfigureAwait(false);
+            if (head.IsSuccess && DysonPdf.IsPdf(relativePath, head.Value))
+            {
+                return Result<DysonLoadedSkill?, string>.AsError(
+                    $"\"{relativePath.Replace('\\', '/')}\" is a PDF and can't be loaded as text. " +
+                    "Render the pages you need with ConvertImage (pages, dpi), then LoadBinary the PNG(s).");
+            }
+
             var text = await fs.ReadAllTextAsync(relativePath, cancellationToken).ConfigureAwait(false);
             if (text.IsError)
                 return Result<DysonLoadedSkill?, string>.AsError(text.Error);

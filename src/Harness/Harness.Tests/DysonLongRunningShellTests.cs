@@ -20,6 +20,61 @@ public class DysonLongRunningShellTests
         await AssertWaitForTimeoutValidation();
         await AssertWaitForAlreadyExitedImmediate();
         await AssertWaitForLiveTimeoutAndShortCommand();
+        await AssertShellExecuteTimeoutPromotes();
+    }
+
+    /// <summary>ShellExecute past timeoutMs: Ok (not Error), timedOut + promoted id, listed, abortable.</summary>
+    private static async Task AssertShellExecuteTimeoutPromotes()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var workDirId = Guid.NewGuid();
+        var cwd = Path.Combine(Path.GetTempPath(), "dyson-lrs-promote-" + workDirId.ToString("N"));
+        Directory.CreateDirectory(cwd);
+        try
+        {
+            var session = new StubSession();
+            using var http = new HttpClient();
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, cwd, http, store: null, workDirId);
+            var result = await executor.ExecuteAsync(new DysonToolCall
+            {
+                CallId = "shell-promote",
+                ToolName = "ShellExecute",
+                Stage = 0,
+                ArgumentsJson = """{"shell":"Cmd","command":"echo promote-marker & ping -n 60 127.0.0.1 >nul","timeoutMs":3000}""",
+            });
+
+            if (result.IsError
+                || !result.Content.Contains("timedOut=true promotedToLongRunningShell id=", StringComparison.Ordinal)
+                || !result.Content.Contains("ReadLongRunningShellTail", StringComparison.Ordinal)
+                || !result.Content.Contains("promote-marker", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("ShellExecute timeout must promote (Ok + id + output). Got:\n" + result.Content);
+            }
+
+            var listed = DysonLongRunningShellRegistry.List(workDirId, cwd);
+            if (listed.Count != 1 || listed[0].Status != DysonLongRunningShellStatus.Running || listed[0].ShellName != "Cmd")
+                throw new InvalidOperationException("Promoted shell must be listed Running under the session cwd.");
+
+            var abort = await DysonLongRunningShellRegistry.AbortAsync(workDirId, listed[0].Id);
+            if (abort.IsError)
+                throw new InvalidOperationException($"Abort promoted failed: {abort.Error}");
+        }
+        finally
+        {
+            foreach (var info in DysonLongRunningShellRegistry.List(workDirId))
+                await DysonLongRunningShellRegistry.AbortAsync(workDirId, info.Id);
+            DysonLongRunningShellRegistry.ClearForTests(workDirId);
+            try
+            {
+                Directory.Delete(cwd, recursive: true);
+            }
+            catch
+            {
+                // best-effort temp cleanup
+            }
+        }
     }
 
     private static void AssertCatalogGate()

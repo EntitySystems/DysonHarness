@@ -121,6 +121,43 @@ public static class DysonLongRunningShellRegistry
         }
     }
 
+    /// <summary>
+    /// Adopt a ShellExecute run that timed out or left its pipes held by a background child. Same bucket, id
+    /// sequence, list/tail/wait/abort and ShellExited subscriptions as <see cref="StartAsync"/>; no stdin.
+    /// <paramref name="connectOutput"/> seeds the rings with what was captured and forwards later output.
+    /// </summary>
+    internal static Result<int, string> Adopt(
+        DysonShellPromotion promotion,
+        string command,
+        string workingDirectory,
+        Process process,
+        nint job,
+        Task pipesClosed,
+        Action<DysonLongRunningShell> connectOutput)
+    {
+        if (promotion.WorkDirectoryId == Guid.Empty)
+            return Result<int, string>.AsError("Work directory id is required.");
+        if (string.IsNullOrWhiteSpace(promotion.ShellName))
+            return Result<int, string>.AsError("Shell name is required.");
+
+        var bucket = Buckets.GetOrAdd(promotion.WorkDirectoryId, static id => new WorkdirBucket(id));
+        var shell = new DysonLongRunningShell
+        {
+            Id = bucket.NextId(),
+            WorkDirectoryId = promotion.WorkDirectoryId,
+            ShellName = promotion.ShellName.Trim(),
+            Command = command,
+            WorkingDirectory = workingDirectory,
+            StartedUtc = DateTime.UtcNow,
+        };
+
+        connectOutput(shell);
+        shell.AttachAdopted(process, job, pipesClosed);
+        bucket.Shells[shell.Id] = shell;
+        RaiseChanged();
+        return Result<int, string>.AsValue(shell.Id);
+    }
+
     public static bool TryGet(Guid workDirectoryId, int id, out DysonLongRunningShell? shell)
     {
         shell = null;

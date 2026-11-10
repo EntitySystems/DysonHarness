@@ -19,6 +19,13 @@ public sealed class DysonMcpPipeline
         "Never execute programs (dotnet run, builds, installs, servers). " +
         "Prefer ReadFile / Grep / ListDirectory.";
 
+    /// <summary>ShellExecute timeout / held-pipe promotion (appended to the catalog description).</summary>
+    public const string ShellExecuteBackgroundGuidance =
+        " If the command passes timeoutMs, or exits while a background process it started (Start-Process, &, a server) " +
+        "still holds stdout/stderr, it is not killed: it is promoted to a long-running shell and the result returns " +
+        "the output so far plus promotedToLongRunningShell id=<N>. Use that id with ReadLongRunningShellTail / " +
+        "WaitForLongRunningShellCompletion / AbortLongRunningShell. Prefer StartLongRunningShell for servers.";
+
     public DysonMcpAccessMode AccessMode { get; }
     public Dictionary<string, DysonMcpTool> Tools { get; } = new(StringComparer.Ordinal);
     public DysonMcpAutoReviewProxy? AutoReviewProxy { get; }
@@ -134,7 +141,8 @@ public sealed class DysonMcpPipeline
             "You must pass shell as one of these. Prefer dedicated MCP file tools over shell when they fit.";
         description = AppendPythonNodeSnippetSentence(description, names);
         description +=
-            " timeoutMs (integer > 0) is required. stdout/stderr are captured up to 64KiB each; overflow is truncated (command may still run until timeout).";
+            " timeoutMs (integer > 0) is required. stdout/stderr are captured up to 64KiB each; overflow is truncated (command may still run until timeout)." +
+            ShellExecuteBackgroundGuidance;
         if (planMode)
             description += " " + PlanShellExecuteWarning;
 
@@ -157,7 +165,7 @@ public sealed class DysonMcpPipeline
                     },
                     "timeoutMs": {
                       "type": "integer",
-                      "description": "Mandatory max run time in milliseconds before the process is killed. Must be > 0 (executor rejects omitted/<= 0)."
+                      "description": "Mandatory wait in milliseconds; a command still running after it is promoted to a long-running shell (id returned), not killed. Must be > 0 (executor rejects omitted/<= 0)."
                     },
                     "workingDirectory": {
                       "type": "string",
@@ -1297,6 +1305,7 @@ public sealed class DysonMcpPipeline
                 "Do not WaitForSubagent on Drones. In Work (and Drone), any Explore you start is a blocker: WaitForSubagent on a later stage of the same turn before further parent work. In Plan, Wait only when that Explore blocks the next automatic turn. " +
                 "Optional todos seeds the child’s own session todo list. " +
                 "Optional contextFiles preloads work-relative files into the child’s first turn as File context (path visible as `[File: relative/path]` before contents). The caller is encouraged to share relevant files so the subagent does not need to load them manually. " +
+                "contextFiles images attach as images; PDFs are rejected (ConvertImage them and pass the PNG paths). " +
                 "Optional modelSlug picks a different model (slug or display alias; omit to inherit parent). " +
                 "Optional reasoningEffort overrides the child’s reasoning_effort (omit/null → chosen slug’s defaultEffort; when inheriting parent model, omit keeps the parent’s current effort). " +
                 "Cannot spawn a child whose agentMode is Plan (Plan is top-level only). A Plan parent may StartSubagent Explore. Explore parents cannot spawn. A classic Drone may spawn Explore only (not another Drone). A Meta Agent Drone may spawn Drone workers; they share its worktree and never merge. " +
@@ -1340,7 +1349,7 @@ public sealed class DysonMcpPipeline
                     },
                     "contextFiles": {
                       "type": "array",
-                      "description": "Optional work-relative file paths to preload into the child’s first turn as File context (`[File: path]` then contents). Encouraged: share relevant files so the subagent does not need to load them manually.",
+                      "description": "Optional work-relative file paths to preload into the child’s first turn as File context (`[File: path]` then contents). Images attach as images; PDFs are rejected (ConvertImage them and pass the PNG paths). Encouraged: share relevant files so the subagent does not need to load them manually.",
                       "items": { "type": "string", "description": "Work-relative or workspace file path." }
                     }
                   },
@@ -1980,7 +1989,7 @@ public sealed class DysonMcpPipeline
                 "Each line is formatted as lineNumber|content (e.g. '42|    foo();'). " +
                 "When copying into WriteFile old_text/new_text, use only the content after the first '|' — never include the line-number prefix. " +
                 "Capped at 32KiB (~<20K tokens); larger slices error (IsError) with instruction to pass offset+limit or Grep first — file body is not returned. " +
-                "offset is 1-based; negative = tail (e.g. -80 = last 80 lines). Per-line clip is 8KiB. Binary/image files error — use LoadBinary.",
+                "offset is 1-based; negative = tail (e.g. -80 = last 80 lines). Per-line clip is 8KiB. Binary/image files error — use LoadBinary (PDFs: ConvertImage pages to PNG first).",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -2089,7 +2098,7 @@ public sealed class DysonMcpPipeline
                 "Matches each line independently. Optional path and filename glob. " +
                 "Text-only: never returns binary/image bytes. Skips .git/bin/obj/node_modules/.vs and similar. " +
                 "Binary/image hits are path-only lines (binary\\t… / image\\t…) when the relative path matches; " +
-                "use LoadBinary to inspect those files.",
+                "use LoadBinary to inspect those files (PDFs: ConvertImage pages to PNG first).",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -2113,7 +2122,8 @@ public sealed class DysonMcpPipeline
                 "Tool result Content is a short JSON ack (path, fileName, extension, mimeType, byteLength) — no base64. " +
                 "Bytes are attached with the original filename+extension for Completions/Responses multimodal parts. " +
                 "Images require FileStorage (presigned HTTPS URL); unconfigured returns file_storage_required. " +
-                "Use after Grep returns binary\\t / image\\t path lines. Max size 5 MB.",
+                "Use after Grep returns binary\\t / image\\t path lines. Max size 5 MB. " +
+                "PDFs are rejected: render pages with ConvertImage (pages, dpi) first, then LoadBinary the PNG(s).",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -2133,17 +2143,20 @@ public sealed class DysonMcpPipeline
             Name = "ConvertImage",
             Description =
                 "Convert or re-encode a work-directory image via Magick.NET and write the result to outputFile. " +
+                "PDF input renders pages (PDFium): pages (default '1', max 20 per call) at dpi (36–300, default 150, longest edge capped at 4096 px); " +
+                "one page writes outputFile, several write {stem}-p{N}{ext} next to it (ack lists outputs). Encrypted PDFs are rejected. " +
                 "Supports SVG input and ICO output; desiredFormat may match the input (same-format re-encode / compress). " +
                 "quality (1–100, default 85) is Magick Quality — primary knob for shrinking large JPEG/WebP. " +
                 "overwrite defaults false (fail if output exists). Soft input ceiling 50 MB (not LoadBinary’s 5 MB). " +
-                "Returns JSON ack only (inputFile, outputFile, desiredFormat, quality, byteLength, width, height, inputByteLength) — no BinaryAttachment; use LoadBinary on the result if vision is needed.",
+                "Returns JSON ack only (inputFile, outputFile, desiredFormat, quality, byteLength, width, height, inputByteLength; PDFs add pageCount, dpi, outputs[]) — no BinaryAttachment; use LoadBinary on the result if vision is needed. " +
+                "outputFile must stay inside the work directory and differ from inputFile.",
             InputSchemaJson = """
                 {
                   "type": "object",
                   "properties": {
                     "inputFile": {
                       "type": "string",
-                      "description": "Work-directory-relative path to the source image (must exist)."
+                      "description": "Work-directory-relative path to the source image or PDF (must exist)."
                     },
                     "outputFile": {
                       "type": "string",
@@ -2160,6 +2173,14 @@ public sealed class DysonMcpPipeline
                     "overwrite": {
                       "type": "boolean",
                       "description": "If true, replace outputFile when it already exists. Default false."
+                    },
+                    "pages": {
+                      "type": "string",
+                      "description": "PDF only: 1-based pages, e.g. '1', '1-3', '2,5', 'all'; default '1'; max 20 per call. Several pages write {stem}-p{N}{ext}."
+                    },
+                    "dpi": {
+                      "type": "integer",
+                      "description": "PDF only: render resolution 36–300, default 150."
                     }
                   },
                   "required": ["inputFile", "outputFile", "desiredFormat"]

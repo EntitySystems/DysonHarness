@@ -39,7 +39,7 @@ Indexes: (`RootSessionId`, `Id`) and (`SubjectId`, `RootSessionId`).
 | `CreateFile` (not `isTempFile`) | `Created`, or `Overwritten` when the file existed |
 | `WriteFile` `content` | `Overwritten` (diff against the prior text), or `Created` |
 | `WriteFile` `old_text`/`new_text`/`edits[]` | `Edited` |
-| `ConvertImage`, `GenerateImage` | `Binary` (byte length only) |
+| `ConvertImage`, `GenerateImage` | `Binary` (byte length only; a multi-page PDF ConvertImage writes one row per page file) |
 | `SubmitPlan` | `Created` (`.dyson/plans/*.md`) |
 | `InitializeOpenRules` | `Created`, only when it created the file |
 
