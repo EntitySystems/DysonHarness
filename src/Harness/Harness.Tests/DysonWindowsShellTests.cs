@@ -281,7 +281,7 @@ public class DysonWindowsShellTests
     private static string Echo(string text) => OperatingSystem.IsWindows() ? $"'{text}'" : $"echo {text}";
 
     [Fact]
-    public async Task ExecuteWithPathAsync_BackgroundChildHoldsPipe_ReturnsAfterGraceWithNote()
+    public async Task ExecuteWithPathAsync_BackgroundChildHoldsPipe_WithoutPromotion_ReturnsAfterGrace()
     {
         var cwd = NewTempDir("dyson-shell-held");
         try
@@ -303,8 +303,8 @@ public class DysonWindowsShellTests
                 throw new InvalidOperationException($"Held pipe is not a failure: exit={run.ExitCode} timedOut={run.TimedOut}.");
             if (!run.Stdout.Contains("hello", StringComparison.Ordinal))
                 throw new InvalidOperationException($"Captured output lost: '{run.Stdout}'.");
-            if (!run.Stderr.Contains(DysonWindowsShell.HeldPipeNote, StringComparison.Ordinal))
-                throw new InvalidOperationException($"Held-pipe note missing: '{run.Stderr}'.");
+            if (run.PromotedShellId is not null)
+                throw new InvalidOperationException("No promotion target was given; the run must not be promoted.");
 
             // Normal exit must not kill an intentionally detached child (job is only terminated on timeout/cancel).
             var gcPid = await WaitForPidAsync(cwd);
@@ -318,7 +318,147 @@ public class DysonWindowsShellTests
     }
 
     [Fact]
-    public async Task ExecuteWithPathAsync_TimeoutWithOrphanHoldingPipe_ReturnsPromptlyAndKillsOrphan()
+    public async Task ExecuteWithPathAsync_BackgroundChildHoldsPipe_PromotesToLongRunningShell()
+    {
+        var cwd = NewTempDir("dyson-shell-held-promote");
+        var workDirId = Guid.NewGuid();
+        try
+        {
+            string holder;
+            if (OperatingSystem.IsWindows())
+            {
+                File.WriteAllText(
+                    Path.Combine(cwd, "gc.ps1"),
+                    "$pid | Set-Content -Path 'gc.pid' -Encoding ASCII; Start-Sleep -Seconds 3; " +
+                    $"[Console]::Out.WriteLine('later-from-child'); [Console]::Out.Flush(); Start-Sleep -Seconds {HolderSeconds}");
+                holder = "Start-Process powershell.exe -NoNewWindow -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','gc.ps1'";
+            }
+            else
+            {
+                holder = $"(sleep 3; echo later-from-child; sleep {HolderSeconds}) & echo $! > gc.pid";
+            }
+
+            var result = await DysonWindowsShell.ExecuteWithPathAsync(
+                HeldPipeShell,
+                $"{holder}; {Echo("hello")}",
+                cwd,
+                timeoutMs: 120_000,
+                promotion: new DysonShellPromotion(workDirId, "Shell"));
+
+            if (result.IsError)
+                throw new InvalidOperationException($"Expected success, got error: {result.Error}");
+            var run = result.Value;
+            if (run.TimedOut || run.ExitCode != 0)
+                throw new InvalidOperationException($"Held pipe is not a failure: exit={run.ExitCode} timedOut={run.TimedOut}.");
+            if (run.PromotedShellId is not int id)
+                throw new InvalidOperationException("Held pipe must promote to a long-running shell.");
+            if (!run.Stdout.Contains("hello", StringComparison.Ordinal))
+                throw new InvalidOperationException($"Captured output lost: '{run.Stdout}'.");
+
+            var listed = DysonLongRunningShellRegistry.List(workDirId);
+            if (listed.Count != 1 || listed[0].Id != id || listed[0].ShellName != "Shell")
+                throw new InvalidOperationException("Promoted shell must be listed under its work directory.");
+
+            // The tail holds the captured output plus what the background child wrote after promotion.
+            var tailText = "";
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < deadline && !tailText.Contains("later-from-child", StringComparison.Ordinal))
+            {
+                var tail = await DysonLongRunningShellRegistry.ReadTailAsync(workDirId, id, timeoutMs: 1_000);
+                if (tail.IsError)
+                    throw new InvalidOperationException(tail.Error);
+                tailText = tail.Value.Text;
+                await Task.Delay(200);
+            }
+
+            if (!tailText.Contains("hello", StringComparison.Ordinal)
+                || !tailText.Contains("later-from-child", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Tail must hold seeded and later output. Got: '{tailText}'.");
+            }
+
+            var gcPid = await WaitForPidAsync(cwd);
+            var abort = await DysonLongRunningShellRegistry.AbortAsync(workDirId, id);
+            if (abort.IsError)
+                throw new InvalidOperationException(abort.Error);
+            if (!DysonLongRunningShellRegistry.TryGet(workDirId, id, out var shell)
+                || shell!.Status != DysonLongRunningShellStatus.Aborted)
+            {
+                throw new InvalidOperationException("Abort must mark the promoted shell Aborted.");
+            }
+
+            if (OperatingSystem.IsWindows())
+                await AssertGoneAsync(gcPid, "Abort must terminate the job holding the background child.");
+        }
+        finally
+        {
+            DysonLongRunningShellRegistry.ClearForTests(workDirId);
+            CleanupHolder(cwd);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteWithPathAsync_Timeout_PromotesAndKeepsProcessAlive()
+    {
+        var cwd = NewTempDir("dyson-shell-timeout-promote");
+        var workDirId = Guid.NewGuid();
+        int? pid = null;
+        try
+        {
+            var writePid = OperatingSystem.IsWindows()
+                ? "$pid | Set-Content -Path 'gc.pid' -Encoding ASCII"
+                : "echo $$ > gc.pid";
+            const int timeoutMs = 5_000;
+            var sw = Stopwatch.StartNew();
+            var result = await DysonWindowsShell.ExecuteWithPathAsync(
+                HeldPipeShell,
+                $"{writePid}; {Echo("started")}; {Sleep(HolderSeconds)}",
+                cwd,
+                timeoutMs,
+                promotion: new DysonShellPromotion(workDirId, "Shell"));
+            sw.Stop();
+
+            if (result.IsError)
+                throw new InvalidOperationException($"Expected promoted result, got error: {result.Error}");
+            var run = result.Value;
+            if (!run.TimedOut || run.PromotedShellId is not int id)
+                throw new InvalidOperationException($"Expected timedOut + promoted id, got timedOut={run.TimedOut} id={run.PromotedShellId}.");
+            if (sw.Elapsed > TimeSpan.FromMilliseconds(timeoutMs + 5_000))
+                throw new InvalidOperationException($"Timeout promotion took {sw.Elapsed}.");
+            if (!run.Stdout.Contains("started", StringComparison.Ordinal))
+                throw new InvalidOperationException($"Captured output lost on timeout: '{run.Stdout}'.");
+
+            pid = await WaitForPidAsync(cwd);
+            if (!IsOsProcessAlive(pid.Value))
+                throw new InvalidOperationException("A promoted timeout must not kill the process.");
+
+            var waited = await DysonLongRunningShellRegistry.WaitForCompletionAsync(workDirId, id, timeoutMs: 500);
+            if (waited.IsError || !waited.Value.Contains("\"status\":\"timeout\"", StringComparison.Ordinal))
+                throw new InvalidOperationException($"Wait on a live promoted shell must time out. Got: {waited.Value}");
+
+            var abort = await DysonLongRunningShellRegistry.AbortAsync(workDirId, id);
+            if (abort.IsError)
+                throw new InvalidOperationException(abort.Error);
+            await AssertGoneAsync(pid.Value, "Abort must kill the promoted process.");
+
+            var done = await DysonLongRunningShellRegistry.WaitForCompletionAsync(workDirId, id, timeoutMs: 10_000);
+            if (done.IsError || !done.Value.Contains("\"status\":\"Aborted\"", StringComparison.Ordinal))
+                throw new InvalidOperationException($"Wait after abort must be terminal. Got: {done.Value}");
+        }
+        finally
+        {
+            DysonLongRunningShellRegistry.ClearForTests(workDirId);
+            if (pid is int live && IsOsProcessAlive(live))
+            {
+                try { Process.GetProcessById(live).Kill(entireProcessTree: true); } catch { /* best-effort */ }
+            }
+
+            CleanupHolder(cwd);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteWithPathAsync_TimeoutWithOrphanHoldingPipe_WithoutPromotion_KillsOrphan()
     {
         var cwd = NewTempDir("dyson-shell-timeout");
         try
@@ -375,15 +515,18 @@ public class DysonWindowsShellTests
     public async Task ExecuteWithPathAsync_UserCancelWithHeldPipe_ReturnsPromptly()
     {
         var cwd = NewTempDir("dyson-shell-cancel-held");
+        var workDirId = Guid.NewGuid();
         using var cts = new CancellationTokenSource();
         try
         {
+            // A promotion target is given: user cancel must still kill and never promote.
             var run = DysonWindowsShell.ExecuteWithPathAsync(
                 HeldPipeShell,
                 $"{StartHolder(cwd)}; {Echo("hello")}; {Sleep(HolderSeconds)}",
                 cwd,
                 timeoutMs: 120_000,
-                cts.Token);
+                cts.Token,
+                promotion: new DysonShellPromotion(workDirId, "Shell"));
 
             await WaitForPidAsync(cwd);
             var sw = Stopwatch.StartNew();
@@ -396,26 +539,44 @@ public class DysonWindowsShellTests
             var result = await run;
             if (!result.IsError || result.Error != "Shell execution was cancelled.")
                 throw new InvalidOperationException($"Expected cancelled error, got IsError={result.IsError} Error={result.Error}.");
+            if (DysonLongRunningShellRegistry.List(workDirId).Count != 0)
+                throw new InvalidOperationException("User cancel must not promote.");
         }
         finally
         {
+            DysonLongRunningShellRegistry.ClearForTests(workDirId);
             CleanupHolder(cwd);
         }
     }
 
     [Fact]
-    public void ShellExecuteDescription_CarriesTimeoutAndBackgroundGuidance()
+    public void ShellExecuteDescription_CarriesPromotionGuidance()
     {
         var tool = DysonMcpPipeline.CreateShellExecuteTool(["Pwsh"])
             ?? throw new InvalidOperationException("ShellExecute must exist.");
-        foreach (var phrase in new[] { "whole process tree is killed", "holds stdout/stderr", "StartLongRunningShell for servers" })
+        foreach (var phrase in new[]
+                 {
+                     "promoted to a long-running shell", "holds stdout/stderr", "promotedToLongRunningShell id=<N>",
+                     "AbortLongRunningShell", "StartLongRunningShell for servers",
+                 })
         {
             if (!tool.Description.Contains(phrase, StringComparison.Ordinal))
                 throw new InvalidOperationException($"ShellExecute description is missing '{phrase}'.");
         }
 
-        if (!DysonWindowsShell.HeldPipeNote.Contains("StartLongRunningShell", StringComparison.Ordinal))
-            throw new InvalidOperationException("Held-pipe note must point at StartLongRunningShell.");
+        if (tool.Description.Contains("killed", StringComparison.Ordinal) && !tool.Description.Contains("not killed", StringComparison.Ordinal))
+            throw new InvalidOperationException("ShellExecute description must not promise a kill on timeout.");
+    }
+
+    private static async Task AssertGoneAsync(int pid, string message)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (IsOsProcessAlive(pid))
+        {
+            if (DateTime.UtcNow > deadline)
+                throw new InvalidOperationException($"{message} (pid {pid} still alive)");
+            await Task.Delay(50);
+        }
     }
 
     private static string NewTempDir(string prefix)

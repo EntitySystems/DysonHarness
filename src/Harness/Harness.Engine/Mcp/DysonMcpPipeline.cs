@@ -19,11 +19,12 @@ public sealed class DysonMcpPipeline
         "Never execute programs (dotnet run, builds, installs, servers). " +
         "Prefer ReadFile / Grep / ListDirectory.";
 
-    /// <summary>ShellExecute timeout / held-pipe behavior (appended to the catalog description).</summary>
+    /// <summary>ShellExecute timeout / held-pipe promotion (appended to the catalog description).</summary>
     public const string ShellExecuteBackgroundGuidance =
-        " On timeout the whole process tree is killed. If the command exits while a background process it started " +
-        "(Start-Process, &, a server) still holds stdout/stderr, output is returned after a ~1s grace with a note " +
-        "instead of waiting. Use StartLongRunningShell for servers and anything that backgrounds.";
+        " If the command passes timeoutMs, or exits while a background process it started (Start-Process, &, a server) " +
+        "still holds stdout/stderr, it is not killed: it is promoted to a long-running shell and the result returns " +
+        "the output so far plus promotedToLongRunningShell id=<N>. Use that id with ReadLongRunningShellTail / " +
+        "WaitForLongRunningShellCompletion / AbortLongRunningShell. Prefer StartLongRunningShell for servers.";
 
     public DysonMcpAccessMode AccessMode { get; }
     public Dictionary<string, DysonMcpTool> Tools { get; } = new(StringComparer.Ordinal);
@@ -164,7 +165,7 @@ public sealed class DysonMcpPipeline
                     },
                     "timeoutMs": {
                       "type": "integer",
-                      "description": "Mandatory max run time in milliseconds before the process and its whole process tree are killed. Must be > 0 (executor rejects omitted/<= 0)."
+                      "description": "Mandatory wait in milliseconds; a command still running after it is promoted to a long-running shell (id returned), not killed. Must be > 0 (executor rejects omitted/<= 0)."
                     },
                     "workingDirectory": {
                       "type": "string",

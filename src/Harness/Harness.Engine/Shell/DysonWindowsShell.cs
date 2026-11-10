@@ -9,12 +9,7 @@ public sealed class DysonWindowsShell : DysonShell
 {
     private const int DefaultTimeoutMs = 120_000;
 
-    /// <summary>Appended to stderr when the shell exited but a background process still holds its output pipes.</summary>
-    public const string HeldPipeNote =
-        "[output pipes still held by a background process; output truncated at exit. " +
-        "Use StartLongRunningShell for servers or anything that backgrounds]";
-
-    /// <summary>How long pipes may stay open after the shell exits before output is returned as-is.</summary>
+    /// <summary>How long pipes may stay open after the shell exits before the run is promoted (or returned as-is).</summary>
     private const int HeldPipeGraceMs = 1_000;
 
     private readonly DysonShellType? _type;
@@ -51,6 +46,9 @@ public sealed class DysonWindowsShell : DysonShell
     /// <summary>
     /// One-shot run using an executable path.
     /// Fixed args: <paramref name="fixedArgsOverride"/> when non-empty, else basename heuristics.
+    /// With <paramref name="promotion"/>, a timeout or pipes still held after exit adopt the run into
+    /// <see cref="DysonLongRunningShellRegistry"/> (<see cref="DysonShellRunResult.PromotedShellId"/>) instead of
+    /// killing it or cutting its output off. User cancel always kills.
     /// </summary>
     public static async Task<Result<DysonShellRunResult, string>> ExecuteWithPathAsync(
         string executablePath,
@@ -58,7 +56,8 @@ public sealed class DysonWindowsShell : DysonShell
         string workingDirectory,
         int? timeoutMs = null,
         CancellationToken cancellationToken = default,
-        IReadOnlyList<string>? fixedArgsOverride = null)
+        IReadOnlyList<string>? fixedArgsOverride = null,
+        DysonShellPromotion? promotion = null)
     {
         if (string.IsNullOrWhiteSpace(command))
             return Result<DysonShellRunResult, string>.AsError("Command is empty.");
@@ -76,6 +75,9 @@ public sealed class DysonWindowsShell : DysonShell
         Process? process = null;
         nint job = 0;
         CancellationTokenSource? timeoutCts = null;
+        // Readers outlive the deadline when the run is promoted, so they get their own token.
+        var readersCts = new CancellationTokenSource();
+        var promoted = false;
         try
         {
             process = new Process
@@ -107,8 +109,43 @@ public sealed class DysonWindowsShell : DysonShell
             timeoutCts.CancelAfter(limitMs);
             var stdoutCapture = new PipeCapture(DysonToolResultLimits.MaxShellStreamBytes);
             var stderrCapture = new PipeCapture(DysonToolResultLimits.MaxShellStreamBytes);
-            var stdoutTask = ReadBoundedAsync(process.StandardOutput.BaseStream, stdoutCapture, timeoutCts.Token);
-            var stderrTask = ReadBoundedAsync(process.StandardError.BaseStream, stderrCapture, timeoutCts.Token);
+            var stdoutTask = ReadBoundedAsync(process.StandardOutput.BaseStream, stdoutCapture, readersCts.Token);
+            var stderrTask = ReadBoundedAsync(process.StandardError.BaseStream, stderrCapture, readersCts.Token);
+
+            Result<DysonShellRunResult, string>? Promote(bool timedOut)
+            {
+                if (promotion is null || cancellationToken.IsCancellationRequested)
+                    return null;
+
+                BoundedRead? stdoutSeed = null;
+                BoundedRead? stderrSeed = null;
+                var adopted = DysonLongRunningShellRegistry.Adopt(
+                    promotion,
+                    command,
+                    workingDirectory,
+                    process!,
+                    job,
+                    Task.WhenAll(stdoutTask, stderrTask),
+                    shell =>
+                    {
+                        stdoutSeed = stdoutCapture.Redirect(shell, isStderr: false);
+                        stderrSeed = stderrCapture.Redirect(shell, isStderr: true);
+                    });
+                if (adopted.IsError)
+                    return null;
+
+                promoted = true;
+                return Result<DysonShellRunResult, string>.AsValue(new DysonShellRunResult
+                {
+                    ExitCode = timedOut ? -1 : process!.ExitCode,
+                    Stdout = stdoutSeed!.Text,
+                    Stderr = stderrSeed!.Text,
+                    TimedOut = timedOut,
+                    StdoutTruncated = stdoutSeed.Truncated,
+                    StderrTruncated = stderrSeed.Truncated,
+                    PromotedShellId = adopted.Value,
+                });
+            }
 
             try
             {
@@ -116,6 +153,9 @@ public sealed class DysonWindowsShell : DysonShell
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                if (Promote(timedOut: true) is { } promotedRun)
+                    return promotedRun;
+
                 Terminate(process, job);
                 await DysonCliProcess.ObservePipesAsync(stdoutTask, stderrTask).ConfigureAwait(false);
                 var stdoutTimed = stdoutCapture.Snapshot();
@@ -134,19 +174,20 @@ public sealed class DysonWindowsShell : DysonShell
             }
 
             // A detached descendant (Start-Process, `&`, a server) inherits the pipe write ends, so EOF may
-            // never come. Give the pipes a short grace, then return what was captured; not a timeout or error.
+            // never come. Give the pipes a short grace, then promote (or return what was captured); not an error.
             var drained = await DysonCliProcess
                 .ObservePipesAsync(stdoutTask, stderrTask, HeldPipeGraceMs)
                 .ConfigureAwait(false);
+            if (!drained && Promote(timedOut: false) is { } heldRun)
+                return heldRun;
+
             var stdout = stdoutCapture.Snapshot();
             var stderr = stderrCapture.Snapshot();
             return Result<DysonShellRunResult, string>.AsValue(new DysonShellRunResult
             {
                 ExitCode = process.ExitCode,
                 Stdout = stdout.Text,
-                Stderr = drained
-                    ? stderr.Text
-                    : string.IsNullOrEmpty(stderr.Text) ? HeldPipeNote : stderr.Text.TrimEnd() + "\n" + HeldPipeNote,
+                Stderr = stderr.Text,
                 StdoutTruncated = stdout.Truncated,
                 StderrTruncated = stderr.Truncated,
             });
@@ -162,27 +203,32 @@ public sealed class DysonWindowsShell : DysonShell
         }
         finally
         {
-            // Stop readers still blocked on a held pipe. The job is closed without terminating it, so a
-            // server the script deliberately detached survives a normal exit.
-            // ponytail: a sync pipe read the runtime cannot cancel stays parked on a pool thread until the
-            // holder exits; upgrade is overlapped pipes we create ourselves.
-            try
-            {
-                timeoutCts?.Cancel();
-            }
-            catch
-            {
-                // Reader cancellation is best-effort.
-            }
-
             timeoutCts?.Dispose();
-            if (process is not null)
+            // A promoted run's process, job and readers now belong to its long-running shell.
+            if (!promoted)
             {
-                TryKill(process);
-                process.Dispose();
-            }
+                // Stop readers still blocked on a held pipe. The job is closed without terminating it, so a
+                // server the script deliberately detached survives a normal exit.
+                // ponytail: a sync pipe read the runtime cannot cancel stays parked on a pool thread until the
+                // holder exits; upgrade is overlapped pipes we create ourselves.
+                try
+                {
+                    readersCts.Cancel();
+                }
+                catch
+                {
+                    // Reader cancellation is best-effort.
+                }
 
-            WindowsJob.Close(job);
+                readersCts.Dispose();
+                if (process is not null)
+                {
+                    TryKill(process);
+                    process.Dispose();
+                }
+
+                WindowsJob.Close(job);
+            }
         }
     }
 
@@ -311,21 +357,56 @@ public sealed class DysonWindowsShell : DysonShell
         }
     }
 
-    /// <summary>First <c>limit</c> bytes of a pipe, readable while the reader is still running.</summary>
+    /// <summary>
+    /// First <c>limit</c> bytes of a pipe, readable while the reader is still running. After
+    /// <see cref="Redirect"/> every later chunk goes to a long-running shell's rings instead.
+    /// </summary>
     private sealed class PipeCapture(int limit)
     {
         private readonly MemoryStream _captured = new(Math.Min(limit, 16 * 1024));
+        private readonly Decoder _decoder = Encoding.UTF8.GetDecoder();
         private long _total;
+        private DysonLongRunningShell? _target;
+        private bool _targetIsStderr;
 
         public void Append(byte[] buffer, int read)
         {
             lock (_captured)
             {
+                if (_target is not null)
+                {
+                    Forward(buffer, read);
+                    return;
+                }
+
                 var remaining = limit - (int)_captured.Length;
                 if (remaining > 0)
                     _captured.Write(buffer, 0, Math.Min(read, remaining));
                 _total += read;
             }
+        }
+
+        /// <summary>Seed <paramref name="shell"/> with what was captured and forward later output; returns the seed.</summary>
+        public BoundedRead Redirect(DysonLongRunningShell shell, bool isStderr)
+        {
+            lock (_captured)
+            {
+                _target = shell;
+                _targetIsStderr = isStderr;
+                Forward(_captured.GetBuffer(), (int)_captured.Length);
+                return new BoundedRead(
+                    Encoding.UTF8.GetString(_captured.GetBuffer(), 0, (int)_captured.Length),
+                    _total > limit);
+            }
+        }
+
+        private void Forward(byte[] buffer, int read)
+        {
+            if (read <= 0)
+                return;
+            var chars = new char[_decoder.GetCharCount(buffer, 0, read)];
+            var n = _decoder.GetChars(buffer, 0, read, chars, 0);
+            _target!.AppendOutput(chars.AsSpan(0, n), _targetIsStderr);
         }
 
         public BoundedRead Snapshot()
@@ -348,7 +429,7 @@ public sealed class DysonWindowsShell : DysonShell
     /// ponytail: assigned right after Process.Start, so a grandchild spawned in that first instant escapes the job
     /// (shells take far longer to start). Upgrade is CREATE_SUSPENDED via CreateProcess.
     /// </remarks>
-    private static class WindowsJob
+    internal static class WindowsJob
     {
         public static nint TryAssign(Process process)
         {

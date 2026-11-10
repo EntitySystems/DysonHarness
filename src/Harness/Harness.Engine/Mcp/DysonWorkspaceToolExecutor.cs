@@ -3117,7 +3117,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 workDir.Value,
                 parsedTimeout.Value,
                 cancellationToken,
-                resolve.Value.FixedArgs)
+                resolve.Value.FixedArgs,
+                _workDirectoryId == Guid.Empty ? null : new DysonShellPromotion(_workDirectoryId, resolve.Value.Name))
             .ConfigureAwait(false);
         if (run.IsError)
             return Error(call, run.Error);
@@ -3131,6 +3132,13 @@ public sealed partial class DysonWorkspaceToolExecutor
         sb.Append(r.ExitCode);
         if (r.TimedOut)
             sb.Append(" timedOut=true");
+        if (r.PromotedShellId is int promotedId)
+        {
+            sb.Append(" promotedToLongRunningShell id=").Append(promotedId).Append(" (")
+                .Append(r.TimedOut ? "still running past timeoutMs" : "background process still running")
+                .Append("; use ReadLongRunningShellTail / WaitForLongRunningShellCompletion / AbortLongRunningShell with this id)");
+        }
+
         sb.AppendLine();
         if (!string.IsNullOrEmpty(r.Stdout))
         {
@@ -3157,9 +3165,9 @@ public sealed partial class DysonWorkspaceToolExecutor
         var planMode = string.Equals(_session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase);
         content = DysonMcpPipeline.PrefixPlanShellWarning(planMode, content);
 
-        return r.TimedOut || r.ExitCode != 0
-            ? Error(call, content)
-            : Ok(call, content);
+        // A promoted timeout is not a failure: the process lives on as a long-running shell.
+        var failed = r.TimedOut ? r.PromotedShellId is null : r.ExitCode != 0;
+        return failed ? Error(call, content) : Ok(call, content);
     }
 
     private async Task<DysonToolCallResult> StartLongRunningShellAsync(
