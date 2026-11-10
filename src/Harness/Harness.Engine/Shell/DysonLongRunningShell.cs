@@ -129,6 +129,17 @@ public sealed class DysonLongRunningShell : IDisposable
         finally
         {
             MarkExitedIfNeeded(aborted: false);
+
+            // Exit code is captured; release the handed-over job and process now (the registry never disposes shells).
+            nint job;
+            lock (_gate)
+            {
+                job = _job;
+                _job = 0;
+            }
+
+            DysonWindowsShell.WindowsJob.Close(job);
+            try { process.Dispose(); } catch { /* ignore */ }
         }
     }
 

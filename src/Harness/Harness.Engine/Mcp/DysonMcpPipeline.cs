@@ -1989,7 +1989,7 @@ public sealed class DysonMcpPipeline
                 "Each line is formatted as lineNumber|content (e.g. '42|    foo();'). " +
                 "When copying into WriteFile old_text/new_text, use only the content after the first '|' — never include the line-number prefix. " +
                 "Capped at 32KiB (~<20K tokens); larger slices error (IsError) with instruction to pass offset+limit or Grep first — file body is not returned. " +
-                "offset is 1-based; negative = tail (e.g. -80 = last 80 lines). Per-line clip is 8KiB. Binary/image files error — use LoadBinary.",
+                "offset is 1-based; negative = tail (e.g. -80 = last 80 lines). Per-line clip is 8KiB. Binary/image files error — use LoadBinary (PDFs: ConvertImage pages to PNG first).",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -2098,7 +2098,7 @@ public sealed class DysonMcpPipeline
                 "Matches each line independently. Optional path and filename glob. " +
                 "Text-only: never returns binary/image bytes. Skips .git/bin/obj/node_modules/.vs and similar. " +
                 "Binary/image hits are path-only lines (binary\\t… / image\\t…) when the relative path matches; " +
-                "use LoadBinary to inspect those files.",
+                "use LoadBinary to inspect those files (PDFs: ConvertImage pages to PNG first).",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -2148,7 +2148,8 @@ public sealed class DysonMcpPipeline
                 "Supports SVG input and ICO output; desiredFormat may match the input (same-format re-encode / compress). " +
                 "quality (1–100, default 85) is Magick Quality — primary knob for shrinking large JPEG/WebP. " +
                 "overwrite defaults false (fail if output exists). Soft input ceiling 50 MB (not LoadBinary’s 5 MB). " +
-                "Returns JSON ack only (inputFile, outputFile, desiredFormat, quality, byteLength, width, height, inputByteLength) — no BinaryAttachment; use LoadBinary on the result if vision is needed.",
+                "Returns JSON ack only (inputFile, outputFile, desiredFormat, quality, byteLength, width, height, inputByteLength; PDFs add pageCount, dpi, outputs[]) — no BinaryAttachment; use LoadBinary on the result if vision is needed. " +
+                "outputFile must stay inside the work directory and differ from inputFile.",
             InputSchemaJson = """
                 {
                   "type": "object",

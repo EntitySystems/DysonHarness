@@ -135,6 +135,9 @@ public sealed class DysonWindowsShell : DysonShell
                     return null;
 
                 promoted = true;
+                // The readers outlive this call; release their token once both pipes close.
+                _ = Task.WhenAll(stdoutTask, stderrTask).ContinueWith(
+                    _ => readersCts.Dispose(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
                 return Result<DysonShellRunResult, string>.AsValue(new DysonShellRunResult
                 {
                     ExitCode = timedOut ? -1 : process!.ExitCode,

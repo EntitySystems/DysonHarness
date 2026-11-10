@@ -186,6 +186,79 @@ public sealed class DysonPdfTests : IDisposable
     }
 
     [Fact]
+    public async Task ConvertImage_rejects_output_outside_work_root_or_onto_input()
+    {
+        using (var image = new ImageMagick.MagickImage(ImageMagick.MagickColors.Red, 8, 8))
+        {
+            image.Format = ImageMagick.MagickFormat.Png;
+            File.WriteAllBytes(Path.Combine(_root, "in.png"), image.ToByteArray());
+        }
+
+        File.WriteAllBytes(Path.Combine(_root, "doc.pdf"), TinyPdf());
+        var outside = Path.Combine(Path.GetTempPath(), "dyson-escape-" + Guid.NewGuid().ToString("N") + ".png");
+        try
+        {
+            foreach (var (input, output) in new[]
+                     {
+                         ("in.png", outside),
+                         ("doc.pdf", outside),
+                         ("in.png", "../" + Path.GetFileName(outside)),
+                         ("in.png", "..\\" + Path.GetFileName(outside)),
+                     })
+            {
+                var escaped = await CallAsync("ConvertImage", JsonSerializer.Serialize(new
+                {
+                    inputFile = input,
+                    outputFile = output,
+                    desiredFormat = "png",
+                    overwrite = true,
+                }));
+                Assert.True(escaped.IsError, $"{input} -> {output}: {escaped.Content}");
+                Assert.Contains("escapes work directory", escaped.Content, StringComparison.Ordinal);
+            }
+
+            Assert.False(File.Exists(outside));
+
+            var onto = await CallAsync(
+                "ConvertImage",
+                """{"inputFile":"doc.pdf","outputFile":"./doc.pdf","desiredFormat":"png","overwrite":true}""");
+            Assert.True(onto.IsError);
+            Assert.Contains("must differ from inputFile", onto.Content, StringComparison.Ordinal);
+            Assert.Equal(TinyPdf(), File.ReadAllBytes(Path.Combine(_root, "doc.pdf")));
+        }
+        finally
+        {
+            File.Delete(outside);
+        }
+    }
+
+    [Fact]
+    public async Task ReadFile_and_Grep_point_pdfs_at_ConvertImage()
+    {
+        File.WriteAllBytes(Path.Combine(_root, "doc.pdf"), TinyPdf());
+        var read = await CallAsync("ReadFile", """{"path":"doc.pdf"}""");
+        Assert.True(read.IsError);
+        Assert.StartsWith("ReadFile:", read.Content, StringComparison.Ordinal);
+        Assert.Contains("ConvertImage", read.Content, StringComparison.Ordinal);
+
+        var pipeline = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
+        Assert.Contains("ConvertImage", pipeline.Tools["ReadFile"].Description, StringComparison.Ordinal);
+        Assert.Contains("ConvertImage", pipeline.Tools["Grep"].Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Shell_promotion_is_off_in_read_only_modes()
+    {
+        var workDir = Guid.NewGuid();
+        foreach (var mode in new[] { DysonAgentModes.Ask, DysonAgentModes.Plan, DysonAgentModes.Explore, DysonAgentModes.BugReview, DysonAgentModes.SecurityReview })
+            Assert.Null(DysonWorkspaceToolExecutor.ShellPromotionFor(mode, workDir, "Shell"));
+
+        Assert.Null(DysonWorkspaceToolExecutor.ShellPromotionFor(DysonAgentModes.Work, Guid.Empty, "Shell"));
+        Assert.NotNull(DysonWorkspaceToolExecutor.ShellPromotionFor(DysonAgentModes.Work, workDir, "Shell"));
+        Assert.NotNull(DysonWorkspaceToolExecutor.ShellPromotionFor(DysonAgentModes.MetaAgentDrone, workDir, "Shell"));
+    }
+
+    [Fact]
     public void Catalog_mentions_pdf_handling()
     {
         var pipeline = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
