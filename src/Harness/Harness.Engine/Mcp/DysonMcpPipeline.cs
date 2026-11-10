@@ -19,6 +19,12 @@ public sealed class DysonMcpPipeline
         "Never execute programs (dotnet run, builds, installs, servers). " +
         "Prefer ReadFile / Grep / ListDirectory.";
 
+    /// <summary>ShellExecute timeout / held-pipe behavior (appended to the catalog description).</summary>
+    public const string ShellExecuteBackgroundGuidance =
+        " On timeout the whole process tree is killed. If the command exits while a background process it started " +
+        "(Start-Process, &, a server) still holds stdout/stderr, output is returned after a ~1s grace with a note " +
+        "instead of waiting. Use StartLongRunningShell for servers and anything that backgrounds.";
+
     public DysonMcpAccessMode AccessMode { get; }
     public Dictionary<string, DysonMcpTool> Tools { get; } = new(StringComparer.Ordinal);
     public DysonMcpAutoReviewProxy? AutoReviewProxy { get; }
@@ -134,7 +140,8 @@ public sealed class DysonMcpPipeline
             "You must pass shell as one of these. Prefer dedicated MCP file tools over shell when they fit.";
         description = AppendPythonNodeSnippetSentence(description, names);
         description +=
-            " timeoutMs (integer > 0) is required. stdout/stderr are captured up to 64KiB each; overflow is truncated (command may still run until timeout).";
+            " timeoutMs (integer > 0) is required. stdout/stderr are captured up to 64KiB each; overflow is truncated (command may still run until timeout)." +
+            ShellExecuteBackgroundGuidance;
         if (planMode)
             description += " " + PlanShellExecuteWarning;
 
@@ -157,7 +164,7 @@ public sealed class DysonMcpPipeline
                     },
                     "timeoutMs": {
                       "type": "integer",
-                      "description": "Mandatory max run time in milliseconds before the process is killed. Must be > 0 (executor rejects omitted/<= 0)."
+                      "description": "Mandatory max run time in milliseconds before the process and its whole process tree are killed. Must be > 0 (executor rejects omitted/<= 0)."
                     },
                     "workingDirectory": {
                       "type": "string",

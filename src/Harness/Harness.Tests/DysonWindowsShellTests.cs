@@ -257,6 +257,219 @@ public class DysonWindowsShellTests
         }
     }
 
+    // Held-pipe repros: a background grandchild inherits the shell's stdout and outlives it.
+    // Windows uses powershell.exe + Start-Process -NoNewWindow; elsewhere /bin/sh + `&`.
+    private const int HolderSeconds = 30;
+
+    private static string HeldPipeShell => OperatingSystem.IsWindows() ? "powershell.exe" : "/bin/sh";
+
+    /// <summary>Command fragment that starts a pipe-holding grandchild which writes its pid to gc.pid.</summary>
+    private static string StartHolder(string cwd)
+    {
+        if (!OperatingSystem.IsWindows())
+            return $"sleep {HolderSeconds} & echo $! > gc.pid";
+
+        File.WriteAllText(
+            Path.Combine(cwd, "gc.ps1"),
+            $"$pid | Set-Content -Path 'gc.pid' -Encoding ASCII; Start-Sleep -Seconds {HolderSeconds}");
+        return "Start-Process powershell.exe -NoNewWindow -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','gc.ps1'";
+    }
+
+    private static string Sleep(int seconds) =>
+        OperatingSystem.IsWindows() ? $"Start-Sleep -Seconds {seconds}" : $"sleep {seconds}";
+
+    private static string Echo(string text) => OperatingSystem.IsWindows() ? $"'{text}'" : $"echo {text}";
+
+    [Fact]
+    public async Task ExecuteWithPathAsync_BackgroundChildHoldsPipe_ReturnsAfterGraceWithNote()
+    {
+        var cwd = NewTempDir("dyson-shell-held");
+        try
+        {
+            var sw = Stopwatch.StartNew();
+            var result = await DysonWindowsShell.ExecuteWithPathAsync(
+                HeldPipeShell,
+                $"{StartHolder(cwd)}; {Echo("hello")}",
+                cwd,
+                timeoutMs: 120_000);
+            sw.Stop();
+
+            if (result.IsError)
+                throw new InvalidOperationException($"Expected success, got error: {result.Error}");
+            var run = result.Value;
+            if (sw.Elapsed > TimeSpan.FromSeconds(15))
+                throw new InvalidOperationException($"Held pipe blocked the call for {sw.Elapsed}.");
+            if (run.TimedOut || run.ExitCode != 0)
+                throw new InvalidOperationException($"Held pipe is not a failure: exit={run.ExitCode} timedOut={run.TimedOut}.");
+            if (!run.Stdout.Contains("hello", StringComparison.Ordinal))
+                throw new InvalidOperationException($"Captured output lost: '{run.Stdout}'.");
+            if (!run.Stderr.Contains(DysonWindowsShell.HeldPipeNote, StringComparison.Ordinal))
+                throw new InvalidOperationException($"Held-pipe note missing: '{run.Stderr}'.");
+
+            // Normal exit must not kill an intentionally detached child (job is only terminated on timeout/cancel).
+            var gcPid = await WaitForPidAsync(cwd);
+            if (OperatingSystem.IsWindows() && !IsOsProcessAlive(gcPid))
+                throw new InvalidOperationException("Detached child was killed on normal shell exit.");
+        }
+        finally
+        {
+            CleanupHolder(cwd);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteWithPathAsync_TimeoutWithOrphanHoldingPipe_ReturnsPromptlyAndKillsOrphan()
+    {
+        var cwd = NewTempDir("dyson-shell-timeout");
+        try
+        {
+            // The middle process starts the holder then exits, so the holder is an orphan the PID tree walk misses.
+            string orphan;
+            if (OperatingSystem.IsWindows())
+            {
+                File.WriteAllText(Path.Combine(cwd, "mid.ps1"), StartHolder(cwd));
+                orphan = "$p = Start-Process powershell.exe -NoNewWindow -PassThru -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','mid.ps1'; $p.WaitForExit()";
+            }
+            else
+            {
+                orphan = $"({StartHolder(cwd)})";
+            }
+
+            const int timeoutMs = 8_000;
+            var sw = Stopwatch.StartNew();
+            var result = await DysonWindowsShell.ExecuteWithPathAsync(
+                HeldPipeShell,
+                $"{orphan}; {Echo("started")}; {Sleep(HolderSeconds)}",
+                cwd,
+                timeoutMs);
+            sw.Stop();
+
+            if (result.IsError)
+                throw new InvalidOperationException($"Expected timed-out result, got error: {result.Error}");
+            if (!result.Value.TimedOut)
+                throw new InvalidOperationException("Expected TimedOut=true.");
+            if (sw.Elapsed > TimeSpan.FromMilliseconds(timeoutMs + 5_000))
+                throw new InvalidOperationException($"Timeout path took {sw.Elapsed}; the drain is unbounded.");
+            if (!result.Value.Stdout.Contains("started", StringComparison.Ordinal))
+                throw new InvalidOperationException($"Captured output lost on timeout: '{result.Value.Stdout}'.");
+
+            if (!OperatingSystem.IsWindows())
+                return; // No job object off Windows; the orphan is reparented to init.
+
+            var gcPid = await WaitForPidAsync(cwd);
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (IsOsProcessAlive(gcPid))
+            {
+                if (DateTime.UtcNow > deadline)
+                    throw new InvalidOperationException($"Orphan {gcPid} survived the timeout (job not terminated).");
+                await Task.Delay(50);
+            }
+        }
+        finally
+        {
+            CleanupHolder(cwd);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteWithPathAsync_UserCancelWithHeldPipe_ReturnsPromptly()
+    {
+        var cwd = NewTempDir("dyson-shell-cancel-held");
+        using var cts = new CancellationTokenSource();
+        try
+        {
+            var run = DysonWindowsShell.ExecuteWithPathAsync(
+                HeldPipeShell,
+                $"{StartHolder(cwd)}; {Echo("hello")}; {Sleep(HolderSeconds)}",
+                cwd,
+                timeoutMs: 120_000,
+                cts.Token);
+
+            await WaitForPidAsync(cwd);
+            var sw = Stopwatch.StartNew();
+            cts.Cancel();
+            var finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(10)));
+            sw.Stop();
+            if (finished != run)
+                throw new InvalidOperationException("Cancel with a held pipe did not return within 10s.");
+
+            var result = await run;
+            if (!result.IsError || result.Error != "Shell execution was cancelled.")
+                throw new InvalidOperationException($"Expected cancelled error, got IsError={result.IsError} Error={result.Error}.");
+        }
+        finally
+        {
+            CleanupHolder(cwd);
+        }
+    }
+
+    [Fact]
+    public void ShellExecuteDescription_CarriesTimeoutAndBackgroundGuidance()
+    {
+        var tool = DysonMcpPipeline.CreateShellExecuteTool(["Pwsh"])
+            ?? throw new InvalidOperationException("ShellExecute must exist.");
+        foreach (var phrase in new[] { "whole process tree is killed", "holds stdout/stderr", "StartLongRunningShell for servers" })
+        {
+            if (!tool.Description.Contains(phrase, StringComparison.Ordinal))
+                throw new InvalidOperationException($"ShellExecute description is missing '{phrase}'.");
+        }
+
+        if (!DysonWindowsShell.HeldPipeNote.Contains("StartLongRunningShell", StringComparison.Ordinal))
+            throw new InvalidOperationException("Held-pipe note must point at StartLongRunningShell.");
+    }
+
+    private static string NewTempDir(string prefix)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), prefix + "-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    private static async Task<int> WaitForPidAsync(string cwd)
+    {
+        var path = Path.Combine(cwd, "gc.pid");
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                if (File.Exists(path) && int.TryParse(File.ReadAllText(path).Trim(), out var pid) && pid > 0)
+                    return pid;
+            }
+            catch (IOException)
+            {
+                // Writer may still hold the file.
+            }
+
+            await Task.Delay(50);
+        }
+
+        throw new InvalidOperationException("Grandchild never wrote gc.pid.");
+    }
+
+    private static void CleanupHolder(string cwd)
+    {
+        try
+        {
+            var path = Path.Combine(cwd, "gc.pid");
+            if (File.Exists(path) && int.TryParse(File.ReadAllText(path).Trim(), out var pid) && IsOsProcessAlive(pid))
+                Process.GetProcessById(pid).Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // Best-effort test cleanup.
+        }
+
+        try
+        {
+            Directory.Delete(cwd, recursive: true);
+        }
+        catch
+        {
+            // ignore cleanup races
+        }
+    }
+
     private static bool IsOsProcessAlive(int processId)
     {
         try
