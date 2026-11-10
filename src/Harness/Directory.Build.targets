@@ -1,0 +1,9 @@
+<Project>
+  <!-- SkiaSharp.NativeAssets.Win32 (via PDFtoImage) ships an ~85 MB libSkiaSharp.pdb next to the native DLL.
+       Keep it out of every publish (zip / MSI / app bundle). -->
+  <Target Name="DysonExcludeNativeSkiaPdb" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Filename)%(Extension)' == 'libSkiaSharp.pdb'" />
+    </ItemGroup>
+  </Target>
+</Project>

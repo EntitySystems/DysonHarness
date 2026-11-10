@@ -1305,6 +1305,7 @@ public sealed class DysonMcpPipeline
                 "Do not WaitForSubagent on Drones. In Work (and Drone), any Explore you start is a blocker: WaitForSubagent on a later stage of the same turn before further parent work. In Plan, Wait only when that Explore blocks the next automatic turn. " +
                 "Optional todos seeds the child’s own session todo list. " +
                 "Optional contextFiles preloads work-relative files into the child’s first turn as File context (path visible as `[File: relative/path]` before contents). The caller is encouraged to share relevant files so the subagent does not need to load them manually. " +
+                "contextFiles images attach as images; PDFs are rejected (ConvertImage them and pass the PNG paths). " +
                 "Optional modelSlug picks a different model (slug or display alias; omit to inherit parent). " +
                 "Optional reasoningEffort overrides the child’s reasoning_effort (omit/null → chosen slug’s defaultEffort; when inheriting parent model, omit keeps the parent’s current effort). " +
                 "Cannot spawn a child whose agentMode is Plan (Plan is top-level only). A Plan parent may StartSubagent Explore. Explore parents cannot spawn. A classic Drone may spawn Explore only (not another Drone). A Meta Agent Drone may spawn Drone workers; they share its worktree and never merge. " +
@@ -1348,7 +1349,7 @@ public sealed class DysonMcpPipeline
                     },
                     "contextFiles": {
                       "type": "array",
-                      "description": "Optional work-relative file paths to preload into the child’s first turn as File context (`[File: path]` then contents). Encouraged: share relevant files so the subagent does not need to load them manually.",
+                      "description": "Optional work-relative file paths to preload into the child’s first turn as File context (`[File: path]` then contents). Images attach as images; PDFs are rejected (ConvertImage them and pass the PNG paths). Encouraged: share relevant files so the subagent does not need to load them manually.",
                       "items": { "type": "string", "description": "Work-relative or workspace file path." }
                     }
                   },
@@ -2121,7 +2122,8 @@ public sealed class DysonMcpPipeline
                 "Tool result Content is a short JSON ack (path, fileName, extension, mimeType, byteLength) — no base64. " +
                 "Bytes are attached with the original filename+extension for Completions/Responses multimodal parts. " +
                 "Images require FileStorage (presigned HTTPS URL); unconfigured returns file_storage_required. " +
-                "Use after Grep returns binary\\t / image\\t path lines. Max size 5 MB.",
+                "Use after Grep returns binary\\t / image\\t path lines. Max size 5 MB. " +
+                "PDFs are rejected: render pages with ConvertImage (pages, dpi) first, then LoadBinary the PNG(s).",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -2141,6 +2143,8 @@ public sealed class DysonMcpPipeline
             Name = "ConvertImage",
             Description =
                 "Convert or re-encode a work-directory image via Magick.NET and write the result to outputFile. " +
+                "PDF input renders pages (PDFium): pages (default '1', max 20 per call) at dpi (36–300, default 150, longest edge capped at 4096 px); " +
+                "one page writes outputFile, several write {stem}-p{N}{ext} next to it (ack lists outputs). Encrypted PDFs are rejected. " +
                 "Supports SVG input and ICO output; desiredFormat may match the input (same-format re-encode / compress). " +
                 "quality (1–100, default 85) is Magick Quality — primary knob for shrinking large JPEG/WebP. " +
                 "overwrite defaults false (fail if output exists). Soft input ceiling 50 MB (not LoadBinary’s 5 MB). " +
@@ -2151,7 +2155,7 @@ public sealed class DysonMcpPipeline
                   "properties": {
                     "inputFile": {
                       "type": "string",
-                      "description": "Work-directory-relative path to the source image (must exist)."
+                      "description": "Work-directory-relative path to the source image or PDF (must exist)."
                     },
                     "outputFile": {
                       "type": "string",
@@ -2168,6 +2172,14 @@ public sealed class DysonMcpPipeline
                     "overwrite": {
                       "type": "boolean",
                       "description": "If true, replace outputFile when it already exists. Default false."
+                    },
+                    "pages": {
+                      "type": "string",
+                      "description": "PDF only: 1-based pages, e.g. '1', '1-3', '2,5', 'all'; default '1'; max 20 per call. Several pages write {stem}-p{N}{ext}."
+                    },
+                    "dpi": {
+                      "type": "integer",
+                      "description": "PDF only: render resolution 36–300, default 150."
                     }
                   },
                   "required": ["inputFile", "outputFile", "desiredFormat"]

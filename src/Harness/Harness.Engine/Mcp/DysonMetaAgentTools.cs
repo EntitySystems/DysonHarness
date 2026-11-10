@@ -135,7 +135,7 @@ public static class DysonMetaAgentTools
             "context": { "type": "string", "description": "Optional extra context or constraints." },
             "contextFiles": {
               "type": "array",
-              "description": "Optional work-relative file paths preloaded onto the explore's first turn as File context.",
+              "description": "Optional work-relative file paths preloaded onto the explore's first turn as File context. Images attach as images; PDFs are rejected (have a drone ConvertImage them and pass the PNG paths).",
               "items": { "type": "string", "description": "Work-relative or workspace file path." }
             }
           },
@@ -339,7 +339,7 @@ public static class DysonMetaAgentTools
                     },
                     "contextFiles": {
                       "type": "array",
-                      "description": "Optional work-relative file paths preloaded onto the explore's first turn as File context.",
+                      "description": "Optional work-relative file paths preloaded onto the explore's first turn as File context. Images attach as images; PDFs are rejected (have a drone ConvertImage them and pass the PNG paths).",
                       "items": { "type": "string", "description": "Work-relative or workspace file path." }
                     }
                   },

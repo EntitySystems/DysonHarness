@@ -2689,6 +2689,12 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (!exists.Value)
             return Error(call, $"File not found: {path.Value}");
 
+        var head = await _fs.ReadFileHeadAsync(path.Value, DysonPdf.HeadBytes, cancellationToken).ConfigureAwait(false);
+        if (head.IsError)
+            return Error(call, head.Error);
+        if (DysonPdf.IsPdf(path.Value, head.Value))
+            return Error(call, LoadBinaryPdfRejection(path.Value));
+
         var length = await _fs.GetFileLengthAsync(path.Value, cancellationToken).ConfigureAwait(false);
         if (length.IsError)
             return Error(call, length.Error);
@@ -2768,6 +2774,17 @@ public sealed partial class DysonWorkspaceToolExecutor
             .ConfigureAwait(false);
     }
 
+    internal static string LoadBinaryPdfRejection(string path)
+    {
+        var rel = path.Replace('\\', '/');
+        var stem = Path.GetFileNameWithoutExtension(rel);
+        if (string.IsNullOrEmpty(stem))
+            stem = "page";
+        return $"LoadBinary: PDF files can't be loaded directly. Call ConvertImage with inputFile \"{rel}\", " +
+            $"outputFile \".dyson/temp/pdf/{stem}.png\", desiredFormat \"png\" and pages \"1\" " +
+            $"(or e.g. \"1-3\"; max {DysonPdf.MaxPagesPerCall} per call), then LoadBinary the resulting PNG(s).";
+    }
+
     /// <summary>
     /// Non-image attachments (dll etc.) pass through. Images require
     /// <see cref="DysonAgentSessionConfig.FileStorage"/> and a successful
@@ -2839,15 +2856,22 @@ public sealed partial class DysonWorkspaceToolExecutor
                 $"ConvertImage: file is {length.Value} bytes; max is {ConvertImageMaxBytes} bytes.");
         }
 
+        var bytes = await _fs.ReadAllBytesAsync(inputFile.Value, cancellationToken).ConfigureAwait(false);
+        if (bytes.IsError)
+            return Error(call, bytes.Error);
+
+        if (DysonPdf.IsPdf(inputFile.Value, bytes.Value.AsSpan(0, Math.Min(DysonPdf.HeadBytes, bytes.Value.Length))))
+        {
+            return await ConvertPdfAsync(
+                    call, doc.RootElement, inputFile.Value, outputFile.Value, desiredFormat.Value, quality, overwrite, bytes.Value, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         var outputExists = await _fs.FileExistsAsync(outputFile.Value, cancellationToken).ConfigureAwait(false);
         if (outputExists.IsError)
             return Error(call, outputExists.Error);
         if (outputExists.Value && !overwrite)
             return Error(call, $"File already exists: {outputFile.Value}");
-
-        var bytes = await _fs.ReadAllBytesAsync(inputFile.Value, cancellationToken).ConfigureAwait(false);
-        if (bytes.IsError)
-            return Error(call, bytes.Error);
 
         var extension = Path.GetExtension(
             Path.GetFileName(inputFile.Value.Replace('/', Path.DirectorySeparatorChar)));
@@ -2883,6 +2907,110 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Ok(call, JsonSerializer.Serialize(ack));
     }
 
+    /// <summary>
+    /// ConvertImage PDF branch: render <c>pages</c> at <c>dpi</c> via <see cref="DysonPdf"/>, re-encode to
+    /// desiredFormat, write one file per page (single page → outputFile; several → {stem}-p{N}{ext}).
+    /// Every target is overwrite-checked before anything is written.
+    /// </summary>
+    private async Task<DysonToolCallResult> ConvertPdfAsync(
+        DysonToolCall call,
+        JsonElement args,
+        string inputFile,
+        string outputFile,
+        string desiredFormat,
+        int quality,
+        bool overwrite,
+        byte[] pdf,
+        CancellationToken cancellationToken)
+    {
+        var format = DysonImageConvert.TryParseDesiredFormat(desiredFormat);
+        if (format.IsError)
+            return Error(call, $"ConvertImage: {format.Error}");
+
+        var dpi = GetInt(args, "dpi") ?? DysonPdf.DefaultDpi;
+        if (dpi is < DysonPdf.MinDpi or > DysonPdf.MaxDpi)
+            return Error(call, $"ConvertImage: dpi must be {DysonPdf.MinDpi}–{DysonPdf.MaxDpi} (got {dpi}).");
+
+        var pagesSpec = GetOptionalString(args, "pages")
+            ?? (args.TryGetProperty("pages", out var pagesProp) && pagesProp.ValueKind == JsonValueKind.Number
+                ? pagesProp.GetRawText()
+                : null);
+        var rendered = await Task.Run(() => DysonPdf.RenderPages(pdf, pagesSpec, dpi), cancellationToken)
+            .ConfigureAwait(false);
+        if (rendered.IsError)
+            return Error(call, $"ConvertImage: {rendered.Error}");
+
+        var pages = rendered.Value;
+        var outputRel = outputFile.Replace('\\', '/');
+        var slash = outputRel.LastIndexOf('/');
+        var dir = slash < 0 ? "" : outputRel[..(slash + 1)];
+        var name = outputRel[(slash + 1)..];
+        var ext = Path.GetExtension(name);
+        var stem = name[..^ext.Length];
+        var targets = pages.Count == 1
+            ? [outputFile]
+            : pages.Select(p => $"{dir}{stem}-p{p.Page}{ext}").ToArray();
+
+        foreach (var target in targets)
+        {
+            var exists = await _fs.FileExistsAsync(target, cancellationToken).ConfigureAwait(false);
+            if (exists.IsError)
+                return Error(call, exists.Error);
+            if (exists.Value && !overwrite)
+                return Error(call, $"File already exists: {target}");
+        }
+
+        var canonical = DysonImageConvert.CanonicalFormatId(desiredFormat);
+        var encoded = new List<(string Target, int Page, byte[] Bytes, int Width, int Height)>(pages.Count);
+        for (var i = 0; i < pages.Count; i++)
+        {
+            var page = pages[i];
+            if (canonical == "png")
+            {
+                encoded.Add((targets[i], page.Page, page.Png, page.Width, page.Height));
+                continue;
+            }
+
+            var converted = DysonImageConvert.Convert(page.Png, desiredFormat, quality, MagickFormat.Png);
+            if (converted.IsError)
+                return Error(call, $"ConvertImage: page {page.Page}: {converted.Error}");
+            encoded.Add((targets[i], page.Page, converted.Value.Bytes, converted.Value.Width, converted.Value.Height));
+        }
+
+        foreach (var item in encoded)
+        {
+            var written = await _fs.WriteAllBytesAsync(item.Target, item.Bytes, cancellationToken).ConfigureAwait(false);
+            if (written.IsError)
+                return Error(call, written.Error);
+            await RecordFileChangeAsync("ConvertImage", item.Target, null, null, DysonFileChangeKind.Binary, item.Bytes.Length, cancellationToken).ConfigureAwait(false);
+        }
+
+        var first = encoded[0];
+        var ack = new
+        {
+            inputFile = inputFile.Replace('\\', '/'),
+            outputFile = first.Target.Replace('\\', '/'),
+            pageCount = encoded.Count,
+            dpi,
+            desiredFormat = canonical,
+            quality,
+            byteLength = first.Bytes.Length,
+            width = first.Width,
+            height = first.Height,
+            inputByteLength = pdf.Length,
+            outputs = encoded.Select(e => new
+            {
+                outputFile = e.Target.Replace('\\', '/'),
+                page = e.Page,
+                width = e.Width,
+                height = e.Height,
+                byteLength = e.Bytes.Length,
+            }).ToArray(),
+        };
+
+        return Ok(call, JsonSerializer.Serialize(ack));
+    }
+
     private enum GrepFileKind
     {
         Text,
@@ -2904,7 +3032,6 @@ public sealed partial class DysonWorkspaceToolExecutor
             ".ico" => "image/x-icon",
             ".bmp" => "image/bmp",
             ".tif" or ".tiff" => "image/tiff",
-            ".pdf" => "application/pdf",
             ".svg" => "image/svg+xml",
             ".json" => "application/json",
             ".txt" => "text/plain",

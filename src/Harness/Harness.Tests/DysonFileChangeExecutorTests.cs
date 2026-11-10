@@ -162,6 +162,24 @@ public class DysonFileChangeExecutorTests
         Assert.Null(row.AddedText);
     }
 
+    [Fact]
+    public async Task ConvertImage_pdf_logs_one_row_per_page()
+    {
+        await using var fx = await Fixture.CreateAsync();
+        var session = fx.RootSession();
+        File.WriteAllBytes(Path.Combine(fx.Root, "doc.pdf"), DysonPdfTests.TinyPdf());
+
+        var result = await CallAsync(
+            await fx.Executor(session),
+            "ConvertImage",
+            """{"inputFile":"doc.pdf","outputFile":"doc.png","desiredFormat":"png","pages":"1-2","dpi":72}""");
+        Assert.False(result.IsError, result.Content);
+
+        var rows = (await fx.Changes.ListAsync(fx.RootId, null, 10)).Value;
+        Assert.Equal(["doc-p1.png", "doc-p2.png"], rows.Select(r => r.RelativePath).Order());
+        Assert.All(rows, r => Assert.Equal(DysonFileChangeKind.Binary, r.Kind));
+    }
+
     private static async Task<DysonFileChangedEvent> WaitForChange(DysonMessageBus bus, Guid rootId)
     {
         var done = new TaskCompletionSource<DysonFileChangedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
