@@ -3,6 +3,15 @@
 DysonHarness itself is licensed under AGPL-3.0 (see [LICENSE](LICENSE)). This file lists third-party
 code that is incorporated into, or derived for, DysonHarness under its own license.
 
+## PDF rendering (shipped in every build)
+
+ConvertImage renders PDF pages with these libraries; their native binaries ship next to the app.
+
+- PDFtoImage (https://github.com/sungaila/PDFtoImage): MIT License.
+- PDFium (https://pdfium.googlesource.com/pdfium/), prebuilt by bblanchon/pdfium-binaries
+  (`pdfium.dll` / `libpdfium.so` / `libpdfium.dylib`): BSD-3-Clause; the binary packages are Apache-2.0.
+- SkiaSharp (https://github.com/mono/SkiaSharp): MIT License; Skia (`libSkiaSharp`): BSD-3-Clause.
+
 ## Speech runtime (downloaded on demand, not redistributed)
 
 Settings → Voice downloads these from their public sources (`packaging/speech/manifest.json`) into the

@@ -3739,13 +3739,16 @@ public abstract class DysonAgentSession
     /// <summary>
     /// Preloads StartSubagent <paramref name="contextFiles"/> onto the child’s first turn as File context.
     /// Omitted or empty is a no-op. Fails before the caller persists the child.
+    /// Workspace images attach as user images (same path as composer images); PDFs are rejected
+    /// with ConvertImage advice; everything else loads as text via <see cref="DysonSkillLoader"/>.
     /// </summary>
-    protected static async Task<VoidResult<string>> AttachContextFilesToChildTurnAsync(
+    internal static async Task<VoidResult<string>> AttachContextFilesToChildTurnAsync(
         DysonAgentTurn turn,
         IReadOnlyList<string>? contextFiles,
         string? workDirectoryPath,
         DysonPluginContributionSet? pluginContributions,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? parentMode = null)
     {
         ArgumentNullException.ThrowIfNull(turn);
 
@@ -3766,6 +3769,13 @@ public abstract class DysonAgentSession
             if (string.IsNullOrWhiteSpace(raw))
                 return VoidResult<string>.AsError("contextFiles items must be non-empty paths.");
 
+            var binary = await TryAttachBinaryContextFileAsync(turn, raw, fsResult.Value, parentMode, cancellationToken)
+                .ConfigureAwait(false);
+            if (binary.IsError)
+                return VoidResult<string>.AsError(binary.Error);
+            if (binary.Value)
+                continue;
+
             var loaded = await DysonSkillLoader
                 .ResolveAndLoadAsync(
                     raw,
@@ -3781,6 +3791,56 @@ public abstract class DysonAgentSession
         }
 
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// True when <paramref name="raw"/> is a workspace image now on <see cref="DysonAgentTurn.UserImages"/>;
+    /// false when it is not a workspace file or not binary (caller loads it as text); error for PDFs.
+    /// </summary>
+    private static async Task<Result<bool, string>> TryAttachBinaryContextFileAsync(
+        DysonAgentTurn turn,
+        string raw,
+        IDysonWorkspaceFileSystem fs,
+        string? parentMode,
+        CancellationToken cancellationToken)
+    {
+        var exists = await fs.FileExistsAsync(raw, cancellationToken).ConfigureAwait(false);
+        if (exists.IsError || !exists.Value)
+            return Result<bool, string>.AsValue(false);
+
+        var head = await fs.ReadFileHeadAsync(raw, DysonPdf.HeadBytes, cancellationToken).ConfigureAwait(false);
+        if (head.IsError)
+            return Result<bool, string>.AsError(head.Error);
+
+        if (DysonPdf.IsPdf(raw, head.Value))
+        {
+            var hint = parentMode == DysonAgentModes.MetaAgent
+                ? " (Meta Agent: ask a drone to run ConvertImage first.)"
+                : "";
+            return Result<bool, string>.AsError(
+                $"contextFiles: \"{raw}\" is a PDF. PDFs can't be passed as context files. " +
+                $"Convert the pages you need with ConvertImage (pages, dpi) and pass the resulting PNG path(s) instead.{hint}");
+        }
+
+        if (!DysonComposerUploads.LooksLikeImage(null, raw))
+            return Result<bool, string>.AsValue(false);
+
+        var length = await fs.GetFileLengthAsync(raw, cancellationToken).ConfigureAwait(false);
+        if (length.IsError)
+            return Result<bool, string>.AsError(length.Error);
+        if (length.Value > DysonUserImageFactory.MaxRawBytes)
+            return Result<bool, string>.AsError($"contextFiles: image \"{raw}\" is too large (max 25 MB).");
+
+        var bytes = await fs.ReadAllBytesAsync(raw, cancellationToken).ConfigureAwait(false);
+        if (bytes.IsError)
+            return Result<bool, string>.AsError(bytes.Error);
+
+        var image = DysonUserImageFactory.CreateFromBytes(Path.GetFileName(raw.Replace('\\', '/')), bytes.Value);
+        if (image.IsError)
+            return Result<bool, string>.AsError($"contextFiles: \"{raw}\": {image.Error}");
+
+        turn.AddUserImage(image.Value);
+        return Result<bool, string>.AsValue(true);
     }
 
     protected static string TitleFromTask(string task)

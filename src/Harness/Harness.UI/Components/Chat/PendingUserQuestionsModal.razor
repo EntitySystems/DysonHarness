@@ -1,6 +1,7 @@
 @namespace Harness.UI.Components.Chat
 @using Microsoft.AspNetCore.Components.Web
 @using DysonHarness
+@using Harness.UI.Markdown
 @implements IDisposable
 @inject IDysonPendingUserQuestionRepository PendingQuestions
 @inject DysonUiHost Host
@@ -97,7 +98,7 @@
                                     <div class="pending-questions__title">@question.Question</div>
                                     @if (!string.IsNullOrWhiteSpace(question.Message))
                                     {
-                                        <div class="pending-questions__message">@question.Message</div>
+                                        <div class="pending-questions__message turn-block__body">@MarkdownRenderer.ToHtml(question.Message)</div>
                                     }
                                     @foreach (var choice in question.Choices)
                                     {
