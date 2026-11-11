@@ -13,6 +13,16 @@ public class SearchTests
     }
 
     [Fact]
+    public void Shared_fetch_client_sends_the_chrome_desktop_user_agent()
+    {
+        var sent = SearchHttp.Client.DefaultRequestHeaders.UserAgent.ToString();
+        Assert.Equal(SearchHttp.ChromeUserAgent, sent);
+        Assert.Matches(
+            @"^Mozilla/5\.0 \(Windows NT 10\.0; Win64; x64\) AppleWebKit/537\.36 \(KHTML, like Gecko\) Chrome/\d+\.0\.0\.0 Safari/537\.36$",
+            sent);
+    }
+
+    [Fact]
     public void RunSummarizerPolicyChecks()
     {
         var result = RunSummarizerPolicyChecksCore();
