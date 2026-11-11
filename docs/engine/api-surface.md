@@ -288,7 +288,7 @@ Default catalog includes `GenerateImage` only when `DysonAgentSessionConfig.Imag
 | `SearchOrchestrator` | `FreeSearchAsync` / `FreeSearchAdvancedAsync` / `SearchWithSynthesisAsync` |
 | `SearchEngines` | DuckDuckGo HTML (default first), Bing RSS, Wikipedia OpenSearch, optional Brave API; returns `Result` with HTTP/parse errors |
 | `SearchFetch` | `WebFetchAsync` (caller supplies `maxBytes`; download clamp 1KB–2MB, default **64KB** if null; model-facing `Content` still 64KB via `DysonToolResultLimits`), `FetchGithubReadmeAsync` |
-| `SearchHttp` | Shared `HttpClient` (`Api-User-Agent` = DysonHarness) + `ValidateUrl` SSRF guard |
+| `SearchHttp` | Shared `HttpClient` for every web fetch/search tool (WebFetch, FetchGithubReadme, FreeSearch / FreeSearchAdvanced / SearchWithSynthesis, LoadSkill http(s)): `User-Agent` = `ChromeUserAgent` (current stable Chrome desktop UA; bump the major with Chrome stable), `Api-User-Agent` = DysonHarness for Wikipedia + `ValidateUrl` SSRF guard |
 | `SearchAggregation` | Dedup, filter (keeps titled http(s) hits with short snippets), confidence 1–3 scoring, waterfall basket |
 | `DysonWebSearchSummarizer` / `DysonWebSearchSummarizerPrompt` | Tool-owned LLM summarize for web tools (`SummarizeAsync` + optional `summarizePrompt`; ≤10K tokens). Optional `recordUsage` runs once when the Completions reply includes usage; a missing usage object, including fallback text, writes nothing |
 | `SearchHit` / `SearchResponse` / `SearchOptions` / `WebFetchResult` | Search DTOs |
