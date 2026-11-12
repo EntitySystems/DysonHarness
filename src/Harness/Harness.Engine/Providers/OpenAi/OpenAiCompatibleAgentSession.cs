@@ -1584,8 +1584,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         IReadOnlyList<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> inFlight,
         CancellationToken cancellationToken)
     {
-        var storage = Config.FileStorage;
-        if (storage is null)
+        var resolved = await Config.ResolveFileStorageAsync(cancellationToken).ConfigureAwait(false);
+        if (resolved.IsError)
+        {
+            AppendLog($"File storage: {resolved.Error}");
+            return;
+        }
+
+        if (resolved.Value is not { } storage)
             return;
 
         foreach (var historyTurn in Turns)
