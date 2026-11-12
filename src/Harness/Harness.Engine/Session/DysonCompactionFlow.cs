@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace DysonHarness;
 
 /// <summary>
@@ -15,6 +17,16 @@ public static class DysonCompactionFlow
 
         Context passed the session limit mid-task. The harness is summarizing the session and will resume this task in a new turn.
         """;
+
+    /// <summary>Live-context percentage of the effective limit that queues the one-shot harness notice.</summary>
+    public const int ContextWarningPercent = 80;
+
+    /// <summary>Marker line of the 80% notice (<see cref="DysonReasoningSegmentKind.HarnessNotice"/>).</summary>
+    public const string ContextWarningMarker = "[Harness notice]";
+
+    /// <summary>Notice text; the limit uses invariant <c>N0</c> so it reads the same on every OS locale.</summary>
+    public static string FormatContextWarning(int limit) =>
+        $"{ContextWarningPercent}% of {limit.ToString("N0", CultureInfo.InvariantCulture)} tokens context limit, compaction will likely occur soon";
 
     /// <summary>The paused-task prefix shared by both summary instructions. Ends with a blank line.</summary>
     private const string SummaryInstructionPrefix = """

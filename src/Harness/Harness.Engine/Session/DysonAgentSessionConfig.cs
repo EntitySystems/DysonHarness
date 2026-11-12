@@ -109,12 +109,27 @@ public class DysonAgentSessionConfig
     public OpenAiCompatibleAgentProvider? ImageGenerationProvider { get; set; }
 
     /// <summary>
-    /// Optional S3-compatible image store (presigned HTTPS vision URLs).
-    /// Null ⇒ composer/tool image paths require a connect-bucket step.
-    /// Host-owned: the UI may assign the same instance onto live sessions after modal success.
-    /// Do not dispose from the session unless the host is tearing down the last user.
+    /// Optional pinned S3-compatible image store (tests / hosts without <see cref="AppSettings"/>).
+    /// Production hosts leave it null; image paths call <see cref="ResolveFileStorageAsync"/>, which reads
+    /// the saved <c>file_storage_s3</c> setting at call time. Do not dispose from the session.
     /// </summary>
     public DysonS3FileStorage? FileStorage { get; set; }
+
+    /// <summary>
+    /// File storage for this tool call: pinned <see cref="FileStorage"/>, else the current saved setting via
+    /// <see cref="DysonS3FileStorage.ResolveAsync"/>. Children share this config, so every session sees the
+    /// same answer. Value null means not configured; an error carries the real read/parse failure.
+    /// </summary>
+    public async Task<Result<DysonS3FileStorage?, string>> ResolveFileStorageAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (FileStorage is { } pinned)
+            return Result<DysonS3FileStorage?, string>.AsValue(pinned);
+        if (AppSettings is null)
+            return Result<DysonS3FileStorage?, string>.AsValue(null);
+
+        return await DysonS3FileStorage.ResolveAsync(AppSettings, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Settings default provider for Explore / Drone / Security Review / Bug Review / Meta Agent Drone;

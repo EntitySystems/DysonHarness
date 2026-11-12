@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Amazon;
 using Amazon.Runtime;
 using Amazon.S3;
@@ -33,6 +34,11 @@ public sealed class DysonS3FileStorage : IDisposable
 
     public const string NotConfiguredMessage =
         "File storage is not configured. Connect an S3-compatible bucket to send images. (file_storage_required)";
+
+    // ponytail: one client per distinct saved blob, never disposed (callers may still hold it). Cleared past
+    // MaxSharedClients and left to GC. Upgrade: ref-counted leases if subjects ever churn credentials fast.
+    private const int MaxSharedClients = 16;
+    private static readonly ConcurrentDictionary<string, DysonS3FileStorage> SharedByJson = new(StringComparer.Ordinal);
 
     private readonly AmazonS3Client _client;
     private readonly DysonS3Endpoint _endpoint;
@@ -164,6 +170,41 @@ public sealed class DysonS3FileStorage : IDisposable
             return Result<DysonS3FileStorage, string>.AsError(parsed.Error);
 
         return TryCreate(parsed.Value);
+    }
+
+    /// <summary>
+    /// Shared resolver for every image path (composer upload, LoadBinary, BrowserTakeScreenshot, vision rebuild).
+    /// Reads <c>file_storage_s3</c> now, so root, child and already-running sessions all see the current save.
+    /// Value null means not configured (callers return <see cref="NotConfiguredMessage"/>). A failed read or an
+    /// invalid saved blob is an error with the real reason, never "not configured".
+    /// </summary>
+    public static async Task<Result<DysonS3FileStorage?, string>> ResolveAsync(
+        IDysonSubjectSettingsRepository settings,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var setting = await settings
+            .GetSettingAsync(DysonAppSettingKeys.FileStorageS3, cancellationToken)
+            .ConfigureAwait(false);
+        if (setting.IsError)
+            return Result<DysonS3FileStorage?, string>.AsError($"File storage settings could not be read: {setting.Error}");
+        if (string.IsNullOrWhiteSpace(setting.Value))
+            return Result<DysonS3FileStorage?, string>.AsValue(null);
+
+        var json = setting.Value.Trim();
+        if (SharedByJson.TryGetValue(json, out var cached))
+            return Result<DysonS3FileStorage?, string>.AsValue(cached);
+
+        var created = TryCreateFromJson(json);
+        if (created.IsError)
+            return Result<DysonS3FileStorage?, string>.AsError($"File storage settings are invalid: {created.Error}");
+
+        if (SharedByJson.Count >= MaxSharedClients)
+            SharedByJson.Clear();
+        var shared = SharedByJson.GetOrAdd(json, created.Value);
+        if (!ReferenceEquals(shared, created.Value))
+            created.Value.Dispose();
+        return Result<DysonS3FileStorage?, string>.AsValue(shared);
     }
 
     /// <summary>

@@ -8,20 +8,22 @@ namespace DysonHarness;
 /// Ordered reasoning / interim-text / user-comment segment kinds for a turn's thinking history.
 /// JSON is numeric; append new values only. Thought and InterimText remain UI+DB-only.
 /// UserComment is re-emitted as user-role history via
-/// <see cref="DysonInjectedUserComments"/>.
+/// <see cref="DysonInjectedUserComments"/>. HarnessNotice (the 80% context notice) replays at
+/// its anchor like a comment but is dropped from excluded turns and summaries.
 /// </summary>
 public enum DysonReasoningSegmentKind
 {
     Thought = 0,
     InterimText = 1,
     UserComment = 2,
+    HarnessNotice = 3,
 }
 
 /// <summary>
 /// One entry in a turn's reasoning log. Thought and InterimText are UI + DB only
 /// (never injected into model transcripts). UserComment is persisted the same way
 /// and re-emitted as user-role history via <see cref="DysonInjectedUserComments"/>.
-/// <paramref name="DeliveredAfterToolCalls"/> (UserComment only): the turn's
+/// <paramref name="DeliveredAfterToolCalls"/> (UserComment / HarnessNotice): the turn's
 /// <see cref="DysonAgentTurn.ToolCalls"/> count when the comment was drained into the tool
 /// loop, i.e. the model first saw it after that many calls. Null = not yet delivered
 /// (or a legacy row); transcripts then emit it after the turn's tools.

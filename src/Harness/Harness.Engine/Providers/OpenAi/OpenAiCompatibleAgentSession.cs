@@ -884,6 +884,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 previousResponseId = DeliverPendingUserComments(turn, previousResponseId);
+                // A Responses delta hop only sends new outputs; a full rebuild carries the notice.
+                if (TryDeliverContextWarning(turn))
+                    previousResponseId = null;
 
                 async Task<Result<OpenAiModelReply, string>> ConsumeCurrentProviderRoundAsync()
                 {
@@ -1584,8 +1587,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         IReadOnlyList<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> inFlight,
         CancellationToken cancellationToken)
     {
-        var storage = Config.FileStorage;
-        if (storage is null)
+        var resolved = await Config.ResolveFileStorageAsync(cancellationToken).ConfigureAwait(false);
+        if (resolved.IsError)
+        {
+            AppendLog($"File storage: {resolved.Error}");
+            return;
+        }
+
+        if (resolved.Value is not { } storage)
             return;
 
         foreach (var historyTurn in Turns)
