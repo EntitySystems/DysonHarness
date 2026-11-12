@@ -884,6 +884,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 previousResponseId = DeliverPendingUserComments(turn, previousResponseId);
+                // A Responses delta hop only sends new outputs; a full rebuild carries the notice.
+                if (TryDeliverContextWarning(turn))
+                    previousResponseId = null;
 
                 async Task<Result<OpenAiModelReply, string>> ConsumeCurrentProviderRoundAsync()
                 {

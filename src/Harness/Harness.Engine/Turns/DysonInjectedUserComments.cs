@@ -29,6 +29,19 @@ public static class DysonInjectedUserComments
             .ToList();
     }
 
+    /// <summary>
+    /// Transcript replay set: non-empty UserComment and HarnessNotice segments in log order. Excluded
+    /// turns and summaries use <see cref="From"/>, so a notice is never carried past compaction.
+    /// </summary>
+    public static List<DysonReasoningSegment> FromTranscript(IEnumerable<DysonReasoningSegment> log)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        return log
+            .Where(s => s.Kind is DysonReasoningSegmentKind.UserComment or DysonReasoningSegmentKind.HarnessNotice
+                        && !string.IsNullOrWhiteSpace(s.Text))
+            .ToList();
+    }
+
     /// <summary>One comment as message text: marker line, blank line, verbatim text.</summary>
     public static string FormatMessage(string text) => FormatWithMarker(Marker, text);
 

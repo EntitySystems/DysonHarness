@@ -255,6 +255,11 @@
                                     </div>
                                     commentOrdinal++;
                                 }
+                                else if (segment.Kind == DysonReasoningSegmentKind.HarnessNotice
+                                         && !string.IsNullOrWhiteSpace(segment.Text))
+                                {
+                                    <div class="turn-block__harness-notice">@segment.Text</div>
+                                }
                             }
 
                             @if (liveStreaming)
