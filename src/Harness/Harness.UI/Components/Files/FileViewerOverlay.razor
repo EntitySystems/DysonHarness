@@ -1,4 +1,5 @@
 @namespace Harness.UI.Components.Files
+@using DysonHarness
 @using Harness.UI.Demo
 @using Harness.UI.Markdown
 @using Microsoft.AspNetCore.Components.Web
@@ -13,7 +14,7 @@
          @ref="_backdropEl"
          @onclick="() => { if (!ctx.IsExiting) Close(); }"
          @onkeydown="OnBackdropKeyDown">
-        <div class="file-viewer-modal @(viewer.IsPdf || viewer.IsTextPreview ? "file-viewer-modal--pdf" : viewer.IsImage ? "file-viewer-modal--image" : null)"
+        <div class="file-viewer-modal @(viewer.IsPdf || viewer.IsTextPreview || viewer.IsZip ? "file-viewer-modal--pdf" : viewer.IsImage ? "file-viewer-modal--image" : null)"
              role="dialog"
              aria-modal="true"
              aria-labelledby="file-viewer-modal-title"
@@ -84,6 +85,44 @@
                     {
                         <div class="file-viewer-modal__loading" aria-busy="true">
                             <span class="turn-block__spinner" aria-hidden="true"></span>
+                        </div>
+                    }
+                    else if (viewer.IsZip)
+                    {
+                        var zipRows = DysonZipArchives.ListFolder(viewer.ZipEntries, _zipFolder);
+                        <div class="file-viewer-zip">
+                            <div class="file-viewer-zip__crumbs mono">
+                                <button type="button" class="file-viewer-zip__crumb" disabled="@_zipBusy"
+                                        @onclick="@(() => _zipFolder = "")">@viewer.Title</button>
+                                @{ var crumbPath = ""; }
+                                @foreach (var segment in _zipFolder.Split('/', StringSplitOptions.RemoveEmptyEntries))
+                                {
+                                    crumbPath = crumbPath.Length == 0 ? segment : crumbPath + "/" + segment;
+                                    var target = crumbPath;
+                                    <span aria-hidden="true">/</span>
+                                    <button type="button" class="file-viewer-zip__crumb" disabled="@_zipBusy"
+                                            @onclick="@(() => _zipFolder = target)">@segment</button>
+                                }
+                            </div>
+                            @if (_zipFolder.Length > 0)
+                            {
+                                <button type="button" class="file-viewer-zip__row file-viewer-zip__up" disabled="@_zipBusy"
+                                        @onclick="@(() => _zipFolder = DysonZipArchives.ParentFolder(_zipFolder))">↑ Up</button>
+                            }
+                            @foreach (var entry in zipRows)
+                            {
+                                var row = entry;
+                                <button type="button" class="file-viewer-zip__row" disabled="@_zipBusy"
+                                        @onclick="@(() => OpenZipRowAsync(row))">
+                                    <span class="file-viewer-zip__name">@(row.IsDirectory ? row.Name + "/" : row.Name)</span>
+                                    <span class="file-viewer-zip__size mono">@(row.IsDirectory ? null : FormatZipSize(row.Length))</span>
+                                    <span class="file-viewer-zip__date mono">@(row.LastWriteTime?.LocalDateTime.ToString("yyyy-MM-dd HH:mm"))</span>
+                                </button>
+                            }
+                            @if (zipRows.Count == 0)
+                            {
+                                <div class="file-viewer-zip__empty">Empty folder</div>
+                            }
                         </div>
                     }
                     else if (viewer.IsPdf && !string.IsNullOrEmpty(viewer.PdfPreviewUrl))
@@ -216,6 +255,8 @@ else
     private bool _submitting;
     private bool _actionRunning;
     private DysonFileViewerAction? _runningAction;
+    private string _zipFolder = "";
+    private bool _zipBusy;
 
     private sealed class FileComment
     {
@@ -304,7 +345,39 @@ else
         _submitting = false;
         _actionRunning = false;
         _runningAction = null;
+        _zipFolder = "";
+        _zipBusy = false;
     }
+
+    private async Task OpenZipRowAsync(DysonZipEntry row)
+    {
+        if (_zipBusy)
+            return;
+
+        if (row.IsDirectory)
+        {
+            _zipFolder = row.FullName;
+            return;
+        }
+
+        _zipBusy = true;
+        try
+        {
+            await Host.OpenZipEntryAsync(row.FullName);
+        }
+        finally
+        {
+            _zipBusy = false;
+        }
+    }
+
+    private static string FormatZipSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        < 1024L * 1024 * 1024 => $"{bytes / 1048576.0:0.#} MB",
+        _ => $"{bytes / 1073741824.0:0.#} GB",
+    };
 
     private void Close()
     {

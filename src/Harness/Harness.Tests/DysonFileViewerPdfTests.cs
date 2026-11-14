@@ -148,6 +148,29 @@ public class DysonFileViewerPdfTests
             Assert.Null(host.FileViewer.Error);
             Assert.Empty(host.FileViewer.GitDiffAnnotations);
 
+            using (var zipStream = File.Create(Path.Combine(workRoot, "pack.zip")))
+            using (var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                var zipEntry = archive.CreateEntry("src/a.txt");
+                await using var entryStream = zipEntry.Open();
+                await entryStream.WriteAsync("hi"u8.ToArray());
+            }
+
+            await File.WriteAllTextAsync(Path.Combine(workRoot, "bad.zip"), "definitely not a zip");
+
+            await host.OpenFileViewerAsync("pack.zip", workRoot);
+            Assert.NotNull(host.FileViewer);
+            Assert.True(host.FileViewer.IsZip);
+            Assert.NotEmpty(host.FileViewer.ZipEntries);
+            Assert.Equal("", host.FileViewer.Content);
+            Assert.Null(host.FileViewer.Error);
+
+            await host.OpenFileViewerAsync("bad.zip", workRoot);
+            Assert.NotNull(host.FileViewer);
+            Assert.True(host.FileViewer.IsZip);
+            Assert.False(string.IsNullOrEmpty(host.FileViewer.Error));
+            Assert.Empty(host.FileViewer.ZipEntries);
+
             GitInit(workRoot);
             await File.WriteAllTextAsync(Path.Combine(workRoot, "untracked.txt"), "one\ntwo\n");
             await host.OpenFileViewerAsync("untracked.txt", workRoot);

@@ -38,6 +38,15 @@ public sealed class DysonFileViewerState
     /// <summary>Preview store token to revoke on close; null when not an audio preview.</summary>
     public string? AudioPreviewId { get; init; }
 
+    /// <summary>When true, the overlay renders <see cref="ZipEntries"/> as a folder listing.</summary>
+    public bool IsZip { get; init; }
+
+    /// <summary>Every file entry of the archive (flat, '/'-separated); empty when not a zip or unreadable.</summary>
+    public IReadOnlyList<DysonZipEntry> ZipEntries { get; init; } = [];
+
+    /// <summary>Work root the archive was opened under (so "Back" can reopen it); null when not a zip.</summary>
+    public string? ZipWorkRoot { get; init; }
+
     /// <summary>True while the host is preparing in-memory content off the circuit.</summary>
     public bool IsLoading { get; init; }
 

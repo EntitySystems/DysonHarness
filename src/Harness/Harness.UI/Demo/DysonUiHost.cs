@@ -2157,6 +2157,27 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (resolved.IsSuccess)
             absolutePath = resolved.Value;
 
+        if (DysonZipArchives.IsZipPath(path) && resolved.IsSuccess)
+        {
+            var zip = await DysonZipArchives.ReadEntriesAsync(resolved.Value, cancellationToken).ConfigureAwait(true);
+            SetFileViewer(new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = title,
+                Content = "",
+                IsMarkdown = false,
+                IsZip = true,
+                ZipWorkRoot = resolvedRoot,
+                ZipEntries = zip.IsSuccess ? zip.Value : [],
+                Error = zip.IsError ? zip.Error : null,
+                AbsolutePath = absolutePath,
+                CanOpenInDefaultEditor = absolutePath is not null,
+                MarkdownBlocks = [],
+                Actions = actionList,
+            });
+            return;
+        }
+
         if (audioContentType is not null)
         {
             // Stream from disk (range requests for seeking); ResolvePath already rejected paths outside the work root.
@@ -2642,6 +2663,47 @@ public sealed class DysonUiHost : IAsyncDisposable
             ImagePreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
             AbsolutePath = null,
         });
+    }
+
+    /// <summary>
+    /// Opens one entry of the zip currently shown in the file viewer: extracts it (cached) and routes it to the
+    /// viewer (with a Back action) or the OS default handler. Errors are reported; the listing stays open.
+    /// </summary>
+    public async Task OpenZipEntryAsync(string entryFullName, CancellationToken cancellationToken = default)
+    {
+        if (_fileViewer is not { IsZip: true, AbsolutePath: { } zipPath, ZipWorkRoot: { } zipRoot } zipViewer)
+            return;
+
+        var zipRel = zipViewer.RelativePath;
+        var extracted = await DysonZipArchives
+            .ExtractEntryAsync(zipPath, entryFullName, ct: cancellationToken)
+            .ConfigureAwait(true);
+        if (extracted.IsError)
+        {
+            ReportError(extracted.Error);
+            return;
+        }
+
+        var x = extracted.Value;
+        if (x.OpenInViewer)
+        {
+            await OpenFileViewerAsync(
+                x.RelativePath,
+                x.Root,
+                [
+                    new DysonFileViewerAction
+                    {
+                        Label = $"Back to {zipViewer.Title}",
+                        Invoke = () => OpenFileViewerAsync(zipRel, zipRoot),
+                    },
+                ],
+                cancellationToken).ConfigureAwait(true);
+            return;
+        }
+
+        var opened = await DysonOsLauncher.OpenFileAsync(x.AbsolutePath).ConfigureAwait(true);
+        if (opened.IsError)
+            ReportError(opened.Error);
     }
 
     private void SetFileViewer(DysonFileViewerState state, int? expectedEpoch = null)

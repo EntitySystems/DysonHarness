@@ -1,0 +1,88 @@
+.file-viewer-zip {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.file-viewer-zip__crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding-bottom: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.file-viewer-zip__crumb {
+    padding: 2px 6px;
+    font: inherit;
+    color: var(--text-muted);
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--ease),
+        background var(--motion-fast) var(--ease);
+}
+
+.file-viewer-zip__crumb:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--bg-hover);
+}
+
+.file-viewer-zip__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 90px 140px;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 6px 10px;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    color: var(--text);
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background var(--motion-fast) var(--ease);
+}
+
+.file-viewer-zip__row:hover:not(:disabled) {
+    background: var(--bg-2);
+}
+
+.file-viewer-zip__row:disabled,
+.file-viewer-zip__crumb:disabled {
+    cursor: progress;
+    opacity: 0.6;
+}
+
+.file-viewer-zip__up {
+    display: block;
+    color: var(--text-muted);
+}
+
+.file-viewer-zip__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-viewer-zip__size,
+.file-viewer-zip__date {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.file-viewer-zip__size {
+    text-align: right;
+}
+
+.file-viewer-zip__empty {
+    padding: 16px 10px;
+    font-size: 13px;
+    color: var(--text-dim);
+}
