@@ -160,6 +160,33 @@ public class DysonZipArchivesTests
     }
 
     [Fact]
+    public async Task Extract_opens_non_nfc_entry_names_as_listed()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var zipPath = Path.Combine(dir, "mac.zip");
+            var cacheRoot = Path.Combine(dir, "cache");
+            var nfdName = "re\u0301sume\u0301/cafe\u0301.txt"; // decomposed é, as macOS Archive Utility writes it
+            Assert.NotEqual(nfdName, nfdName.Normalize(NormalizationForm.FormC));
+            WriteZip(zipPath, (nfdName, Utf8("bonjour")));
+
+            var read = await DysonZipArchives.ReadEntriesAsync(zipPath);
+            Assert.True(read.IsSuccess, read.IsError ? read.Error : null);
+            var listed = Assert.Single(read.Value);
+
+            var extracted = await DysonZipArchives.ExtractEntryAsync(zipPath, listed.FullName, cacheRoot);
+            Assert.True(extracted.IsSuccess, extracted.IsError ? extracted.Error : null);
+            Assert.Equal("bonjour", await File.ReadAllTextAsync(extracted.Value.AbsolutePath));
+            Assert.StartsWith(Path.GetFullPath(cacheRoot) + Path.DirectorySeparatorChar, extracted.Value.AbsolutePath, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteQuietly(dir);
+        }
+    }
+
+    [Fact]
     public async Task ReadEntries_returns_error_for_corrupt_zip()
     {
         var dir = NewTempDir();

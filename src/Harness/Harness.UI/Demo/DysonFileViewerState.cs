@@ -47,6 +47,9 @@ public sealed class DysonFileViewerState
     /// <summary>Work root the archive was opened under (so "Back" can reopen it); null when not a zip.</summary>
     public string? ZipWorkRoot { get; init; }
 
+    /// <summary>Folder the zip listing opens at ("" = archive root; "Back" from an entry restores its folder).</summary>
+    public string ZipFolder { get; init; } = "";
+
     /// <summary>True while the host is preparing in-memory content off the circuit.</summary>
     public bool IsLoading { get; init; }
 

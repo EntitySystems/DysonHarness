@@ -2082,11 +2082,20 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// When <paramref name="workRoot"/> is set (e.g. FILES rail), uses that root;
     /// otherwise resolves from the focused session work directory.
     /// </summary>
-    public async Task OpenFileViewerAsync(
+    public Task OpenFileViewerAsync(
         string relativePath,
         string? workRoot,
         IReadOnlyList<DysonFileViewerAction>? actions,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        OpenFileViewerCoreAsync(relativePath, workRoot, actions, zipFolder: "", cancellationToken);
+
+    /// <param name="zipFolder">Folder a zip listing opens at ("" = archive root); ignored for non-zip paths.</param>
+    private async Task OpenFileViewerCoreAsync(
+        string relativePath,
+        string? workRoot,
+        IReadOnlyList<DysonFileViewerAction>? actions,
+        string zipFolder,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
 
@@ -2160,6 +2169,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (DysonZipArchives.IsZipPath(path) && resolved.IsSuccess)
         {
             var zip = await DysonZipArchives.ReadEntriesAsync(resolved.Value, cancellationToken).ConfigureAwait(true);
+            // New epoch: the overlay drops its folder state and starts at ZipFolder (root for any newly opened archive).
+            var zipEpoch = Interlocked.Increment(ref _fileViewerEpoch);
             SetFileViewer(new DysonFileViewerState
             {
                 RelativePath = path,
@@ -2168,13 +2179,14 @@ public sealed class DysonUiHost : IAsyncDisposable
                 IsMarkdown = false,
                 IsZip = true,
                 ZipWorkRoot = resolvedRoot,
+                ZipFolder = zipFolder,
                 ZipEntries = zip.IsSuccess ? zip.Value : [],
                 Error = zip.IsError ? zip.Error : null,
                 AbsolutePath = absolutePath,
                 CanOpenInDefaultEditor = absolutePath is not null,
                 MarkdownBlocks = [],
                 Actions = actionList,
-            });
+            }, zipEpoch);
             return;
         }
 
@@ -2675,6 +2687,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         var zipRel = zipViewer.RelativePath;
+        var zipActions = zipViewer.Actions;
+        var backFolder = DysonZipArchives.ParentFolder(entryFullName);
         var extracted = await DysonZipArchives
             .ExtractEntryAsync(zipPath, entryFullName, ct: cancellationToken)
             .ConfigureAwait(true);
@@ -2694,7 +2708,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     new DysonFileViewerAction
                     {
                         Label = $"Back to {zipViewer.Title}",
-                        Invoke = () => OpenFileViewerAsync(zipRel, zipRoot),
+                        Invoke = () => OpenFileViewerCoreAsync(zipRel, zipRoot, zipActions, backFolder, CancellationToken.None),
                     },
                 ],
                 cancellationToken).ConfigureAwait(true);

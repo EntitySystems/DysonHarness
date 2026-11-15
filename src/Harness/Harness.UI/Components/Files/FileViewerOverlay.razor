@@ -331,7 +331,10 @@ else
     private void OnFileViewerChanged(DysonFileViewerChangedEvent evt)
     {
         if (evt.Viewer is null || evt.Epoch != _boundEpoch)
+        {
             ClearViewerState();
+            _zipFolder = evt.Viewer?.ZipFolder ?? "";
+        }
         _boundEpoch = evt.Viewer is null ? -1 : evt.Epoch;
         _ = InvokeAsync(StateHasChanged);
     }

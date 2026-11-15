@@ -171,6 +171,64 @@ public class DysonFileViewerPdfTests
             Assert.False(string.IsNullOrEmpty(host.FileViewer.Error));
             Assert.Empty(host.FileViewer.ZipEntries);
 
+            // Nested zip opens at its own root on a fresh epoch; Back restores the entry's folder for every type.
+            byte[] innerBytes;
+            using (var innerStream = new MemoryStream())
+            {
+                using (var inner = new System.IO.Compression.ZipArchive(innerStream, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+                {
+                    await using var s = inner.CreateEntry("deep/x.txt").Open();
+                    await s.WriteAsync("x"u8.ToArray());
+                }
+                innerBytes = innerStream.ToArray();
+            }
+
+            using (var zipStream = File.Create(Path.Combine(workRoot, "outer.zip")))
+            using (var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                await using (var s = archive.CreateEntry("sub/inner.zip").Open())
+                    await s.WriteAsync(innerBytes);
+                await using (var s = archive.CreateEntry("sub/note.txt").Open())
+                    await s.WriteAsync("note"u8.ToArray());
+            }
+
+            var epochs = new List<int>();
+            using var epochSub = host.Bus.Subscribe<DysonFileViewerChangedEvent>(host.BusScopeKey, e => epochs.Add(e.Epoch)).Value;
+            var cacheDirs = new List<string>();
+            try
+            {
+                await host.OpenFileViewerAsync("outer.zip", workRoot);
+                Assert.Equal("", host.FileViewer!.ZipFolder);
+                var outerEpoch = epochs[^1];
+
+                await host.OpenZipEntryAsync("sub/inner.zip");
+                Assert.True(host.FileViewer!.IsZip);
+                Assert.Equal("inner.zip", host.FileViewer.RelativePath);
+                Assert.Equal("", host.FileViewer.ZipFolder);
+                Assert.NotEqual(outerEpoch, epochs[^1]);
+                cacheDirs.Add(host.FileViewer.ZipWorkRoot!);
+                Assert.Equal("Back to outer.zip", Assert.Single(host.FileViewer.Actions).Label);
+
+                await host.FileViewer.Actions[0].Invoke();
+                Assert.Equal("outer.zip", host.FileViewer!.RelativePath);
+                Assert.Equal("sub", host.FileViewer.ZipFolder);
+
+                await host.OpenZipEntryAsync("sub/note.txt");
+                Assert.Equal("note", host.FileViewer!.Content);
+                cacheDirs.Add(Path.GetDirectoryName(host.FileViewer.AbsolutePath!)!);
+                await host.FileViewer.Actions[0].Invoke();
+                Assert.True(host.FileViewer!.IsZip);
+                Assert.Equal("sub", host.FileViewer.ZipFolder);
+
+                await host.OpenFileViewerAsync("pack.zip", workRoot);
+                Assert.Equal("", host.FileViewer!.ZipFolder);
+            }
+            finally
+            {
+                foreach (var cacheDir in cacheDirs)
+                    try { Directory.Delete(cacheDir, recursive: true); } catch { /* best-effort */ }
+            }
+
             GitInit(workRoot);
             await File.WriteAllTextAsync(Path.Combine(workRoot, "untracked.txt"), "one\ntwo\n");
             await host.OpenFileViewerAsync("untracked.txt", workRoot);

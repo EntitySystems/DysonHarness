@@ -151,10 +151,13 @@ public static class DysonZipArchives
                 return Result<DysonZipExtracted, string>.AsError(unsafeMessage);
             var target = resolved.Value;
 
+            // Look up by the raw listing name (ReadEntries keeps it un-normalized, e.g. NFD from macOS);
+            // safe.Value (NFC) is only for the safety check and the on-disk leaf.
+            var lookupName = entryFullName.Replace('\\', '/');
             using var archive = ZipFile.OpenRead(archivePath);
             var entry = archive.Entries.FirstOrDefault(e =>
                 !e.FullName.EndsWith('/') && !e.FullName.EndsWith('\\') &&
-                string.Equals(e.FullName.Replace('\\', '/'), safe.Value, StringComparison.Ordinal));
+                string.Equals(e.FullName.Replace('\\', '/'), lookupName, StringComparison.Ordinal));
             if (entry is null)
                 return Result<DysonZipExtracted, string>.AsError($"Zip entry not found: '{entryFullName}'.");
             var tooLarge = Result<DysonZipExtracted, string>.AsError($"Entry is larger than {FormatLimit(maxEntryBytes)}.");
