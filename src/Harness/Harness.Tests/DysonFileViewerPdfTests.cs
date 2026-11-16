@@ -222,6 +222,39 @@ public class DysonFileViewerPdfTests
 
                 await host.OpenFileViewerAsync("pack.zip", workRoot);
                 Assert.Equal("", host.FileViewer!.ZipFolder);
+
+                // Executables never reach the launcher: a binary .exe is refused (error for the banner, listing stays);
+                // a text script opens read-only with no "Open in default editor".
+                using (var zipStream = File.Create(Path.Combine(workRoot, "tools.zip")))
+                using (var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    await using (var s = archive.CreateEntry("bin/evil.exe").Open())
+                        await s.WriteAsync(new byte[] { (byte)'M', (byte)'Z', 0, 0 });
+                    await using (var s = archive.CreateEntry("run.sh").Open())
+                        await s.WriteAsync("#!/bin/sh\necho hi\n"u8.ToArray());
+                }
+
+                await host.OpenFileViewerAsync("tools.zip", workRoot);
+                var toolsViewer = host.FileViewer;
+                var refused = await host.OpenZipEntryAsync("bin/evil.exe");
+                Assert.True(refused.IsError);
+                Assert.StartsWith("Refusing to open 'evil.exe'", refused.Error);
+                Assert.Same(toolsViewer, host.FileViewer);
+
+                var script = await host.OpenZipEntryAsync("run.sh");
+                Assert.True(script.IsSuccess);
+                Assert.Equal("#!/bin/sh\necho hi\n", host.FileViewer!.Content);
+                Assert.False(host.FileViewer.CanOpenInDefaultEditor);
+                Assert.Equal("Back to tools.zip", Assert.Single(host.FileViewer.Actions).Label);
+                cacheDirs.Add(Path.GetDirectoryName(host.FileViewer.AbsolutePath!)!);
+
+                // A late extraction must not resurrect a closed viewer or replace the file opened since.
+                await host.OpenFileViewerAsync("tools.zip", workRoot);
+                var late = host.OpenZipEntryAsync("run.sh");
+                host.CloseFileViewer();
+                await host.OpenFileViewerAsync("notes.txt", workRoot);
+                Assert.True((await late).IsSuccess);
+                Assert.Equal("notes.txt", host.FileViewer!.RelativePath);
             }
             finally
             {

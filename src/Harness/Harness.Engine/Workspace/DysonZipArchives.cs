@@ -7,8 +7,12 @@ namespace DysonHarness;
 /// <summary>One zip member. <see cref="FullName"/> is '/'-separated with no trailing slash.</summary>
 public sealed record DysonZipEntry(string FullName, string Name, bool IsDirectory, long Length, DateTimeOffset? LastWriteTime);
 
-/// <summary>A single entry extracted into the cache. <see cref="Root"/> + <see cref="RelativePath"/> feed the file viewer.</summary>
-public sealed record DysonZipExtracted(string Root, string RelativePath, string AbsolutePath, bool OpenInViewer);
+/// <summary>
+/// A single entry extracted into the cache. <see cref="Root"/> + <see cref="RelativePath"/> feed the file viewer.
+/// <see cref="CanLaunch"/> is false for executables/scripts (see <see cref="DysonZipArchives.IsLaunchBlocked"/>):
+/// the viewer shows them read-only and never offers the OS default handler.
+/// </summary>
+public sealed record DysonZipExtracted(string Root, string RelativePath, string AbsolutePath, bool OpenInViewer, bool CanLaunch);
 
 /// <summary>
 /// Read-only ZIP browsing for the file viewer: entry listing, folder walking, and cached
@@ -16,16 +20,51 @@ public sealed record DysonZipExtracted(string Root, string RelativePath, string 
 /// </summary>
 public static class DysonZipArchives
 {
-    public const long DefaultMaxEntryBytes = 512L * 1024 * 1024;
+    /// <summary>Cap for entries opened in the in-memory viewer (text, PDF, image, audio, nested zip).</summary>
+    public const long MaxViewerEntryBytes = 64L * 1024 * 1024;
+
+    /// <summary>Cap for entries handed to the OS default handler.</summary>
+    public const long MaxLauncherEntryBytes = 512L * 1024 * 1024;
+
+    /// <summary><see cref="ReadEntriesAsync"/> refuses archives with more entries than this.</summary>
+    public const int MaxEntries = 100_000;
 
     private const int MaxEntryDepth = 64;
     private const int CopyBufferSize = 64 * 1024;
     private const int SniffBytes = 8 * 1024;
+    private const int UnixExecBits = 0b001_001_001; // --x--x--x in the zip's Unix mode (external attributes >> 16)
+    private const UnixFileMode ExecModes = UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
 
-    public static string DefaultCacheRoot => Path.Combine(Path.GetTempPath(), "dyson-zip-cache");
+    // ShellExecute / open / xdg-open would run these, so they never reach the OS launcher.
+    private static readonly HashSet<string> LaunchBlockedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".msi", ".msix", ".appx", ".scr", ".bat", ".cmd", ".com", ".pif", ".cpl", ".ps1", ".psm1",
+        ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".lnk", ".url", ".jar", ".dll", ".sys", ".reg",
+        ".inf", ".scf", ".msc", ".application", ".gadget", ".sh", ".command", ".desktop", ".app", ".run", ".bin",
+    };
+
+    /// <summary>Per-user cache (<c>LocalApplicationData/DysonHarness/zip-cache</c>); OS temp only when that folder is unknown.</summary>
+    public static string DefaultCacheRoot
+    {
+        get
+        {
+            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            return string.IsNullOrEmpty(local)
+                ? Path.Combine(Path.GetTempPath(), "dyson-zip-cache")
+                : Path.Combine(local, "DysonHarness", "zip-cache");
+        }
+    }
 
     public static bool IsZipPath(string? path) =>
         string.Equals(Path.GetExtension(path), ".zip", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when an entry must never reach the OS launcher: an executable/script extension (case-insensitive,
+    /// trailing dots/spaces ignored as Windows does) or a Unix exec bit in the zip's external attributes.
+    /// </summary>
+    public static bool IsLaunchBlocked(string entryName, int externalAttributes = 0) =>
+        LaunchBlockedExtensions.Contains(Path.GetExtension(entryName.TrimEnd('.', ' ')))
+        || ((externalAttributes >> 16) & UnixExecBits) != 0;
 
     /// <summary>
     /// Lists file entries plus explicit directory entries (so empty folders show). Entries whose
@@ -81,13 +120,15 @@ public static class DysonZipArchives
 
     /// <summary>
     /// Extracts ONE entry into <c>{cacheRoot}/{key}/{leaf}</c>; key = SHA256(archive path|mtime|length|entry).
-    /// Re-opening an unchanged archive entry is a cache hit (no write).
+    /// Re-opening an unchanged archive entry is a cache hit (no write). The route is decided before anything is
+    /// written: launcher-bound entries that <see cref="IsLaunchBlocked"/> are refused. Cap: <paramref name="maxEntryBytes"/>,
+    /// else <see cref="MaxViewerEntryBytes"/> / <see cref="MaxLauncherEntryBytes"/> by route. Windows: Mark-of-the-Web.
     /// </summary>
     public static Task<Result<DysonZipExtracted, string>> ExtractEntryAsync(
         string archivePath,
         string entryFullName,
         string? cacheRoot = null,
-        long maxEntryBytes = DefaultMaxEntryBytes,
+        long? maxEntryBytes = null,
         CancellationToken ct = default) =>
         Task.Run(() => ExtractEntry(archivePath, entryFullName, cacheRoot ?? DefaultCacheRoot, maxEntryBytes, ct), ct);
 
@@ -96,6 +137,9 @@ public static class DysonZipArchives
         try
         {
             using var archive = ZipFile.OpenRead(archivePath);
+            if (archive.Entries.Count > MaxEntries)
+                return Result<IReadOnlyList<DysonZipEntry>, string>.AsError(
+                    $"Archive has more than {MaxEntries:N0} entries; too many to list.");
             var list = new List<DysonZipEntry>(archive.Entries.Count);
             foreach (var entry in archive.Entries)
             {
@@ -117,7 +161,8 @@ public static class DysonZipArchives
 
             return Result<IReadOnlyList<DysonZipEntry>, string>.AsValue(list);
         }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException
+                                       or NotSupportedException or ArgumentException)
         {
             return Result<IReadOnlyList<DysonZipEntry>, string>.AsError($"Not a valid ZIP archive: {ex.Message}");
         }
@@ -127,7 +172,7 @@ public static class DysonZipArchives
         string archivePath,
         string entryFullName,
         string cacheRoot,
-        long maxEntryBytes,
+        long? maxEntryBytes,
         CancellationToken ct)
     {
         var unsafeMessage = $"Unsafe zip entry path: '{entryFullName}'.";
@@ -160,13 +205,25 @@ public static class DysonZipArchives
                 string.Equals(e.FullName.Replace('\\', '/'), lookupName, StringComparison.Ordinal));
             if (entry is null)
                 return Result<DysonZipExtracted, string>.AsError($"Zip entry not found: '{entryFullName}'.");
-            var tooLarge = Result<DysonZipExtracted, string>.AsError($"Entry is larger than {FormatLimit(maxEntryBytes)}.");
-            if (entry.Length > maxEntryBytes)
+
+            // Route before anything is written: viewer types by name, else text when the first 8 KiB has no NUL.
+            var openInViewer = IsViewerTypeByName(leaf) || !LooksBinary(entry);
+            var canLaunch = !IsLaunchBlocked(entryFullName, entry.ExternalAttributes);
+            var refused = Result<DysonZipExtracted, string>.AsError(
+                $"Refusing to open '{leaf}': executable and script files from archives are blocked.");
+            if (!openInViewer && !canLaunch)
+                return refused;
+
+            var cap = maxEntryBytes ?? (openInViewer ? MaxViewerEntryBytes : MaxLauncherEntryBytes);
+            var tooLarge = Result<DysonZipExtracted, string>.AsError(
+                $"'{leaf}' is larger than the {FormatLimit(cap)} limit for {(openInViewer ? "the viewer" : "the default app")}.");
+            if (entry.Length > cap)
                 return tooLarge;
 
-            var hit = File.Exists(target) && new FileInfo(target).Length == entry.Length;
-            if (!hit)
+            if (!IsCachedCopy(target, entry.Length))
             {
+                if (!OperatingSystem.IsWindows())
+                    Directory.CreateDirectory(cacheRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
                 Directory.CreateDirectory(cacheDir);
                 tmp = $"{target}.{Guid.NewGuid():N}.tmp";
                 using (var input = entry.Open())
@@ -179,20 +236,34 @@ public static class DysonZipArchives
                     {
                         ct.ThrowIfCancellationRequested();
                         copied += read;
-                        if (copied > maxEntryBytes)
+                        if (copied > cap)
                             return tooLarge; // finally deletes tmp
                         output.Write(buffer, 0, read);
                     }
                 }
 
-                File.Move(tmp, target, overwrite: true);
-                tmp = null;
+                try
+                {
+                    File.Move(tmp, target, overwrite: true);
+                    tmp = null;
+                }
+                catch (IOException) when (IsCachedCopy(target, entry.Length))
+                {
+                    // Another reader holds the cached copy open; it is this same entry, so use it (finally drops tmp).
+                }
             }
 
+            if (canLaunch && !OperatingSystem.IsWindows() && (File.GetUnixFileMode(target) & ExecModes) != 0)
+                canLaunch = false;
+            if (!openInViewer && !canLaunch)
+                return refused;
+
+            WriteMarkOfTheWeb(target);
             return Result<DysonZipExtracted, string>.AsValue(
-                new DysonZipExtracted(cacheDir, leaf, target, ShouldOpenInViewer(target)));
+                new DysonZipExtracted(cacheDir, leaf, target, openInViewer, canLaunch));
         }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException
+                                       or NotSupportedException or ArgumentException)
         {
             return Result<DysonZipExtracted, string>.AsError($"Failed to extract '{entryFullName}': {ex.Message}");
         }
@@ -210,22 +281,44 @@ public static class DysonZipArchives
     private static Result<string, string> ValidateEntryPath(string path) =>
         DysonPluginPackageSecurity.ValidateRelativePath(path, MaxEntryDepth);
 
-    private static bool ShouldOpenInViewer(string path)
-    {
-        if (IsZipPath(path)
-            || string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase)
-            || DysonComposerUploads.LooksLikeImage(null, path)
-            || DysonAudioFiles.IsAudioPath(path))
-            return true;
+    private static bool IsViewerTypeByName(string path) =>
+        IsZipPath(path)
+        || string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase)
+        || DysonComposerUploads.LooksLikeImage(null, path)
+        || DysonAudioFiles.IsAudioPath(path);
 
-        using var stream = File.OpenRead(path);
+    private static bool LooksBinary(ZipArchiveEntry entry)
+    {
+        using var stream = entry.Open();
         var buffer = new byte[SniffBytes];
-        var read = stream.Read(buffer, 0, buffer.Length);
-        return buffer.AsSpan(0, read).IndexOf((byte)0) < 0;
+        var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
+        return buffer.AsSpan(0, read).IndexOf((byte)0) >= 0;
+    }
+
+    // A symlink planted at the target is a miss, so it gets replaced by a real extracted file.
+    private static bool IsCachedCopy(string path, long length)
+    {
+        var info = new FileInfo(path);
+        return info.Exists && info.LinkTarget is null && info.Length == length;
+    }
+
+    // Best-effort Mark-of-the-Web (Internet zone) so SmartScreen and Office Protected View apply to the copy.
+    private static void WriteMarkOfTheWeb(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        try
+        {
+            File.WriteAllText(path + ":Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3\r\n");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            // Non-NTFS volume or locked file: open anyway.
+        }
     }
 
     private static string FormatLimit(long bytes) =>
         bytes >= 1024 * 1024 ? $"{bytes / (1024 * 1024)} MiB" : $"{bytes} bytes";
 
-    // ponytail: no cache eviction; stale key dirs stay in OS temp. Upgrade: prune dirs older than N days on first use.
+    // ponytail: no cache eviction; stale key dirs stay in the cache root. Upgrade: prune dirs older than N days on first use.
 }

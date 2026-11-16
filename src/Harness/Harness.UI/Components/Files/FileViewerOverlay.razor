@@ -89,8 +89,12 @@
                     }
                     else if (viewer.IsZip)
                     {
-                        var zipRows = DysonZipArchives.ListFolder(viewer.ZipEntries, _zipFolder);
+                        var zipRows = ZipRows(viewer.ZipEntries);
                         <div class="file-viewer-zip">
+                            @if (_zipError is not null)
+                            {
+                                <div class="error-banner">@_zipError</div>
+                            }
                             <div class="file-viewer-zip__crumbs mono">
                                 <button type="button" class="file-viewer-zip__crumb" disabled="@_zipBusy"
                                         @onclick="@(() => _zipFolder = "")">@viewer.Title</button>
@@ -109,7 +113,7 @@
                                 <button type="button" class="file-viewer-zip__row file-viewer-zip__up" disabled="@_zipBusy"
                                         @onclick="@(() => _zipFolder = DysonZipArchives.ParentFolder(_zipFolder))">↑ Up</button>
                             }
-                            @foreach (var entry in zipRows)
+                            @foreach (var entry in zipRows.Take(MaxZipRows))
                             {
                                 var row = entry;
                                 <button type="button" class="file-viewer-zip__row" disabled="@_zipBusy"
@@ -122,6 +126,10 @@
                             @if (zipRows.Count == 0)
                             {
                                 <div class="file-viewer-zip__empty">Empty folder</div>
+                            }
+                            else if (zipRows.Count > MaxZipRows)
+                            {
+                                <div class="file-viewer-zip__empty">@((zipRows.Count - MaxZipRows).ToString("N0")) more…</div>
                             }
                         </div>
                     }
@@ -255,8 +263,13 @@ else
     private bool _submitting;
     private bool _actionRunning;
     private DysonFileViewerAction? _runningAction;
+    private const int MaxZipRows = 2_000;
     private string _zipFolder = "";
     private bool _zipBusy;
+    private string? _zipError;
+    private IReadOnlyList<DysonZipEntry>? _zipRowsSource;
+    private string? _zipRowsFolder;
+    private IReadOnlyList<DysonZipEntry> _zipRows = [];
 
     private sealed class FileComment
     {
@@ -350,6 +363,20 @@ else
         _runningAction = null;
         _zipFolder = "";
         _zipBusy = false;
+        _zipError = null;
+    }
+
+    // Walks the folder only when the archive entries or the folder change, not on every render.
+    private IReadOnlyList<DysonZipEntry> ZipRows(IReadOnlyList<DysonZipEntry> entries)
+    {
+        if (!ReferenceEquals(entries, _zipRowsSource) || _zipRowsFolder != _zipFolder)
+        {
+            _zipRows = DysonZipArchives.ListFolder(entries, _zipFolder);
+            _zipRowsSource = entries;
+            _zipRowsFolder = _zipFolder;
+        }
+
+        return _zipRows;
     }
 
     private async Task OpenZipRowAsync(DysonZipEntry row)
@@ -357,6 +384,7 @@ else
         if (_zipBusy)
             return;
 
+        _zipError = null;
         if (row.IsDirectory)
         {
             _zipFolder = row.FullName;
@@ -366,7 +394,9 @@ else
         _zipBusy = true;
         try
         {
-            await Host.OpenZipEntryAsync(row.FullName);
+            var opened = await Host.OpenZipEntryAsync(row.FullName);
+            if (opened.IsError)
+                _zipError = opened.Error;
         }
         finally
         {

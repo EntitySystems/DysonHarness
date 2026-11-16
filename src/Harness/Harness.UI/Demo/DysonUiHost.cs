@@ -2087,14 +2087,16 @@ public sealed class DysonUiHost : IAsyncDisposable
         string? workRoot,
         IReadOnlyList<DysonFileViewerAction>? actions,
         CancellationToken cancellationToken = default) =>
-        OpenFileViewerCoreAsync(relativePath, workRoot, actions, zipFolder: "", cancellationToken);
+        OpenFileViewerCoreAsync(relativePath, workRoot, actions, zipFolder: "", launchable: true, cancellationToken);
 
     /// <param name="zipFolder">Folder a zip listing opens at ("" = archive root); ignored for non-zip paths.</param>
+    /// <param name="launchable">False hides "Open in default editor" (zip entries that are executables/scripts).</param>
     private async Task OpenFileViewerCoreAsync(
         string relativePath,
         string? workRoot,
         IReadOnlyList<DysonFileViewerAction>? actions,
         string zipFolder,
+        bool launchable,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
@@ -2183,7 +2185,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 ZipEntries = zip.IsSuccess ? zip.Value : [],
                 Error = zip.IsError ? zip.Error : null,
                 AbsolutePath = absolutePath,
-                CanOpenInDefaultEditor = absolutePath is not null,
+                CanOpenInDefaultEditor = launchable && absolutePath is not null,
                 MarkdownBlocks = [],
                 Actions = actionList,
             }, zipEpoch);
@@ -2225,7 +2227,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 AudioPreviewId = previewId,
                 AudioPreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
                 AbsolutePath = absolutePath,
-                CanOpenInDefaultEditor = true,
+                CanOpenInDefaultEditor = launchable,
                 MarkdownBlocks = [],
                 Actions = actionList,
             });
@@ -2283,7 +2285,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 PdfPreviewId = previewId,
                 PdfPreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
                 AbsolutePath = absolutePath,
-                CanOpenInDefaultEditor = absolutePath is not null,
+                CanOpenInDefaultEditor = launchable && absolutePath is not null,
                 MarkdownBlocks = [],
                 Actions = actionList,
             });
@@ -2323,7 +2325,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 ImagePreviewId = previewId,
                 ImagePreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
                 AbsolutePath = absolutePath,
-                CanOpenInDefaultEditor = absolutePath is not null,
+                CanOpenInDefaultEditor = launchable && absolutePath is not null,
                 MarkdownBlocks = [],
                 Actions = actionList,
             });
@@ -2369,7 +2371,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             Content = read.Value,
             IsMarkdown = isMd,
             AbsolutePath = absolutePath,
-            CanOpenInDefaultEditor = absolutePath is not null,
+            CanOpenInDefaultEditor = launchable && absolutePath is not null,
             MarkdownBlocks = markdownBlocks,
             Actions = actionList,
             GitDiffAnnotations = annotations,
@@ -2679,45 +2681,47 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     /// <summary>
     /// Opens one entry of the zip currently shown in the file viewer: extracts it (cached) and routes it to the
-    /// viewer (with a Back action) or the OS default handler. Errors are reported; the listing stays open.
+    /// viewer (with a Back action) or the OS default handler. Errors (including refused executables) are returned
+    /// for the listing's error banner; the listing stays open. A viewer closed or replaced mid-extract is left alone.
     /// </summary>
-    public async Task OpenZipEntryAsync(string entryFullName, CancellationToken cancellationToken = default)
+    public async Task<VoidResult<string>> OpenZipEntryAsync(string entryFullName, CancellationToken cancellationToken = default)
     {
         if (_fileViewer is not { IsZip: true, AbsolutePath: { } zipPath, ZipWorkRoot: { } zipRoot } zipViewer)
-            return;
+            return VoidResult<string>.Success;
 
+        var epoch = Volatile.Read(ref _fileViewerEpoch);
         var zipRel = zipViewer.RelativePath;
         var zipActions = zipViewer.Actions;
         var backFolder = DysonZipArchives.ParentFolder(entryFullName);
         var extracted = await DysonZipArchives
             .ExtractEntryAsync(zipPath, entryFullName, ct: cancellationToken)
             .ConfigureAwait(true);
+        if (_disposed || epoch != Volatile.Read(ref _fileViewerEpoch) || !ReferenceEquals(_fileViewer, zipViewer))
+            return VoidResult<string>.Success;
         if (extracted.IsError)
-        {
-            ReportError(extracted.Error);
-            return;
-        }
+            return VoidResult<string>.AsError(extracted.Error);
 
         var x = extracted.Value;
         if (x.OpenInViewer)
         {
-            await OpenFileViewerAsync(
+            await OpenFileViewerCoreAsync(
                 x.RelativePath,
                 x.Root,
                 [
                     new DysonFileViewerAction
                     {
                         Label = $"Back to {zipViewer.Title}",
-                        Invoke = () => OpenFileViewerCoreAsync(zipRel, zipRoot, zipActions, backFolder, CancellationToken.None),
+                        Invoke = () => OpenFileViewerCoreAsync(zipRel, zipRoot, zipActions, backFolder, launchable: true, CancellationToken.None),
                     },
                 ],
+                zipFolder: "",
+                launchable: x.CanLaunch,
                 cancellationToken).ConfigureAwait(true);
-            return;
+            return VoidResult<string>.Success;
         }
 
-        var opened = await DysonOsLauncher.OpenFileAsync(x.AbsolutePath).ConfigureAwait(true);
-        if (opened.IsError)
-            ReportError(opened.Error);
+        // The engine refuses launch-blocked entries; only launchable binaries reach the OS handler.
+        return await DysonOsLauncher.OpenFileAsync(x.AbsolutePath).ConfigureAwait(true);
     }
 
     private void SetFileViewer(DysonFileViewerState state, int? expectedEpoch = null)

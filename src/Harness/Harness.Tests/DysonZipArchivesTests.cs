@@ -9,14 +9,18 @@ public class DysonZipArchivesTests
     private static string NewTempDir() =>
         Path.Combine(Path.GetTempPath(), $"dyson-zip-test-{Guid.NewGuid():N}");
 
-    private static void WriteZip(string path, params (string Name, byte[] Data)[] entries)
+    private static void WriteZip(string path, params (string Name, byte[] Data)[] entries) =>
+        WriteZip(path, [.. entries.Select(e => (e.Name, e.Data, 0))]);
+
+    private static void WriteZip(string path, params (string Name, byte[] Data, int ExternalAttributes)[] entries)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         using var stream = new FileStream(path, FileMode.Create, FileAccess.Write);
         using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
-        foreach (var (name, data) in entries)
+        foreach (var (name, data, attributes) in entries)
         {
             var entry = archive.CreateEntry(name);
+            entry.ExternalAttributes = attributes;
             using var output = entry.Open();
             output.Write(data, 0, data.Length);
         }
@@ -144,12 +148,12 @@ public class DysonZipArchivesTests
             var cacheRoot = Path.Combine(dir, "cache");
             WriteZip(zipPath,
                 ("big.txt", Utf8("0123456789")),
-                ("blob.bin", [1, 2, 0, 3]));
+                ("blob.dat", [1, 2, 0, 3]));
 
             var big = await DysonZipArchives.ExtractEntryAsync(zipPath, "big.txt", cacheRoot, maxEntryBytes: 4);
             Assert.True(big.IsError);
 
-            var blob = await DysonZipArchives.ExtractEntryAsync(zipPath, "blob.bin", cacheRoot);
+            var blob = await DysonZipArchives.ExtractEntryAsync(zipPath, "blob.dat", cacheRoot);
             Assert.True(blob.IsSuccess, blob.IsError ? blob.Error : null);
             Assert.False(blob.Value.OpenInViewer);
         }
@@ -184,6 +188,72 @@ public class DysonZipArchivesTests
         {
             DeleteQuietly(dir);
         }
+    }
+
+    [Theory]
+    [InlineData("setup.EXE", 0, true)]
+    [InlineData("a/b/run.sh", 0, true)]
+    [InlineData("Install.Bat", 0, true)]
+    [InlineData("evil.exe.", 0, true)]
+    [InlineData("tool.ps1", 0, true)]
+    [InlineData("shortcut.lnk", 0, true)]
+    [InlineData("report.docx", 0, false)]
+    [InlineData("sheet.xlsx", 0, false)]
+    [InlineData("notes.txt", 0, false)]
+    [InlineData("Makefile", 0, false)]
+    [InlineData("tool", 0b111_101_101 << 16, true)] // rwxr-xr-x
+    [InlineData("data", 0b110_100_100 << 16, false)] // rw-r--r--
+    public void IsLaunchBlocked_classifies_executables(string name, int externalAttributes, bool blocked) =>
+        Assert.Equal(blocked, DysonZipArchives.IsLaunchBlocked(name, externalAttributes));
+
+    [Fact]
+    public async Task Extract_refuses_launcher_bound_executables_and_keeps_text_scripts_viewable()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var zipPath = Path.Combine(dir, "tools.zip");
+            var cacheRoot = Path.Combine(dir, "cache");
+            byte[] binary = [(byte)'M', (byte)'Z', 0, 1];
+            WriteZip(zipPath,
+                ("setup.exe", binary, 0),
+                ("payload", binary, 0b111_101_101 << 16),
+                ("run.sh", Utf8("#!/bin/sh\necho hi\n"), 0b111_101_101 << 16),
+                ("report.docx", binary, 0b110_100_100 << 16));
+
+            foreach (var name in new[] { "setup.exe", "payload" })
+            {
+                var refused = await DysonZipArchives.ExtractEntryAsync(zipPath, name, cacheRoot);
+                Assert.True(refused.IsError, $"expected refusal for '{name}'");
+                Assert.StartsWith($"Refusing to open '{name}'", refused.Error);
+            }
+
+            Assert.False(Directory.Exists(cacheRoot)); // refused before anything was written
+
+            var script = await DysonZipArchives.ExtractEntryAsync(zipPath, "run.sh", cacheRoot);
+            Assert.True(script.IsSuccess, script.IsError ? script.Error : null);
+            Assert.True(script.Value.OpenInViewer);
+            Assert.False(script.Value.CanLaunch);
+
+            var doc = await DysonZipArchives.ExtractEntryAsync(zipPath, "report.docx", cacheRoot);
+            Assert.True(doc.IsSuccess, doc.IsError ? doc.Error : null);
+            Assert.False(doc.Value.OpenInViewer);
+            Assert.True(doc.Value.CanLaunch);
+            if (OperatingSystem.IsWindows())
+                Assert.Contains("ZoneId=3", await File.ReadAllTextAsync(doc.Value.AbsolutePath + ":Zone.Identifier"));
+        }
+        finally
+        {
+            DeleteQuietly(dir);
+        }
+    }
+
+    [Fact]
+    public void DefaultCacheRoot_is_per_user()
+    {
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrEmpty(local))
+            Assert.Equal(Path.Combine(local, "DysonHarness", "zip-cache"), DysonZipArchives.DefaultCacheRoot);
     }
 
     [Fact]
