@@ -67,6 +67,11 @@ public abstract class DysonAgentSession
     private int _outgoingContextTokensRefreshInFlight;
     private int _liveContextTokens;
     private Guid _contextLimitTrippedTurnId;
+
+    // 80% notice: 0 = armed, 1 = pending, 2 = delivered. In memory only.
+    // ponytail: a restart re-arms, so a session still above 80% may get the notice once more; upgrade path is to
+    // set 2 in RestoreFromPersisted when an in-context turn already has a HarnessNotice segment.
+    private int _contextWarningState;
     private Guid _compactionRequestedTurnId;
     private Task _compactionMarkerWrites = Task.CompletedTask;
     // ponytail: one compaction summary per session behind a coarse lock; upgrade path is a per-session
@@ -2519,6 +2524,16 @@ public abstract class DysonAgentSession
         if (previous != tokens)
             bus?.Publish(scope, new DysonSessionContextTokensChangedEvent(PersistenceId, tokens, limit));
 
+        // Same tokens and limit as the trip below. A report that trips compaction never arms (the notice would be stale).
+        if (limit > 0
+            && tokens * 100L >= limit * (long)DysonCompactionFlow.ContextWarningPercent
+            && WarnsBeforeCompaction(turn)
+            && (tokens <= limit || !DysonCompactionFlow.CanCompact(this, turn))
+            && Interlocked.CompareExchange(ref _contextWarningState, 1, 0) == 0)
+        {
+            AppendLog($"context: {DysonCompactionFlow.ContextWarningPercent}% of limit reached (live={tokens} max={limit}); notice queued for the next round");
+        }
+
         if (limit <= 0 || tokens <= limit || _contextLimitTrippedTurnId == turn.Id)
             return;
 
@@ -2534,6 +2549,41 @@ public abstract class DysonAgentSession
         RecordCompactionPending(turn.Id);
         bus?.Publish(scope, new DysonSessionContextLimitReachedEvent(PersistenceId, turn.Id, tokens, limit));
     }
+
+    /// <summary>Explore never compacts and the voice sidecar has nothing to act on; FullSummarize is the compaction.</summary>
+    private bool WarnsBeforeCompaction(DysonAgentTurn turn) =>
+        turn.Kind != DysonAgentTurnKind.FullSummarize
+        && !string.Equals(Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
+        && !DysonSessionPolicy.IsVoiceSidecar(Mode);
+
+    /// <summary>
+    /// Round start: appends the pending 80% notice to <paramref name="turn"/> as a
+    /// <see cref="DysonReasoningSegmentKind.HarnessNotice"/> segment. True when delivered (the caller drops
+    /// Responses chaining so the full rebuild carries it). A limit switched to Off meanwhile re-arms instead.
+    /// </summary>
+    internal bool TryDeliverContextWarning(DysonAgentTurn turn)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        if (Volatile.Read(ref _contextWarningState) != 1 || turn.Kind == DysonAgentTurnKind.FullSummarize)
+            return false;
+
+        var limit = ResolveEffectiveMaxTargetContextTokens();
+        if (limit <= 0)
+        {
+            Interlocked.CompareExchange(ref _contextWarningState, 0, 1);
+            return false;
+        }
+
+        if (Interlocked.CompareExchange(ref _contextWarningState, 2, 1) != 1)
+            return false;
+
+        turn.AppendHarnessNotice(DysonCompactionFlow.ContextWarningMarker, DysonCompactionFlow.FormatContextWarning(limit));
+        AppendLog($"context: {DysonCompactionFlow.ContextWarningPercent}% notice delivered (after {turn.ToolCalls.Count} tool calls)");
+        return true;
+    }
+
+    /// <summary>Re-arms the 80% notice (and drops an undelivered one); called when compaction excludes turns.</summary>
+    internal void ResetContextWarning() => Volatile.Write(ref _contextWarningState, 0);
 
     /// <summary>
     /// Subscribes this session to its own <see cref="DysonSessionContextLimitReachedEvent"/> for one prompt turn

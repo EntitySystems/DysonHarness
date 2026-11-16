@@ -66,6 +66,14 @@
   rotate: 90deg;
 }
 
+/* 80% context notice (HarnessNotice segment): one muted, non-collapsible line. */
+.turn-block__harness-notice {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  font-style: italic;
+  padding: 2px 0;
+}
+
 /* Stream end destroys the streaming div and builds this one fresh, so its mount is the
    crossfade to the formatted Markdig body. Opacity only, per `.turn-block--enter` above. */
 .turn-block__body--final {

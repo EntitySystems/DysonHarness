@@ -314,7 +314,7 @@ public class DysonS3ImageToolGateTests
 
     private sealed class StubProvider : DysonAgentProvider;
 
-    private sealed class StubSession(DysonAgentSessionConfig config) : DysonAgentSession(
+    internal sealed class StubSession(DysonAgentSessionConfig config) : DysonAgentSession(
         DysonAgentModes.Explore,
         config,
         new StubProvider())

@@ -566,6 +566,26 @@ public sealed class DysonAgentTurn
     }
 
     /// <summary>
+    /// Records a delivered <see cref="DysonReasoningSegmentKind.HarnessNotice"/> anchored at the current
+    /// <see cref="ToolCalls"/> count (callers append at a round start). Never queues and never keeps intake open.
+    /// </summary>
+    public void AppendHarnessNotice(string marker, string text)
+    {
+        lock (_reasoningLogGate)
+        {
+            var roundIndex = _reasoningLog.Count > 0 ? _reasoningLog[^1].RoundIndex : 0;
+            _reasoningLog.Add(new DysonReasoningSegment(
+                DysonReasoningSegmentKind.HarnessNotice,
+                text,
+                roundIndex,
+                DeliveredAfterToolCalls: ToolCalls.Count,
+                Marker: marker));
+        }
+
+        FlushAssistantTextChanged();
+    }
+
+    /// <summary>
     /// Drains the in-memory comment queue and stamps each drained UserComment segment with
     /// <see cref="DysonReasoningSegment.DeliveredAfterToolCalls"/> = current
     /// <see cref="ToolCalls"/> count (the tool loop drains at a round start, so this is a round

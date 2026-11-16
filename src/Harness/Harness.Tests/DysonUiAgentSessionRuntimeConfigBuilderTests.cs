@@ -247,7 +247,7 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
     }
 
     [Fact]
-    public async Task BuildAsync_hydrates_file_storage_from_setting_json()
+    public async Task BuildAsync_config_resolves_file_storage_from_current_setting()
     {
         await using var harness = await Harness.CreateAsync();
         var json = DysonS3FileStorageSettings.Serialize(new DysonS3FileStorageSettings
@@ -260,25 +260,22 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
         var saved = await harness.Settings.SetSettingAsync(DysonAppSettingKeys.FileStorageS3, json);
         Assert.True(saved.IsSuccess, saved.IsError ? saved.Error : null);
 
-        await using (var hydrated = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
-        {
-            AgentMode = DysonAgentModes.Work,
-        })).Value)
-        {
-            Assert.NotNull(hydrated.Config.FileStorage);
-            Assert.Equal("my-bucket", hydrated.Config.FileStorage.Endpoint.Bucket);
-            hydrated.Config.FileStorage.Dispose();
-            hydrated.Config.FileStorage = null;
-        }
-
-        var cleared = await harness.Settings.SetSettingAsync(DysonAppSettingKeys.FileStorageS3, null);
-        Assert.True(cleared.IsSuccess, cleared.IsError ? cleared.Error : null);
-
-        await using var missing = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
+        await using var built = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
         {
             AgentMode = DysonAgentModes.Work,
         })).Value;
-        Assert.Null(missing.Config.FileStorage);
+        Assert.Null(built.Config.FileStorage);
+        var resolved = await built.Config.ResolveFileStorageAsync();
+        Assert.True(resolved.IsSuccess, resolved.IsError ? resolved.Error : null);
+        Assert.NotNull(resolved.Value);
+        Assert.Equal("my-bucket", resolved.Value.Endpoint.Bucket);
+
+        // Same live config sees the delete without a rebuild.
+        var cleared = await harness.Settings.SetSettingAsync(DysonAppSettingKeys.FileStorageS3, null);
+        Assert.True(cleared.IsSuccess, cleared.IsError ? cleared.Error : null);
+        var missing = await built.Config.ResolveFileStorageAsync();
+        Assert.True(missing.IsSuccess, missing.IsError ? missing.Error : null);
+        Assert.Null(missing.Value);
     }
 
     [Fact]

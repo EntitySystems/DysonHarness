@@ -2804,11 +2804,13 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (!attachment.IsImage)
             return Ok(call, ackJson, attachment);
 
-        var storage = _session.Config.FileStorage;
-        if (storage is null)
+        var storage = await _session.Config.ResolveFileStorageAsync(cancellationToken).ConfigureAwait(false);
+        if (storage.IsError)
+            return Error(call, storage.Error);
+        if (storage.Value is null)
             return Error(call, DysonS3FileStorage.NotConfiguredMessage);
 
-        var uploaded = await storage
+        var uploaded = await storage.Value
             .EnsureRemoteUrlAsync(attachment, cancellationToken)
             .ConfigureAwait(false);
         if (uploaded.IsError)

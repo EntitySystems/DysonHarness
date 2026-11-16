@@ -96,7 +96,6 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly object _pendingImagesGate = new();
     private readonly List<HeldComposerImage> _heldComposerImages = [];
     private readonly object _heldComposerImagesGate = new();
-    private DysonS3FileStorage? _fileStorage;
     private readonly FileStorageConnectService? _fileStorageConnect;
     private readonly List<string> _pendingFilePaths = [];
     private readonly object _pendingFilesGate = new();
@@ -1398,8 +1397,15 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(LastError);
         }
 
-        var storage = await TryGetFileStorageAsync(cancellationToken).ConfigureAwait(false);
-        if (storage is null)
+        var resolved = await DysonS3FileStorage.ResolveAsync(_appSettings, cancellationToken).ConfigureAwait(false);
+        if (resolved.IsError)
+        {
+            LastError = resolved.Error;
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return new VoidResult<string>(resolved.Error);
+        }
+
+        if (resolved.Value is not { } storage)
         {
             lock (_heldComposerImagesGate)
                 _heldComposerImages.Add(new HeldComposerImage(attachment.FileName, jpegBytes, attachment.HtmlRef));
@@ -1497,7 +1503,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Persist S3 settings, assign one host-owned client onto live sessions, and drain held images.
+    /// Persist S3 settings and drain held images. Sessions read the saved setting at call time
+    /// (<see cref="DysonAgentSessionConfig.ResolveFileStorageAsync"/>), so nothing is pushed onto them.
     /// </summary>
     public async Task<VoidResult<string>> ApplyFileStorageSettingsAsync(
         DysonS3FileStorageSettings settings,
@@ -1509,24 +1516,24 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(json))
             return new VoidResult<string>("File storage settings are incomplete.");
 
+        var created = DysonS3FileStorage.TryCreate(settings);
+        if (created.IsError)
+            return new VoidResult<string>(created.Error);
+        created.Value.Dispose();
+
         var saved = await _appSettings
             .SetSettingAsync(DysonAppSettingKeys.FileStorageS3, json, cancellationToken)
             .ConfigureAwait(false);
         if (saved.IsError)
             return saved;
 
-        var created = DysonS3FileStorage.TryCreate(settings);
-        if (created.IsError)
-            return new VoidResult<string>(created.Error);
-
-        AssignFileStorageToLiveSessions(created.Value);
         await DrainHeldComposerImagesAsync(cancellationToken).ConfigureAwait(false);
         LastError = null;
         Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error | DysonHostChangeKind.Catalogs);
         return VoidResult<string>.Success;
     }
 
-    /// <summary>Delete <c>file_storage_s3</c> and null <see cref="DysonAgentSessionConfig.FileStorage"/> on live sessions.</summary>
+    /// <summary>Delete <c>file_storage_s3</c>; sessions see "not configured" on their next image call.</summary>
     public async Task<VoidResult<string>> DisconnectFileStorageAsync(
         CancellationToken cancellationToken = default)
     {
@@ -1536,7 +1543,6 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (deleted.IsError)
             return deleted;
 
-        AssignFileStorageToLiveSessions(null);
         LastError = null;
         Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error | DysonHostChangeKind.Catalogs);
         return VoidResult<string>.Success;
@@ -5782,7 +5788,6 @@ public sealed class DysonUiHost : IAsyncDisposable
                 CancellationToken.None);
         }
 
-        await TryHydrateFileStorageAsync(config, cancellationToken).ConfigureAwait(false);
         await TryHydrateImageGenerationProviderSettingAsync(
                 p => config.ImageGenerationProvider = p,
                 cancellationToken)
@@ -5843,69 +5848,6 @@ public sealed class DysonUiHost : IAsyncDisposable
             .ConfigureAwait(false);
 
         return config;
-    }
-
-    private async Task TryHydrateFileStorageAsync(
-        DysonAgentSessionConfig config,
-        CancellationToken cancellationToken)
-    {
-        var storage = await TryGetFileStorageAsync(cancellationToken).ConfigureAwait(false);
-        if (storage is not null)
-            config.FileStorage = storage;
-    }
-
-    private async Task<DysonS3FileStorage?> TryGetFileStorageAsync(CancellationToken cancellationToken)
-    {
-        if (_fileStorage is not null)
-            return _fileStorage;
-
-        if (_session?.Config.FileStorage is { } live)
-        {
-            _fileStorage = live;
-            return live;
-        }
-
-        var setting = await _appSettings
-            .GetSettingAsync(DysonAppSettingKeys.FileStorageS3, cancellationToken)
-            .ConfigureAwait(false);
-        if (setting.IsError || string.IsNullOrWhiteSpace(setting.Value))
-            return null;
-
-        var created = DysonS3FileStorage.TryCreateFromJson(setting.Value);
-        if (created.IsError)
-            return null;
-
-        _fileStorage = created.Value;
-        return _fileStorage;
-    }
-
-    private void AssignFileStorageToLiveSessions(DysonS3FileStorage? next)
-    {
-        var previous = new HashSet<DysonS3FileStorage>(ReferenceEqualityComparer.Instance);
-        if (_fileStorage is not null)
-            previous.Add(_fileStorage);
-
-        var seen = new HashSet<DysonAgentSession>(ReferenceEqualityComparer.Instance);
-        void Apply(DysonAgentSession session)
-        {
-            if (!seen.Add(session))
-                return;
-            if (session.Config.FileStorage is { } existing)
-                previous.Add(existing);
-            session.Config.FileStorage = next;
-        }
-
-        if (_session is not null)
-            Apply(_session);
-        foreach (var session in _sessionsById.Values)
-            Apply(session);
-
-        _fileStorage = next;
-        foreach (var old in previous)
-        {
-            if (!ReferenceEquals(old, next))
-                old.Dispose();
-        }
     }
 
     private void MaybeOpenFileStorageConnect(string? message)
@@ -8889,7 +8831,6 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonLongRunningShellRegistry.Changed -= OnLongRunningShellRegistryChanged;
         _pluginLifecycle.Changed -= OnPluginCatalogChanged;
         _pluginMcpGrants.Changed -= OnPluginMcpGrantChanged;
-        AssignFileStorageToLiveSessions(null);
         UnhookAllSessions();
         // Circuit-local shadow/legacy queues only. Runtime FIFO stays with the retained runtime.
         lock (_promptQueueGate)

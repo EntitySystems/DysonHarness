@@ -451,7 +451,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
             AppendContextFileUserMessages(messages, turn);
 
-            var comments = DysonInjectedUserComments.From(turn.ReasoningLog);
+            var comments = DysonInjectedUserComments.FromTranscript(turn.ReasoningLog);
             DysonInjectedUserComments.AppendMessages(
                 messages,
                 comments.Where(c => c.DeliveredAfterToolCalls == 0));
@@ -546,7 +546,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
             AppendContextFileUserMessages(input, turn);
 
-            var comments = DysonInjectedUserComments.From(turn.ReasoningLog);
+            var comments = DysonInjectedUserComments.FromTranscript(turn.ReasoningLog);
             DysonInjectedUserComments.AppendMessages(
                 input,
                 comments.Where(c => c.DeliveredAfterToolCalls == 0));
@@ -633,7 +633,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         // Newest in-flight turn only: an older overlapping loop's comments stay with its own rebuild.
         var index = incomplete.Max();
-        return DysonInjectedUserComments.From(turns[index].ReasoningLog)
+        return DysonInjectedUserComments.FromTranscript(turns[index].ReasoningLog)
             .Where(c => c.DeliveredAfterToolCalls is > 0)
             .OrderBy(c => c.DeliveredAfterToolCalls)
             .ToList();

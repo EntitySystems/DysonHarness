@@ -108,6 +108,7 @@ public static class DysonFullSummarizeFlow
         if (dropped is null)
             return [];
 
+        session.ResetContextWarning();
         _ = session.PublishContextTokensAfterExclusionAsync();
         return dropped;
     }
