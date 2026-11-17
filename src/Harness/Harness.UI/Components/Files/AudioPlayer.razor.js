@@ -1,4 +1,4 @@
-// Custom audio player behaviour for AudioPlayer.razor. Owns all playback state client-side so
+// Custom audio/video player behaviour for AudioPlayer.razor. Owns all playback state client-side so
 // timeupdate / scrubbing never round-trips through the Blazor circuit.
 
 function formatTime(seconds) {
@@ -17,7 +17,7 @@ function setFill(range, fraction) {
 }
 
 export function init(root) {
-    const audio = root.querySelector("audio");
+    const media = root.querySelector("audio, video");
     const play = root.querySelector('[data-role="play"]');
     const seek = root.querySelector('[data-role="seek"]');
     const elapsed = root.querySelector('[data-role="elapsed"]');
@@ -26,9 +26,11 @@ export function init(root) {
     const mute = root.querySelector('[data-role="mute"]');
     const volume = root.querySelector('[data-role="volume"]');
     const error = root.querySelector('[data-role="error"]');
-    if (!audio || !play || !seek || !loop || !mute || !volume)
+    const errorText = root.querySelector('[data-role="error-text"]');
+    if (!media || !play || !seek || !loop || !mute || !volume)
         return { dispose() { } };
 
+    const isVideo = media.tagName === "VIDEO";
     const abort = new AbortController();
     const on = (target, type, handler) => target.addEventListener(type, handler, { signal: abort.signal });
     let scrubbing = false;
@@ -36,12 +38,13 @@ export function init(root) {
     const showError = (message) => {
         if (!error)
             return;
-        error.textContent = message;
+        // Write to the text span only so the "Open in default app" button survives.
+        (errorText || error).textContent = message;
         error.hidden = false;
     };
 
     const renderPlaying = () => {
-        const playing = !audio.paused && !audio.ended;
+        const playing = !media.paused && !media.ended;
         root.toggleAttribute("data-playing", playing);
         if (playing && error)
             error.hidden = true;
@@ -51,14 +54,14 @@ export function init(root) {
     };
 
     const renderTime = () => {
-        const duration = audio.duration;
+        const duration = media.duration;
         const finite = Number.isFinite(duration) && duration > 0;
         seek.disabled = !finite;
         if (finite)
             seek.max = String(duration);
         if (!scrubbing)
-            seek.value = String(audio.currentTime);
-        const current = scrubbing ? Number(seek.value) : audio.currentTime;
+            seek.value = String(media.currentTime);
+        const current = scrubbing ? Number(seek.value) : media.currentTime;
         elapsed.textContent = formatTime(current);
         durationEl.textContent = finite ? formatTime(duration) : "--:--";
         seek.setAttribute("aria-valuetext", `${formatTime(current)} of ${finite ? formatTime(duration) : "unknown"}`);
@@ -66,56 +69,60 @@ export function init(root) {
     };
 
     const renderLoop = () => {
-        loop.setAttribute("aria-pressed", String(audio.loop));
-        loop.title = audio.loop ? "Loop: on" : "Loop: off";
+        loop.setAttribute("aria-pressed", String(media.loop));
+        loop.title = media.loop ? "Loop: on" : "Loop: off";
     };
 
     const renderVolume = () => {
-        const silent = audio.muted || audio.volume === 0;
+        const silent = media.muted || media.volume === 0;
         root.toggleAttribute("data-muted", silent);
         mute.setAttribute("aria-pressed", String(silent));
         mute.setAttribute("aria-label", silent ? "Unmute" : "Mute");
         mute.title = silent ? "Unmute" : "Mute";
-        const shown = audio.muted ? 0 : audio.volume;
+        const shown = media.muted ? 0 : media.volume;
         volume.value = String(shown);
         volume.setAttribute("aria-valuetext", `${Math.round(shown * 100)}%`);
         setFill(volume, shown);
     };
 
-    on(play, "click", () => {
-        if (audio.paused || audio.ended) {
-            const started = audio.play();
+    const togglePlay = () => {
+        if (media.paused || media.ended) {
+            const started = media.play();
             if (started && typeof started.catch === "function")
                 started.catch((e) => showError(`Could not play: ${e && e.message ? e.message : e}`));
         } else {
-            audio.pause();
+            media.pause();
         }
-    });
+    };
+
+    on(play, "click", togglePlay);
+    if (isVideo)
+        on(media, "click", togglePlay);
 
     on(loop, "click", () => {
-        audio.loop = !audio.loop;
+        media.loop = !media.loop;
         renderLoop();
     });
 
     on(mute, "click", () => {
-        if (audio.muted || audio.volume === 0) {
-            audio.muted = false;
-            if (audio.volume === 0)
-                audio.volume = 0.5;
+        if (media.muted || media.volume === 0) {
+            media.muted = false;
+            if (media.volume === 0)
+                media.volume = 0.5;
         } else {
-            audio.muted = true;
+            media.muted = true;
         }
     });
 
     on(volume, "input", () => {
         const value = Number(volume.value);
-        audio.volume = value;
-        audio.muted = value === 0;
+        media.volume = value;
+        media.muted = value === 0;
     });
 
     on(seek, "input", () => {
         scrubbing = true;
-        audio.currentTime = Number(seek.value);
+        media.currentTime = Number(seek.value);
         renderTime();
     });
     on(seek, "change", () => {
@@ -124,13 +131,13 @@ export function init(root) {
     });
 
     for (const type of ["play", "playing", "pause", "ended"])
-        on(audio, type, renderPlaying);
+        on(media, type, renderPlaying);
     for (const type of ["timeupdate", "durationchange", "loadedmetadata", "seeked", "emptied"])
-        on(audio, type, renderTime);
-    on(audio, "volumechange", renderVolume);
-    on(audio, "error", () => {
+        on(media, type, renderTime);
+    on(media, "volumechange", renderVolume);
+    on(media, "error", () => {
         renderPlaying();
-        showError("This audio file could not be loaded or its format is not supported here.");
+        showError("This file could not be played here (unsupported format or codec).");
     });
 
     renderPlaying();
@@ -142,9 +149,9 @@ export function init(root) {
         dispose() {
             abort.abort();
             try {
-                audio.pause();
-                audio.removeAttribute("src");
-                audio.load();
+                media.pause();
+                media.removeAttribute("src");
+                media.load();
             } catch {
                 // element already detached
             }

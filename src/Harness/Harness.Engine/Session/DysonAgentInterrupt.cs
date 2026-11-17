@@ -9,6 +9,8 @@ public enum DysonAgentInterruptKind
     SubagentEvent = 4,
     /// <summary>A subscribed long-running shell reached a terminal state; host drains a ShellExited turn.</summary>
     LongRunningShellExited = 5,
+    /// <summary>Child reported blocked by something outside it; the parent resumes it with a message.</summary>
+    SubagentBlocked = 6,
 }
 
 public sealed class DysonAgentInterrupt

@@ -503,6 +503,55 @@ public class DysonMetaAgentDroneWorktreeTests
     }
 
     [Fact]
+    public async Task Blocked_drone_report_does_not_merge()
+    {
+        var parent = CreateTempDir();
+        var repo = Path.Combine(parent, "repo");
+        Directory.CreateDirectory(repo);
+        try
+        {
+            GitInit(repo);
+            WriteAllLf(Path.Combine(repo, "file.txt"), "base\n");
+            RunGitOrThrow(repo, ["add", "-A"]);
+            RunGitOrThrow(repo, ["commit", "-m", "init"]);
+
+            var droneId = Guid.NewGuid();
+            var ensured = await DysonSessionWorktree.EnsureAsync(repo, droneId);
+            Assert.True(ensured.IsSuccess, ensured.IsError ? ensured.Error : null);
+            var wt = ensured.Value.AbsolutePath;
+            var branch = ensured.Value.Branch;
+
+            WriteAllLf(Path.Combine(wt, "file.txt"), "from-drone\n");
+            RunGitOrThrow(wt, ["add", "-A"]);
+            RunGitOrThrow(wt, ["commit", "-m", "drone"]);
+
+            var drone = new StubSession(DysonAgentModes.MetaAgentDrone);
+            drone.SetPersistenceIdForTest(droneId);
+            drone.WorktreeEnabled = true;
+            drone.WorktreeAbsolutePath = wt;
+            drone.WorktreeBranch = branch;
+            drone.RegisteredWorkDirectoryAbsolutePath = repo;
+
+            var submitted = await drone.SubmitSubagentReportAsync("waiting for editor", blocked: true);
+            Assert.True(submitted.IsSuccess, submitted.IsError ? submitted.Error : null);
+            Assert.Equal(DysonSessionStatus.Blocked, drone.Status);
+            Assert.Equal("waiting for editor", drone.LastReportSummary);
+            Assert.Equal(wt, drone.WorktreeAbsolutePath);
+            Assert.Equal(branch, drone.WorktreeBranch);
+
+            var listed = await DysonGitInfo.TryListWorktreesAsync(repo);
+            Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
+            Assert.Contains(listed.Value, e => SamePath(e.Path, wt));
+            Assert.Equal("base\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
+        }
+        finally
+        {
+            await CleanupWorktrees(repo);
+            DeleteQuiet(parent);
+        }
+    }
+
+    [Fact]
     public async Task Failed_spawn_after_worktree_persist_drops_row_and_worktree()
     {
         var parent = CreateTempDir();

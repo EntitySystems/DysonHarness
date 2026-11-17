@@ -32,6 +32,19 @@ public sealed class DysonOsLauncherTests
     }
 
     [Fact]
+    public async Task RevealFileAsync_rejects_empty_and_missing_file()
+    {
+        var empty = await DysonOsLauncher.RevealFileAsync("  ");
+        Assert.True(empty.IsError);
+        Assert.Equal("Path is empty.", empty.Error);
+
+        var missing = Path.Combine(Path.GetTempPath(), "dyson-os-reveal-" + Guid.NewGuid().ToString("N"));
+        var gone = await DysonOsLauncher.RevealFileAsync(missing);
+        Assert.True(gone.IsError);
+        Assert.Equal("File does not exist.", gone.Error);
+    }
+
+    [Fact]
     public async Task OpenUrlAsync_rejects_non_http_schemes()
     {
         foreach (var url in new[] { "", "javascript:alert(1)", "file:///c:/x", "ftp://example.com", "example.com" })

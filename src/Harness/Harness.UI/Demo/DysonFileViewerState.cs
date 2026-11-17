@@ -32,11 +32,26 @@ public sealed class DysonFileViewerState
     /// <summary>When true, <see cref="AudioPreviewUrl"/> is the <c>audio</c> src for the custom audio player.</summary>
     public bool IsAudio { get; init; }
 
-    /// <summary>Relative URL under <see cref="DysonFilePreviewStore.RoutePrefix"/> (on-disk, range-enabled), or null.</summary>
+    /// <summary>When true, <see cref="AudioPreviewUrl"/> is the <c>video</c> src (same player, video element shown).</summary>
+    public bool IsVideo { get; init; }
+
+    /// <summary>Audio or video media preview: relative URL under <see cref="DysonFilePreviewStore.RoutePrefix"/> (on-disk, range-enabled), or null.</summary>
     public string? AudioPreviewUrl { get; init; }
 
-    /// <summary>Preview store token to revoke on close; null when not an audio preview.</summary>
+    /// <summary>Preview store token to revoke on close; null when not an audio or video media preview.</summary>
     public string? AudioPreviewId { get; init; }
+
+    /// <summary>When true, the overlay renders <see cref="ZipEntries"/> as a folder listing.</summary>
+    public bool IsZip { get; init; }
+
+    /// <summary>Every file entry of the archive (flat, '/'-separated); empty when not a zip or unreadable.</summary>
+    public IReadOnlyList<DysonZipEntry> ZipEntries { get; init; } = [];
+
+    /// <summary>Work root the archive was opened under (so "Back" can reopen it); null when not a zip.</summary>
+    public string? ZipWorkRoot { get; init; }
+
+    /// <summary>Folder the zip listing opens at ("" = archive root; "Back" from an entry restores its folder).</summary>
+    public string ZipFolder { get; init; } = "";
 
     /// <summary>True while the host is preparing in-memory content off the circuit.</summary>
     public bool IsLoading { get; init; }

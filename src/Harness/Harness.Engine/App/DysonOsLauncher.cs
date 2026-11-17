@@ -12,6 +12,13 @@ public static class DysonOsLauncher
     public static Task<VoidResult<string>> OpenFileAsync(string absolutePath) =>
         Task.Run(() => OpenFile(absolutePath));
 
+    /// <summary>
+    /// Shows an absolute file path selected in the OS file manager (Explorer <c>/select,</c>, Finder <c>open -R</c>).
+    /// Never runs the file. Linux opens the parent folder only.
+    /// </summary>
+    public static Task<VoidResult<string>> RevealFileAsync(string absolutePath) =>
+        Task.Run(() => RevealFile(absolutePath));
+
     /// <summary>Opens an absolute folder path in the OS file manager.</summary>
     public static Task<VoidResult<string>> OpenFolderAsync(string absolutePath) =>
         Task.Run(() => OpenFolder(absolutePath));
@@ -28,8 +35,16 @@ public static class DysonOsLauncher
 
     private static VoidResult<string> OpenPath(string absolutePath, bool directory, string missingMessage, string failureNoun)
     {
+        var resolved = ResolveExisting(absolutePath, directory, missingMessage);
+        return resolved.IsError
+            ? VoidResult<string>.AsError(resolved.Error)
+            : Launch(resolved.Value, windowsExplorer: directory, failureNoun);
+    }
+
+    private static Result<string, string> ResolveExisting(string absolutePath, bool directory, string missingMessage)
+    {
         if (string.IsNullOrWhiteSpace(absolutePath))
-            return VoidResult<string>.AsError("Path is empty.");
+            return Result<string, string>.AsError("Path is empty.");
 
         string fullPath;
         try
@@ -38,14 +53,57 @@ public static class DysonOsLauncher
         }
         catch (Exception ex)
         {
-            return VoidResult<string>.AsError($"Invalid path: {ex.Message}");
+            return Result<string, string>.AsError($"Invalid path: {ex.Message}");
         }
 
         var exists = directory ? Directory.Exists(fullPath) : File.Exists(fullPath);
-        if (!exists)
-            return VoidResult<string>.AsError(missingMessage);
+        return exists
+            ? Result<string, string>.AsValue(fullPath)
+            : Result<string, string>.AsError(missingMessage);
+    }
 
-        return Launch(fullPath, windowsExplorer: directory, failureNoun);
+    private static VoidResult<string> RevealFile(string absolutePath)
+    {
+        var resolved = ResolveExisting(absolutePath, directory: false, "File does not exist.");
+        if (resolved.IsError)
+            return VoidResult<string>.AsError(resolved.Error);
+        var full = resolved.Value;
+
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                // Absolute explorer.exe (no PATH hijack). Explorer wants /select,"path" as one raw argument, not an
+                // ArgumentList token; Windows paths cannot contain '"', so the quoting cannot be broken out of.
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"),
+                    Arguments = $"/select,\"{full}\"",
+                    UseShellExecute = false,
+                });
+                return VoidResult<string>.Success;
+            }
+
+            if (OperatingSystem.IsMacOS())
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "open",
+                    ArgumentList = { "-R", full },
+                    UseShellExecute = false,
+                });
+                return VoidResult<string>.Success;
+            }
+
+            // ponytail: Linux opens the parent folder, not the file selected. Upgrade: DBus
+            // org.freedesktop.FileManager1.ShowItems selects it, but needs gdbus, GVariant quoting and a fallback
+            // when no file manager owns the name.
+            return Launch(Path.GetDirectoryName(full)!, windowsExplorer: true, "folder");
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Failed to reveal file: {ex.Message}");
+        }
     }
 
     private static VoidResult<string> OpenUrl(string url)

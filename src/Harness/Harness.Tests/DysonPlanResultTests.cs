@@ -180,6 +180,7 @@ public class DysonPlanResultTests
         if (!DysonSubagentReportPrompt.IsCompletionInterrupt(DysonAgentInterruptKind.SubagentCompleted)
             || !DysonSubagentReportPrompt.IsCompletionInterrupt(DysonAgentInterruptKind.SubagentFailed)
             || !DysonSubagentReportPrompt.IsCompletionInterrupt(DysonAgentInterruptKind.SubagentStopped)
+            || !DysonSubagentReportPrompt.IsCompletionInterrupt(DysonAgentInterruptKind.SubagentBlocked)
             || DysonSubagentReportPrompt.IsCompletionInterrupt(DysonAgentInterruptKind.SubagentEvent))
         {
             throw new InvalidOperationException("IsCompletionInterrupt kind mapping wrong.");

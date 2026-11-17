@@ -945,6 +945,7 @@ public sealed partial class DysonWorkspaceToolExecutor
     {
         string summary;
         var failed = false;
+        var blocked = false;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -959,10 +960,12 @@ public sealed partial class DysonWorkspaceToolExecutor
                 var status = statusProp.GetString();
                 if (string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
                     failed = true;
+                else if (string.Equals(status, "blocked", StringComparison.OrdinalIgnoreCase))
+                    blocked = true;
                 else if (!string.IsNullOrWhiteSpace(status)
                          && !string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
                 {
-                    return Error(call, "SubmitSubagentReport: status must be 'completed' or 'failed'.");
+                    return Error(call, "SubmitSubagentReport: status must be 'completed', 'failed', or 'blocked'.");
                 }
             }
         }
@@ -972,7 +975,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         var submitted = await _session
-            .SubmitSubagentReportAsync(summary, failed, cancellationToken)
+            .SubmitSubagentReportAsync(summary, failed, cancellationToken, blocked: blocked)
             .ConfigureAwait(false);
         if (submitted.IsError)
             return Error(call, submitted.Error);
@@ -994,9 +997,11 @@ public sealed partial class DysonWorkspaceToolExecutor
                 _session.Parent.PersistenceId,
                 DysonSessionLogKind.Interrupt,
                 new DysonSessionLogInterrupt(
-                    failed
-                        ? DysonAgentInterruptKind.SubagentFailed.ToString()
-                        : DysonAgentInterruptKind.SubagentCompleted.ToString(),
+                    (blocked
+                        ? DysonAgentInterruptKind.SubagentBlocked
+                        : failed
+                            ? DysonAgentInterruptKind.SubagentFailed
+                            : DysonAgentInterruptKind.SubagentCompleted).ToString(),
                     SubagentId: _session.Id,
                     Summary: summary,
                     PersistenceId: _session.PersistenceId == Guid.Empty ? null : _session.PersistenceId));

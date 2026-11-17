@@ -8,7 +8,8 @@ public static class DysonSubagentReportPrompt
     public static bool IsCompletionInterrupt(DysonAgentInterruptKind kind) =>
         kind is DysonAgentInterruptKind.SubagentCompleted
             or DysonAgentInterruptKind.SubagentFailed
-            or DysonAgentInterruptKind.SubagentStopped;
+            or DysonAgentInterruptKind.SubagentStopped
+            or DysonAgentInterruptKind.SubagentBlocked;
 
     /// <summary>
     /// Plan mode buffers completion reports for BeginBuildPlan (or flush on mode leave);
@@ -30,6 +31,7 @@ public static class DysonSubagentReportPrompt
             DysonAgentInterruptKind.SubagentCompleted => "completed",
             DysonAgentInterruptKind.SubagentFailed => "failed",
             DysonAgentInterruptKind.SubagentStopped => "stopped",
+            DysonAgentInterruptKind.SubagentBlocked => "blocked",
             _ => interrupt.Kind.ToString(),
         };
 
