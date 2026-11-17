@@ -351,6 +351,9 @@ public class DysonSessionTodoTests
                 "SubmitSubagentReport description must contain 'auto-submits the last parseable report'.");
         }
 
+        if (!report.InputSchemaJson.Contains("\"blocked\"", StringComparison.Ordinal))
+            throw new InvalidOperationException("SubmitSubagentReport status schema must contain \"blocked\".");
+
         if (DysonAgentSession.MaxSubmitSubagentReportFailuresPerTurn != 2)
         {
             throw new InvalidOperationException(

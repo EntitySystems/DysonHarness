@@ -313,13 +313,14 @@ public static class DysonSubagentHostLogic
 
     /// <summary>
     /// Roster "Cancel execution" is enabled while the session is not terminal.
-    /// Same set as <see cref="DysonAgentSession.IsTerminal"/>: Completed, Stopped, Failed, Interrupted.
+    /// Same set as <see cref="DysonAgentSession.IsTerminal"/>: Completed, Stopped, Failed, Blocked, Interrupted.
     /// </summary>
     public static bool CanCancelExecution(DysonSessionStatus status) =>
         status is not (
             DysonSessionStatus.Completed
             or DysonSessionStatus.Stopped
             or DysonSessionStatus.Failed
+            or DysonSessionStatus.Blocked
             or DysonSessionStatus.Interrupted);
 
     /// <summary>
