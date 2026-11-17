@@ -2089,6 +2089,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         OpenFileViewerCoreAsync(relativePath, workRoot, actions, zipFolder: "", launchable: true, cancellationToken);
 
+    /// <summary>Hands a file to the OS default handler. Test seam; only binary non-executables reach it.</summary>
+    internal Func<string, Task<VoidResult<string>>> OpenWithOsDefault { get; set; } = DysonOsLauncher.OpenFileAsync;
+
+    /// <summary>Selects a file in the OS file manager without launching it. Test seam; used for executables.</summary>
+    internal Func<string, Task<VoidResult<string>>> RevealInFileManager { get; set; } = DysonOsLauncher.RevealFileAsync;
+
     /// <param name="zipFolder">Folder a zip listing opens at ("" = archive root); ignored for non-zip paths.</param>
     /// <param name="launchable">False hides "Open in default editor" (zip entries that are executables/scripts).</param>
     private async Task OpenFileViewerCoreAsync(
@@ -2162,7 +2168,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         var isMd = IsMarkdownPath(path);
         var isPdf = DysonFileViewerState.IsPdfPath(path);
         var isImage = DysonComposerUploads.LooksLikeImage(contentType: null, path);
-        var audioContentType = DysonAudioFiles.ContentTypeFor(path);
+        var mediaContentType = DysonAudioFiles.ContentTypeFor(path) ?? DysonVideoFiles.ContentTypeFor(path);
+        var isVideo = DysonVideoFiles.IsVideoPath(path);
 
         var resolved = fs.ResolvePath(path);
         if (resolved.IsSuccess)
@@ -2192,9 +2199,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         }
 
-        if (audioContentType is not null)
+        if (mediaContentType is not null)
         {
-            // Stream from disk (range requests for seeking); ResolvePath already rejected paths outside the work root.
+            // Audio or video: stream from disk (range requests for seeking); ResolvePath already rejected paths outside the work root.
             var exists = resolved.IsError
                 ? Result<bool, string>.AsError(resolved.Error)
                 : await fs.FileExistsAsync(path, cancellationToken).ConfigureAwait(true);
@@ -2206,7 +2213,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                     Title = title,
                     Content = "",
                     IsMarkdown = false,
-                    IsAudio = true,
+                    IsAudio = !isVideo,
+                    IsVideo = isVideo,
                     AbsolutePath = absolutePath,
                     CanOpenInDefaultEditor = false,
                     MarkdownBlocks = [],
@@ -2216,14 +2224,15 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return;
             }
 
-            var previewId = _filePreviews.PutFile(resolved.Value, audioContentType);
+            var previewId = _filePreviews.PutFile(resolved.Value, mediaContentType);
             SetFileViewer(new DysonFileViewerState
             {
                 RelativePath = path,
                 Title = title,
                 Content = "",
                 IsMarkdown = false,
-                IsAudio = true,
+                IsAudio = !isVideo,
+                IsVideo = isVideo,
                 AudioPreviewId = previewId,
                 AudioPreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
                 AbsolutePath = absolutePath,
@@ -2332,6 +2341,57 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         }
 
+        // Sniff gate (off the circuit inside ClassifyFileAsync): binary files never reach the text reader.
+        // A failed ResolvePath falls through as Viewer so the text read reports the error as before.
+        var route = DysonFileOpenRoute.Viewer;
+        if (resolved.IsSuccess)
+        {
+            var classified = await DysonFileRouting.ClassifyFileAsync(resolved.Value, cancellationToken).ConfigureAwait(true);
+            if (classified.IsError)
+            {
+                SetFileViewer(new DysonFileViewerState
+                {
+                    RelativePath = path,
+                    Title = title,
+                    Content = "",
+                    IsMarkdown = isMd,
+                    AbsolutePath = absolutePath,
+                    CanOpenInDefaultEditor = false,
+                    MarkdownBlocks = [],
+                    Error = classified.Error,
+                    Actions = actionList,
+                });
+                return;
+            }
+
+            route = classified.Value;
+            if (route is DysonFileOpenRoute.OsDefault or DysonFileOpenRoute.Reveal)
+            {
+                // Executables are only ever revealed, never launched; other binaries go to the OS handler.
+                var handed = route is DysonFileOpenRoute.OsDefault
+                    ? await OpenWithOsDefault(resolved.Value).ConfigureAwait(true)
+                    : await RevealInFileManager(resolved.Value).ConfigureAwait(true);
+                if (handed.IsSuccess)
+                    return; // The OS app / file manager is the feedback; no modal.
+
+                SetFileViewer(new DysonFileViewerState
+                {
+                    RelativePath = path,
+                    Title = title,
+                    Content = "",
+                    IsMarkdown = false,
+                    AbsolutePath = absolutePath,
+                    CanOpenInDefaultEditor = false,
+                    MarkdownBlocks = [],
+                    Error = route is DysonFileOpenRoute.Reveal
+                        ? $"'{title}' is an executable; Dyson does not open or run it. {handed.Error}"
+                        : handed.Error,
+                    Actions = actionList,
+                });
+                return;
+            }
+        }
+
         var fm = new DysonFileManager(fs);
         var read = await fm.ReadTextAsync(path, cancellationToken).ConfigureAwait(true);
         if (read.IsError)
@@ -2371,7 +2431,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             Content = read.Value,
             IsMarkdown = isMd,
             AbsolutePath = absolutePath,
-            CanOpenInDefaultEditor = launchable && absolutePath is not null,
+            // Scripts / html / svg / exec-bit text (ViewerReadOnly) never offer the OS launcher.
+            CanOpenInDefaultEditor = launchable && absolutePath is not null && route is DysonFileOpenRoute.Viewer,
             MarkdownBlocks = markdownBlocks,
             Actions = actionList,
             GitDiffAnnotations = annotations,
@@ -2721,7 +2782,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         // The engine refuses launch-blocked entries; only launchable binaries reach the OS handler.
-        return await DysonOsLauncher.OpenFileAsync(x.AbsolutePath).ConfigureAwait(true);
+        return await OpenWithOsDefault(x.AbsolutePath).ConfigureAwait(true);
     }
 
     private void SetFileViewer(DysonFileViewerState state, int? expectedEpoch = null)

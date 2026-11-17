@@ -31,17 +31,8 @@ public static class DysonZipArchives
 
     private const int MaxEntryDepth = 64;
     private const int CopyBufferSize = 64 * 1024;
-    private const int SniffBytes = 8 * 1024;
     private const int UnixExecBits = 0b001_001_001; // --x--x--x in the zip's Unix mode (external attributes >> 16)
     private const UnixFileMode ExecModes = UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
-
-    // ShellExecute / open / xdg-open would run these, so they never reach the OS launcher.
-    private static readonly HashSet<string> LaunchBlockedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".exe", ".msi", ".msix", ".appx", ".scr", ".bat", ".cmd", ".com", ".pif", ".cpl", ".ps1", ".psm1",
-        ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".lnk", ".url", ".jar", ".dll", ".sys", ".reg",
-        ".inf", ".scf", ".msc", ".application", ".gadget", ".sh", ".command", ".desktop", ".app", ".run", ".bin",
-    };
 
     /// <summary>Per-user cache (<c>LocalApplicationData/DysonHarness/zip-cache</c>); OS temp only when that folder is unknown.</summary>
     public static string DefaultCacheRoot
@@ -61,10 +52,12 @@ public static class DysonZipArchives
     /// <summary>
     /// True when an entry must never reach the OS launcher: an executable/script extension (case-insensitive,
     /// trailing dots/spaces ignored as Windows does) or a Unix exec bit in the zip's external attributes.
+    /// The extension denylist lives in <see cref="DysonFileRouting"/>.
     /// </summary>
     public static bool IsLaunchBlocked(string entryName, int externalAttributes = 0) =>
-        LaunchBlockedExtensions.Contains(Path.GetExtension(entryName.TrimEnd('.', ' ')))
-        || ((externalAttributes >> 16) & UnixExecBits) != 0;
+        DysonFileRouting.IsLaunchBlockedName(entryName) || ExecBit(externalAttributes);
+
+    private static bool ExecBit(int externalAttributes) => ((externalAttributes >> 16) & UnixExecBits) != 0;
 
     /// <summary>
     /// Lists file entries plus explicit directory entries (so empty folders show). Entries whose
@@ -206,9 +199,12 @@ public static class DysonZipArchives
             if (entry is null)
                 return Result<DysonZipExtracted, string>.AsError($"Zip entry not found: '{entryFullName}'.");
 
-            // Route before anything is written: viewer types by name, else text when the first 8 KiB has no NUL.
-            var openInViewer = IsViewerTypeByName(leaf) || !LooksBinary(entry);
-            var canLaunch = !IsLaunchBlocked(entryFullName, entry.ExternalAttributes);
+            // Route before anything is written: viewer types by name, else the shared classifier on the first 8 KiB.
+            var head = ReadHead(entry);
+            var route = DysonFileRouting.Classify(entryFullName, head, ExecBit(entry.ExternalAttributes));
+            var openInViewer = IsViewerTypeByName(leaf)
+                || route is DysonFileOpenRoute.Viewer or DysonFileOpenRoute.ViewerReadOnly;
+            var canLaunch = route is DysonFileOpenRoute.Viewer or DysonFileOpenRoute.OsDefault;
             var refused = Result<DysonZipExtracted, string>.AsError(
                 $"Refusing to open '{leaf}': executable and script files from archives are blocked.");
             if (!openInViewer && !canLaunch)
@@ -285,14 +281,15 @@ public static class DysonZipArchives
         IsZipPath(path)
         || string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase)
         || DysonComposerUploads.LooksLikeImage(null, path)
-        || DysonAudioFiles.IsAudioPath(path);
+        || DysonAudioFiles.IsAudioPath(path)
+        || DysonVideoFiles.IsVideoPath(path);
 
-    private static bool LooksBinary(ZipArchiveEntry entry)
+    private static byte[] ReadHead(ZipArchiveEntry entry)
     {
         using var stream = entry.Open();
-        var buffer = new byte[SniffBytes];
+        var buffer = new byte[DysonFileRouting.SniffBytes];
         var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
-        return buffer.AsSpan(0, read).IndexOf((byte)0) >= 0;
+        return buffer[..read];
     }
 
     // A symlink planted at the target is a miss, so it gets replaced by a real extracted file.

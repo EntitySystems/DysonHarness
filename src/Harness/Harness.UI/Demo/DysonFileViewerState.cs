@@ -32,10 +32,13 @@ public sealed class DysonFileViewerState
     /// <summary>When true, <see cref="AudioPreviewUrl"/> is the <c>audio</c> src for the custom audio player.</summary>
     public bool IsAudio { get; init; }
 
-    /// <summary>Relative URL under <see cref="DysonFilePreviewStore.RoutePrefix"/> (on-disk, range-enabled), or null.</summary>
+    /// <summary>When true, <see cref="AudioPreviewUrl"/> is the <c>video</c> src (same player, video element shown).</summary>
+    public bool IsVideo { get; init; }
+
+    /// <summary>Audio or video media preview: relative URL under <see cref="DysonFilePreviewStore.RoutePrefix"/> (on-disk, range-enabled), or null.</summary>
     public string? AudioPreviewUrl { get; init; }
 
-    /// <summary>Preview store token to revoke on close; null when not an audio preview.</summary>
+    /// <summary>Preview store token to revoke on close; null when not an audio or video media preview.</summary>
     public string? AudioPreviewId { get; init; }
 
     /// <summary>When true, the overlay renders <see cref="ZipEntries"/> as a folder listing.</summary>

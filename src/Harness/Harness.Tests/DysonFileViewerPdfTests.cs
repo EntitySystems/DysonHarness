@@ -248,6 +248,44 @@ public class DysonFileViewerPdfTests
                 Assert.Equal("Back to tools.zip", Assert.Single(host.FileViewer.Actions).Label);
                 cacheDirs.Add(Path.GetDirectoryName(host.FileViewer.AbsolutePath!)!);
 
+                // Magic bytes beat the extension; video entries open in the player; other binaries go to the OS
+                // default handler (never the reveal path, which is for workspace executables only).
+                var opened = new List<string>();
+                var revealed = new List<string>();
+                host.OpenWithOsDefault = p => { opened.Add(p); return Task.FromResult(VoidResult<string>.Success); };
+                host.RevealInFileManager = p => { revealed.Add(p); return Task.FromResult(VoidResult<string>.Success); };
+                using (var zipStream = File.Create(Path.Combine(workRoot, "media.zip")))
+                using (var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    await using (var s = archive.CreateEntry("renamed.dat").Open())
+                        await s.WriteAsync(new byte[] { (byte)'M', (byte)'Z', 0x90, 0 });
+                    await using (var s = archive.CreateEntry("clip.mp4").Open())
+                        await s.WriteAsync(new byte[] { 0, 0, 0, 0x18, (byte)'f', (byte)'t', (byte)'y', (byte)'p' });
+                    await using (var s = archive.CreateEntry("art.psd").Open())
+                        await s.WriteAsync(new byte[] { (byte)'8', (byte)'B', (byte)'P', (byte)'S', 0, 1, 0, 0 });
+                }
+
+                await host.OpenFileViewerAsync("media.zip", workRoot);
+                var mediaViewer = host.FileViewer;
+                var renamed = await host.OpenZipEntryAsync("renamed.dat");
+                Assert.True(renamed.IsError);
+                Assert.StartsWith("Refusing to open 'renamed.dat'", renamed.Error);
+                Assert.Same(mediaViewer, host.FileViewer);
+
+                var clip = await host.OpenZipEntryAsync("clip.mp4");
+                Assert.True(clip.IsSuccess);
+                Assert.True(host.FileViewer!.IsVideo);
+                Assert.False(host.FileViewer.IsAudio);
+                Assert.Equal("Back to media.zip", Assert.Single(host.FileViewer.Actions).Label);
+                cacheDirs.Add(Path.GetDirectoryName(host.FileViewer.AbsolutePath!)!);
+
+                await host.OpenFileViewerAsync("media.zip", workRoot);
+                var psd = await host.OpenZipEntryAsync("art.psd");
+                Assert.True(psd.IsSuccess);
+                Assert.EndsWith("art.psd", Assert.Single(opened));
+                Assert.Empty(revealed);
+                Assert.True(host.FileViewer!.IsZip);
+
                 // A late extraction must not resurrect a closed viewer or replace the file opened since.
                 await host.OpenFileViewerAsync("tools.zip", workRoot);
                 var late = host.OpenZipEntryAsync("run.sh");

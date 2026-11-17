@@ -2,10 +2,18 @@
 @implements IAsyncDisposable
 @inject IJSRuntime Js
 
-@* Custom player over a hidden <audio> (no native controls). AudioPlayer.razor.js owns playback and
-   DOM state so timeupdate never crosses the circuit; this component only mounts and tears it down. *@
-<div class="audio-player" role="group" aria-label="@($"Audio player: {Title}")" @ref="_root">
-    <audio preload="metadata" src="@Src"></audio>
+@* Custom player over a hidden <audio>, or a visible <video> when Video is set (no native controls).
+   AudioPlayer.razor.js owns playback and DOM state so timeupdate never crosses the circuit; this
+   component only mounts and tears it down. *@
+<div class="audio-player @(Video ? "audio-player--video" : null)" role="group" aria-label="@($"{(Video ? "Video" : "Audio")} player: {Title}")" @ref="_root">
+    @if (Video)
+    {
+        <video class="audio-player__video" preload="metadata" playsinline src="@Src"></video>
+    }
+    else
+    {
+        <audio preload="metadata" src="@Src"></audio>
+    }
 
     <button type="button"
             class="audio-player__btn audio-player__play"
@@ -79,7 +87,13 @@
                aria-valuetext="100%" />
     </div>
 
-    <div class="audio-player__error" data-role="error" role="alert" hidden></div>
+    <div class="audio-player__error" data-role="error" role="alert" hidden>
+        <span data-role="error-text"></span>
+        @if (OnOpenExternal.HasDelegate)
+        {
+            <button type="button" class="btn btn-ghost audio-player__external" @onclick="OnOpenExternal">Open in default app</button>
+        }
+    </div>
 </div>
 
 @code {
@@ -90,6 +104,12 @@
 
     [Parameter, EditorRequired] public string Src { get; set; } = "";
     [Parameter] public string? Title { get; set; }
+
+    /// <summary>Renders a <c>&lt;video&gt;</c> above the controls instead of a hidden <c>&lt;audio&gt;</c>.</summary>
+    [Parameter] public bool Video { get; set; }
+
+    /// <summary>When set, the error banner offers "Open in default app" (unsupported format or codec fallback).</summary>
+    [Parameter] public EventCallback OnOpenExternal { get; set; }
 
     // The JS module mutates this DOM (icons, aria, range values); a re-render must not reset it.
     // The parent @key's on Src, so a different file mounts a fresh player instead.

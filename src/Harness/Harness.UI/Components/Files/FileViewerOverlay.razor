@@ -14,7 +14,7 @@
          @ref="_backdropEl"
          @onclick="() => { if (!ctx.IsExiting) Close(); }"
          @onkeydown="OnBackdropKeyDown">
-        <div class="file-viewer-modal @(viewer.IsPdf || viewer.IsTextPreview || viewer.IsZip ? "file-viewer-modal--pdf" : viewer.IsImage ? "file-viewer-modal--image" : null)"
+        <div class="file-viewer-modal @(viewer.IsPdf || viewer.IsTextPreview || viewer.IsZip ? "file-viewer-modal--pdf" : viewer.IsImage || viewer.IsVideo ? "file-viewer-modal--image" : null)"
              role="dialog"
              aria-modal="true"
              aria-labelledby="file-viewer-modal-title"
@@ -76,7 +76,7 @@
                     </div>
                 }
 
-                <div class="file-viewer-modal__content @(viewer.IsPdf || viewer.IsTextPreview ? "file-viewer-modal__content--pdf" : viewer.IsImage ? "file-viewer-modal__content--image" : null)">
+                <div class="file-viewer-modal__content @(viewer.IsPdf || viewer.IsTextPreview ? "file-viewer-modal__content--pdf" : viewer.IsImage || viewer.IsVideo ? "file-viewer-modal__content--image" : null)">
                     @if (!string.IsNullOrEmpty(viewer.Error))
                     {
                         <div class="error-banner">@viewer.Error</div>
@@ -146,10 +146,12 @@
                              src="@viewer.ImagePreviewUrl"
                              alt="@viewer.Title" />
                     }
-                    else if (viewer.IsAudio && !string.IsNullOrEmpty(viewer.AudioPreviewUrl))
+                    else if ((viewer.IsAudio || viewer.IsVideo) && !string.IsNullOrEmpty(viewer.AudioPreviewUrl))
                     {
                         @* @key: a new file gets a fresh player; the old one is disposed (paused). *@
-                        <AudioPlayer @key="viewer.AudioPreviewUrl" Src="@viewer.AudioPreviewUrl" Title="@viewer.Title" />
+                        <AudioPlayer @key="viewer.AudioPreviewUrl" Src="@viewer.AudioPreviewUrl" Title="@viewer.Title"
+                                     Video="viewer.IsVideo"
+                                     OnOpenExternal="@(viewer.CanOpenInDefaultEditor ? EventCallback.Factory.Create(this, OpenInDefaultEditorAsync) : default)" />
                     }
                     else if (viewer.IsTextPreview && !string.IsNullOrEmpty(viewer.TextPreviewUrl))
                     {

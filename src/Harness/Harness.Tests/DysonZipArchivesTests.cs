@@ -196,6 +196,9 @@ public class DysonZipArchivesTests
     [InlineData("Install.Bat", 0, true)]
     [InlineData("evil.exe.", 0, true)]
     [InlineData("tool.ps1", 0, true)]
+    [InlineData("x.py", 0, true)]
+    [InlineData("x.AppImage", 0, true)]
+    [InlineData("x.html", 0, true)]
     [InlineData("shortcut.lnk", 0, true)]
     [InlineData("report.docx", 0, false)]
     [InlineData("sheet.xlsx", 0, false)]
@@ -219,7 +222,7 @@ public class DysonZipArchivesTests
                 ("setup.exe", binary, 0),
                 ("payload", binary, 0b111_101_101 << 16),
                 ("run.sh", Utf8("#!/bin/sh\necho hi\n"), 0b111_101_101 << 16),
-                ("report.docx", binary, 0b110_100_100 << 16));
+                ("report.docx", [(byte)'P', (byte)'K', 3, 4, 0, 0], 0b110_100_100 << 16)); // non-PE binary (PE magic is refused by any name)
 
             foreach (var name in new[] { "setup.exe", "payload" })
             {
@@ -241,6 +244,39 @@ public class DysonZipArchivesTests
             Assert.True(doc.Value.CanLaunch);
             if (OperatingSystem.IsWindows())
                 Assert.Contains("ZoneId=3", await File.ReadAllTextAsync(doc.Value.AbsolutePath + ":Zone.Identifier"));
+        }
+        finally
+        {
+            DeleteQuietly(dir);
+        }
+    }
+
+    [Fact]
+    public async Task Extract_refuses_pe_by_magic_and_opens_video_in_viewer()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var zipPath = Path.Combine(dir, "media.zip");
+            var cacheRoot = Path.Combine(dir, "cache");
+            WriteZip(zipPath,
+                ("renamed.dat", [(byte)'M', (byte)'Z', 0, 1]),
+                ("clip.mp4", [0, 0, 0, 0x18, (byte)'f', (byte)'t', (byte)'y', (byte)'p']),
+                ("art.psd", [1, 2, 0, 3]));
+
+            var refused = await DysonZipArchives.ExtractEntryAsync(zipPath, "renamed.dat", cacheRoot);
+            Assert.True(refused.IsError);
+            Assert.StartsWith("Refusing to open 'renamed.dat'", refused.Error);
+            Assert.False(Directory.Exists(cacheRoot));
+
+            var clip = await DysonZipArchives.ExtractEntryAsync(zipPath, "clip.mp4", cacheRoot);
+            Assert.True(clip.IsSuccess, clip.IsError ? clip.Error : null);
+            Assert.True(clip.Value.OpenInViewer);
+
+            var psd = await DysonZipArchives.ExtractEntryAsync(zipPath, "art.psd", cacheRoot);
+            Assert.True(psd.IsSuccess, psd.IsError ? psd.Error : null);
+            Assert.False(psd.Value.OpenInViewer);
+            Assert.True(psd.Value.CanLaunch);
         }
         finally
         {
