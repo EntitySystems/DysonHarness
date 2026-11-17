@@ -2095,6 +2095,24 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>Selects a file in the OS file manager without launching it. Test seam; used for executables.</summary>
     internal Func<string, Task<VoidResult<string>>> RevealInFileManager { get; set; } = DysonOsLauncher.RevealFileAsync;
 
+    /// <summary>
+    /// "Open in default editor" / "Open in default app" from the viewer. Re-classifies the file at click time
+    /// (media/pdf/image/zip routes skip the sniff gate, and the file may have changed since it opened), so an
+    /// executable is only ever revealed, never launched.
+    /// </summary>
+    public async Task<VoidResult<string>> OpenViewerFileExternallyAsync(CancellationToken cancellationToken = default)
+    {
+        if (_fileViewer is not { CanOpenInDefaultEditor: true, AbsolutePath: { } path })
+            return VoidResult<string>.Success;
+
+        var route = await DysonFileRouting.ClassifyFileAsync(path, cancellationToken).ConfigureAwait(true);
+        if (route.IsError)
+            return VoidResult<string>.AsError(route.Error);
+        return route.Value is DysonFileOpenRoute.Viewer or DysonFileOpenRoute.OsDefault
+            ? await OpenWithOsDefault(path).ConfigureAwait(true)
+            : await RevealInFileManager(path).ConfigureAwait(true);
+    }
+
     /// <param name="zipFolder">Folder a zip listing opens at ("" = archive root); ignored for non-zip paths.</param>
     /// <param name="launchable">False hides "Open in default editor" (zip entries that are executables/scripts).</param>
     private async Task OpenFileViewerCoreAsync(

@@ -65,6 +65,15 @@ public sealed class DysonFileRoutingTests
     [InlineData(".AppImage")]
     [InlineData(".html")]
     [InlineData(".svg")]
+    [InlineData(".msixbundle")]
+    [InlineData(".appxbundle")]
+    [InlineData(".appinstaller")]
+    [InlineData(".iqy")]
+    [InlineData(".slk")]
+    [InlineData(".theme")]
+    [InlineData(".themepack")]
+    [InlineData(".cab")]
+    [InlineData(".msu")]
     public void IsLaunchBlockedName_covers_gap_list_case_insensitively(string ext)
     {
         Assert.True(DysonFileRouting.IsLaunchBlockedName("x" + ext));

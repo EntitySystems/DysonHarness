@@ -47,6 +47,7 @@ public static class DysonFileRouting
         ".ps2xml", ".psc1", ".psc2", ".library-ms", ".search-ms", ".searchconnector-ms", ".diagcab", ".iso",
         ".img", ".vhd", ".vhdx", ".webloc", ".inetloc", ".fileloc", ".mobileconfig", ".kext", ".prefpane",
         ".deb", ".rpm", ".snap", ".flatpakref", ".so", ".ko", ".pl", ".rb", ".php",
+        ".msixbundle", ".appxbundle", ".appinstaller", ".iqy", ".slk", ".theme", ".themepack", ".cab", ".msu",
     };
 
     /// <summary>True when the extension (case-insensitive, trailing dots/spaces ignored as Windows does) is on the launch denylist.</summary>

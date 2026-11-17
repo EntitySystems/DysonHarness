@@ -414,6 +414,40 @@ public class DysonFileViewerContentTests
     }
 
     [Fact]
+    public async Task Open_externally_reclassifies_so_a_renamed_executable_is_revealed_not_launched()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var workRoot = await NewWorkRootAsync(
+            ("clip.mp4", [(byte)'M', (byte)'Z', 0x90, 0]),
+            ("pic.png", [0x7F, (byte)'E', (byte)'L', (byte)'F', 2, 1, 1, 0]),
+            ("movie.mp4", [0, 0, 0, 0x18, (byte)'f', (byte)'t', (byte)'y', (byte)'p']));
+        try
+        {
+            var (opened, revealed) = RecordLaunchers(ctx.Host);
+
+            // Media/image branches run before the sniff gate and offer the external button; the click must not launch.
+            foreach (var name in new[] { "clip.mp4", "pic.png" })
+            {
+                await ctx.Host.OpenFileViewerAsync(name, workRoot);
+                Assert.True(ctx.Host.FileViewer!.CanOpenInDefaultEditor);
+                Assert.True((await ctx.Host.OpenViewerFileExternallyAsync()).IsSuccess);
+                Assert.Equal(Path.GetFullPath(Path.Combine(workRoot, name)), revealed[^1]);
+            }
+
+            Assert.Empty(opened);
+
+            await ctx.Host.OpenFileViewerAsync("movie.mp4", workRoot);
+            Assert.True((await ctx.Host.OpenViewerFileExternallyAsync()).IsSuccess);
+            Assert.Equal(Path.GetFullPath(Path.Combine(workRoot, "movie.mp4")), Assert.Single(opened));
+            Assert.Equal(2, revealed.Count);
+        }
+        finally
+        {
+            DeleteQuietly(workRoot);
+        }
+    }
+
+    [Fact]
     public async Task Text_scripts_open_read_only()
     {
         await using var ctx = await HostContext.CreateAsync();

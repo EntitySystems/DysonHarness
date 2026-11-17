@@ -440,10 +440,8 @@ else
 
     private async Task OpenInDefaultEditorAsync()
     {
-        if (Host.FileViewer is not { CanOpenInDefaultEditor: true, AbsolutePath: { } path })
-            return;
-
-        var opened = await DysonOsLauncher.OpenFileAsync(path);
+        // The host re-classifies at click time: executables are revealed, never launched.
+        var opened = await Host.OpenViewerFileExternallyAsync();
         if (opened.IsError)
             Host.ReportError(opened.Error);
     }
