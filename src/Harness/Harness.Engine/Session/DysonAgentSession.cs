@@ -302,6 +302,7 @@ public abstract class DysonAgentSession
         Status is DysonSessionStatus.Completed
             or DysonSessionStatus.Stopped
             or DysonSessionStatus.Failed
+            or DysonSessionStatus.Blocked
             or DysonSessionStatus.Interrupted;
 
     /// <summary>True while any turn is mid turn summarization (UI /summarize worker).</summary>
@@ -1072,7 +1073,7 @@ public abstract class DysonAgentSession
                 branch = full.Value.Session.WorktreeBranch;
                 report = LastStatusReason(full.Value.Logs, stoppedOnly: false);
                 if (row.Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped
-                    or DysonSessionStatus.Failed or DysonSessionStatus.Interrupted)
+                    or DysonSessionStatus.Failed or DysonSessionStatus.Blocked or DysonSessionStatus.Interrupted)
                     finishedAt = full.Value.Turns.Max(t => t.CompletedUtc);
             }
         }
@@ -1280,6 +1281,9 @@ public abstract class DysonAgentSession
     protected void NotifySubagentFailed(int subagentId, string? summary, Guid? persistenceId = null) =>
         NotifySubagentTerminal(DysonAgentInterruptKind.SubagentFailed, subagentId, summary, persistenceId);
 
+    protected void NotifySubagentBlocked(int subagentId, string? summary, Guid? persistenceId = null) =>
+        NotifySubagentTerminal(DysonAgentInterruptKind.SubagentBlocked, subagentId, summary, persistenceId);
+
     // Tracked before the enqueue: the host may start the report turn (and mark it delivered) synchronously.
     private void NotifySubagentTerminal(
         DysonAgentInterruptKind kind,
@@ -1421,6 +1425,7 @@ public abstract class DysonAgentSession
 
             if (terminal.Status is DysonSessionStatus.Completed
                 or DysonSessionStatus.Failed
+                or DysonSessionStatus.Blocked
                 or DysonSessionStatus.Stopped)
             {
                 MarkWaitConsumedCompletion(subagentId);
@@ -2861,20 +2866,23 @@ public abstract class DysonAgentSession
         string summary,
         bool failed = false,
         CancellationToken cancellationToken = default,
-        bool bypassIncompleteTodos = false) =>
+        bool bypassIncompleteTodos = false,
+        bool blocked = false) =>
         SubmitSubagentReportAsync(
             summary,
             failed,
             cancellationToken,
             bypassIncompleteTodos,
-            allowStoppedOrInterrupted: false);
+            allowStoppedOrInterrupted: false,
+            blocked: blocked);
 
     private async Task<Result<string, string>> SubmitSubagentReportAsync(
         string summary,
         bool failed,
         CancellationToken cancellationToken,
         bool bypassIncompleteTodos,
-        bool allowStoppedOrInterrupted)
+        bool allowStoppedOrInterrupted,
+        bool blocked = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -2886,8 +2894,8 @@ public abstract class DysonAgentSession
             .Select(t => $"{t.TaskCode} ({t.DisplayName})={t.Status}")
             .ToArray();
 
-        // Failed reports may leave todos incomplete (blocker handoff). Successful reports require all Complete.
-        if (incomplete.Length > 0 && !failed && !bypassIncompleteTodos)
+        // Failed and blocked reports may leave todos incomplete (blocker handoff). Successful reports require all Complete.
+        if (incomplete.Length > 0 && !failed && !blocked && !bypassIncompleteTodos)
         {
             return Result<string, string>.AsError(
                 "SubmitSubagentReport: incomplete todos: " + string.Join("; ", incomplete));
@@ -2896,7 +2904,7 @@ public abstract class DysonAgentSession
         var trimmed = summary.Trim();
         var failedReport = failed;
         var deferMerge = false;
-        if (!failedReport)
+        if (!failedReport && !blocked)
         {
             // None + short gate wait: a cancelled tool call or a busy MergeGates must not
             // lose this report. A busy gate records it Completed with the merge pending.
@@ -2913,13 +2921,16 @@ public abstract class DysonAgentSession
             }
         }
 
-        var status = failedReport ? DysonSessionStatus.Failed : DysonSessionStatus.Completed;
+        var status = blocked
+            ? DysonSessionStatus.Blocked
+            : failedReport ? DysonSessionStatus.Failed : DysonSessionStatus.Completed;
 
         // Terminal handoff already accepted: reject retries (Failed→Completed supersede still allowed).
         // allowStoppedOrInterrupted is the harness synthetic path only: the Stopped/Interrupted
         // rejection exists to stop the agent retrying after a stop, not to stop the harness
         // closing the loop. Completed / Failed-already-failed still reject (idempotency).
         if (Status == DysonSessionStatus.Completed
+            || Status == DysonSessionStatus.Blocked
             || (Status == DysonSessionStatus.Failed && failedReport)
             || (Status == DysonSessionStatus.Stopped && !allowStoppedOrInterrupted)
             || (Status == DysonSessionStatus.Interrupted && !allowStoppedOrInterrupted))
@@ -2934,14 +2945,16 @@ public abstract class DysonAgentSession
         {
             // Race: another thread accepted between the check and TryAccept.
             return Result<string, string>.AsError(
-                Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed
+                Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed or DysonSessionStatus.Blocked
                     ? $"SubmitSubagentReport: already submitted. {TerminalReportRejectHint}"
                     : $"SubmitSubagentReport: session already {Status}. {TerminalReportRejectHint}");
         }
 
         if (Parent is not null)
         {
-            if (failedReport)
+            if (blocked)
+                Parent.NotifySubagentBlocked(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
+            else if (failedReport)
                 Parent.NotifySubagentFailed(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
             else
                 Parent.NotifySubagentCompleted(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
@@ -3336,7 +3349,7 @@ public abstract class DysonAgentSession
         var action = DysonChildReportWatch.Evaluate(
             isChild: Parent is not null,
             status: Status,
-            hasReported: Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed
+            hasReported: Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed or DysonSessionStatus.Blocked
                 || _subagentReportAccepted,
             // A held parent message starts when this run detaches; do not remind or synthesize first.
             hasPendingWork: HasPendingTurn || InFlightPromptTurn is not null || HeldInterruptCount > 0,
@@ -3395,17 +3408,19 @@ public abstract class DysonAgentSession
 
         string? parsedSummary = null;
         var parsedFailed = false;
+        var parsedBlocked = false;
         for (var i = turn.ToolCalls.Count - 1; i >= 0; i--)
         {
             var call = turn.ToolCalls[i];
             if (!string.Equals(call.ToolName, "SubmitSubagentReport", StringComparison.Ordinal))
                 continue;
 
-            if (!TryParseSubmitSubagentReportArgs(call.ArgumentsJson, out var summary, out var failed))
+            if (!TryParseSubmitSubagentReportArgs(call.ArgumentsJson, out var summary, out var failed, out var blocked))
                 continue;
 
             parsedSummary = summary;
             parsedFailed = failed;
+            parsedBlocked = blocked;
             break;
         }
 
@@ -3416,7 +3431,8 @@ public abstract class DysonAgentSession
                     summaryWithNote,
                     parsedFailed,
                     CancellationToken.None,
-                    bypassIncompleteTodos: true)
+                    bypassIncompleteTodos: true,
+                    blocked: parsedBlocked)
                 .ConfigureAwait(false);
 
             // Already-terminal reject: still cancel and return true; do not overwrite status.
@@ -3454,10 +3470,12 @@ public abstract class DysonAgentSession
     private static bool TryParseSubmitSubagentReportArgs(
         string? argumentsJson,
         out string summary,
-        out bool failed)
+        out bool failed,
+        out bool blocked)
     {
         summary = "";
         failed = false;
+        blocked = false;
         try
         {
             using var doc = JsonDocument.Parse(
@@ -3474,10 +3492,11 @@ public abstract class DysonAgentSession
 
             summary = value.Trim();
             if (doc.RootElement.TryGetProperty("status", out var statusProp)
-                && statusProp.ValueKind == JsonValueKind.String
-                && string.Equals(statusProp.GetString(), "failed", StringComparison.OrdinalIgnoreCase))
+                && statusProp.ValueKind == JsonValueKind.String)
             {
-                failed = true;
+                var status = statusProp.GetString();
+                failed = string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase);
+                blocked = string.Equals(status, "blocked", StringComparison.OrdinalIgnoreCase);
             }
 
             return true;
@@ -3520,6 +3539,7 @@ public abstract class DysonAgentSession
         {
             if (Status is not (DysonSessionStatus.Completed
                 or DysonSessionStatus.Failed
+                or DysonSessionStatus.Blocked
                 or DysonSessionStatus.Interrupted))
                 return false;
 
@@ -3604,8 +3624,8 @@ public abstract class DysonAgentSession
         string? summary,
         bool allowStoppedOrInterrupted = false)
     {
-        if (status is not (DysonSessionStatus.Completed or DysonSessionStatus.Failed))
-            throw new ArgumentOutOfRangeException(nameof(status), status, "Must be Completed or Failed.");
+        if (status is not (DysonSessionStatus.Completed or DysonSessionStatus.Failed or DysonSessionStatus.Blocked))
+            throw new ArgumentOutOfRangeException(nameof(status), status, "Must be Completed, Failed or Blocked.");
 
         DysonSessionStatus previous = default;
         DysonSessionStatus next = default;
@@ -3613,7 +3633,7 @@ public abstract class DysonAgentSession
         var changed = false;
         lock (_terminalGate)
         {
-            if (Status == DysonSessionStatus.Completed)
+            if (Status is DysonSessionStatus.Completed or DysonSessionStatus.Blocked)
                 return false;
 
             if (Status is DysonSessionStatus.Stopped or DysonSessionStatus.Interrupted)
@@ -4182,9 +4202,12 @@ public abstract class DysonAgentSession
         if (parent is null || parent.PersistenceId == Guid.Empty)
             return;
 
-        var interruptKind = status == DysonSessionStatus.Completed
-            ? DysonAgentInterruptKind.SubagentCompleted
-            : DysonAgentInterruptKind.SubagentFailed;
+        var interruptKind = status switch
+        {
+            DysonSessionStatus.Completed => DysonAgentInterruptKind.SubagentCompleted,
+            DysonSessionStatus.Blocked => DysonAgentInterruptKind.SubagentBlocked,
+            _ => DysonAgentInterruptKind.SubagentFailed,
+        };
         var interruptLog = DysonSessionLogPayload.CreateEntry(
             parent.PersistenceId,
             DysonSessionLogKind.Interrupt,
@@ -4422,7 +4445,7 @@ public abstract class DysonAgentSession
             if (stoppedOnly
                     ? payload.Status == DysonSessionStatus.Stopped
                     : payload.Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped
-                        or DysonSessionStatus.Failed or DysonSessionStatus.Interrupted)
+                        or DysonSessionStatus.Failed or DysonSessionStatus.Blocked or DysonSessionStatus.Interrupted)
                 reason = payload.Reason;
         }
 

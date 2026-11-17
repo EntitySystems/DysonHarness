@@ -12,6 +12,12 @@ public enum DysonSessionStatus
     /// Appended after existing values; do not renumber.
     /// </summary>
     Interrupted = 4,
+
+    /// <summary>
+    /// Child reported blocked by something outside the agent; terminal until reopened.
+    /// Appended; do not renumber.
+    /// </summary>
+    Blocked = 5,
 }
 
 public sealed class DysonSessionEntity

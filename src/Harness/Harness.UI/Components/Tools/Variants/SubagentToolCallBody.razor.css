@@ -1,0 +1,4 @@
+.tool-chip--blocked {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 40%, var(--border));
+}

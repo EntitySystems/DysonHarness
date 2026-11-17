@@ -9,6 +9,7 @@ public static class DysonSessionInactiveDelete
         status is DysonSessionStatus.Completed
             or DysonSessionStatus.Stopped
             or DysonSessionStatus.Failed
+            or DysonSessionStatus.Blocked
             or DysonSessionStatus.Interrupted;
 
     public static IReadOnlyList<Guid> SelectDeletableRootIds(
