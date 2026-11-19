@@ -1465,15 +1465,43 @@ public abstract class DysonAgentSession
         }));
     }
 
-    public async Task<Result<string, string>> StopSubagentAsync(
+    public Task<Result<string, string>> StopSubagentAsync(
         int subagentId,
         string? reason = null,
+        CancellationToken cancellationToken = default)
+        => StopSubagentAsync(subagentId, reason, recursive: false, cancellationToken);
+
+    /// <summary>
+    /// Stops a direct child. <paramref name="recursive"/> true also stops that child's
+    /// descendants first (deepest first) through this same method. Already-stopped
+    /// descendants are skipped. A descendant stop that returns an error fails the call.
+    /// </summary>
+    public async Task<Result<string, string>> StopSubagentAsync(
+        int subagentId,
+        string? reason,
+        bool recursive,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         if (!TryGetSubagent(subagentId, out var child))
             return Result<string, string>.AsError($"Unknown subagentId {subagentId}.");
+
+        if (recursive)
+        {
+            // Descendants first so a parent stop cannot race a child that is still running.
+            foreach (var descendant in child.SubSessions.ToArray())
+            {
+                if (descendant.Id < 1)
+                    continue;
+
+                var nested = await child.StopSubagentAsync(
+                        descendant.Id, reason, recursive: true, cancellationToken)
+                    .ConfigureAwait(false);
+                if (nested.IsError)
+                    return nested;
+            }
+        }
 
         // Terminal-first: mark Stopped before cancelling so KickOffChildPrompt cannot
         // drain a pending turn onto a new CTS (restart race).

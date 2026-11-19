@@ -5023,7 +5023,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (parent is not null && child.Id > 0 && !child.IsTerminal)
         {
-            var stopped = await parent.StopSubagentAsync(child.Id, "Stopped by user.")
+            var stopped = await parent.StopSubagentAsync(child.Id, "Stopped by user.", recursive: false)
                 .ConfigureAwait(false);
             if (!stopped.IsError)
                 await PersistStoppedSessionAsync(child).ConfigureAwait(false);
@@ -5073,7 +5073,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (focused is { Parent: not null, Id: > 0 } child)
         {
-            var stopped = await child.Parent.StopSubagentAsync(child.Id, "Stopped by user.")
+            var stopped = await child.Parent.StopSubagentAsync(child.Id, "Stopped by user.", recursive: false)
                 .ConfigureAwait(false);
             if (!stopped.IsError)
                 await PersistStoppedSessionAsync(child).ConfigureAwait(false);
@@ -5155,7 +5155,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (child.Id <= 0)
                 continue;
 
-            var stopped = await parent.StopSubagentAsync(child.Id, reason: "Stopped by user.")
+            var stopped = await parent.StopSubagentAsync(child.Id, reason: "Stopped by user.", recursive: false)
                 .ConfigureAwait(false);
             if (!stopped.IsError)
                 await PersistStoppedSessionAsync(child).ConfigureAwait(false);

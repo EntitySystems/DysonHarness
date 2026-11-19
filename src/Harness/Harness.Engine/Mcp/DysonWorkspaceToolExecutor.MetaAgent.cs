@@ -246,7 +246,9 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (!_session.TryGetSubagent(agentId, out var child))
             return Error(call, $"Unknown agentId {agentId}.");
 
-        var stopped = await _session.StopSubagentAsync(agentId, reason, cancellationToken)
+        // Meta stop stays non-recursive: the page tool has no recursive flag, and
+        // the host already stops descendants itself before calling this path.
+        var stopped = await _session.StopSubagentAsync(agentId, reason, recursive: false, cancellationToken)
             .ConfigureAwait(false);
         if (stopped.IsError)
             return Error(call, stopped.Error);

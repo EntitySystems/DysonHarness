@@ -905,10 +905,12 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 var reason = root.TryGetProperty("reason", out var reasonProp)
                     ? reasonProp.GetString()
                     : null;
+                var recursive = !root.TryGetProperty("recursive", out var recursiveProp)
+                    || recursiveProp.ValueKind != JsonValueKind.False;
                 if (!TryGetSubagent(stopId, out var child))
                     return ToolError(call, $"Unknown subagentId {stopId}.");
 
-                var stopped = await StopSubagentAsync(stopId, reason, cancellationToken)
+                var stopped = await StopSubagentAsync(stopId, reason, recursive, cancellationToken)
                     .ConfigureAwait(false);
                 if (stopped.IsError)
                     return ToolError(call, stopped.Error);

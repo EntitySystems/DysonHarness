@@ -1524,7 +1524,9 @@ public sealed class DysonMcpPipeline
             Name = "StopSubagent",
             Description =
                 "Cancel a running subagent (cooperative stop via its run CancellationToken). " +
-                "Marks the child Stopped and notifies the parent.",
+                "Marks the child Stopped and notifies the parent. " +
+                "recursive defaults to true when omitted: descendants are stopped first (deepest first), then the named agent. " +
+                "Pass false to stop only the named agent.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1537,6 +1539,10 @@ public sealed class DysonMcpPipeline
                     "reason": {
                       "type": "string",
                       "description": "Optional reason for the stop request."
+                    },
+                    "recursive": {
+                      "type": "boolean",
+                      "description": "Also stop descendants (deepest first). Omitted means true. Pass false to stop only the named agent."
                     }
                   },
                   "required": ["subagentId"]

@@ -868,6 +868,7 @@ public sealed partial class DysonWorkspaceToolExecutor
     {
         int subagentId;
         string? reason;
+        var recursive = true;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -876,6 +877,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 return Error(call, "StopSubagent: subagentId (≥ 1) is required.");
             subagentId = id.Value;
             reason = GetOptionalString(doc.RootElement, "reason");
+            recursive = GetBool(doc.RootElement, "recursive", defaultValue: true);
         }
         catch (JsonException)
         {
@@ -885,15 +887,34 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (!_session.TryGetSubagent(subagentId, out var child))
             return Error(call, $"Unknown subagentId {subagentId}.");
 
-        var stopped = await _session.StopSubagentAsync(subagentId, reason, cancellationToken)
+        var stopped = await _session.StopSubagentAsync(subagentId, reason, recursive, cancellationToken)
             .ConfigureAwait(false);
         if (stopped.IsError)
             return Error(call, stopped.Error);
+
+        if (recursive)
+        {
+            foreach (var descendant in EnumerateStoppedDescendants(child))
+            {
+                await PersistSessionStatusAsync(descendant, descendant.Status, reason, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
 
         await PersistSessionStatusAsync(child, child.Status, reason, cancellationToken)
             .ConfigureAwait(false);
 
         return Ok(call, stopped.Value);
+    }
+
+    private static IEnumerable<DysonAgentSession> EnumerateStoppedDescendants(DysonAgentSession session)
+    {
+        foreach (var child in session.SubSessions)
+        {
+            foreach (var nested in EnumerateStoppedDescendants(child))
+                yield return nested;
+            yield return child;
+        }
     }
 
     private async Task<DysonToolCallResult> ChangeSubagentAIModelAsync(

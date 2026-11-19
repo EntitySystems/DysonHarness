@@ -805,7 +805,7 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
         {
             if (child.Id > 0 && (!child.IsTerminal || child.HasActiveBackgroundRun))
             {
-                await session.StopSubagentAsync(child.Id, reason, cancellationToken).ConfigureAwait(false);
+                await session.StopSubagentAsync(child.Id, reason, recursive: false, cancellationToken).ConfigureAwait(false);
             }
 
             await StopLiveChildrenAsync(child, reason, cancellationToken).ConfigureAwait(false);
