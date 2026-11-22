@@ -220,7 +220,7 @@
     {
         index = Math.Max(0, index);
         _local[key] = index;
-        View.Write(Component[key], Scope, JsonValue.Create(index));
+        View.Write(Component[key], Scope, JsonValue.Create((double)index));
     }
 
     private string BoxClass()

@@ -119,6 +119,7 @@
     private IDisposable? _sub;
     private DateTimeOffset _now = DateTimeOffset.Now;
     private bool _ticking;
+    private bool _disposed;
 
     protected override void OnParametersSet()
     {
@@ -181,6 +182,8 @@
                     await LoadRunAsync(Vcs, _cts.Token).ConfigureAwait(true);
                 else
                     await LoadJobsAsync(Vcs, _cts.Token).ConfigureAwait(true);
+                if (_disposed)
+                    return;
                 _now = DateTimeOffset.Now;
                 _loaded = true;
                 SyncLeaseAndTicker();
@@ -317,6 +320,9 @@
 
     private void SyncLeaseAndTicker()
     {
+        // A fetch that completes after dispose must not take a new watch lease.
+        if (_disposed)
+            return;
         var active = BuildCard().IsActive;
         if (active && _lease is null && Vcs is { } service)
         {
@@ -372,6 +378,7 @@
 
     public ValueTask DisposeAsync()
     {
+        _disposed = true;
         _cts.Cancel();
         _lease?.Dispose();
         _lease = null;
