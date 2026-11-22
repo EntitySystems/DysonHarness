@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace DysonHarness;
 
@@ -4384,6 +4385,7 @@ public abstract class DysonAgentSession
             turn.VisualizationId = row.VisualizationId;
             turn.UserQuestion = DysonUserQuestionSerializer.Deserialize(row.UserQuestionJson);
             turn.SecureDataRequest = DysonSecureDataRequestSerializer.Deserialize(row.SecureDataRequestJson);
+            turn.A2uiSurface = DysonA2uiSurfaceSerializer.Deserialize(row.A2uiSurfaceJson);
             DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
             turn.FinalizeIncompleteTools(
                 "Tool call did not complete (cancelled or interrupted).");
@@ -4937,7 +4939,8 @@ public abstract class DysonAgentSession
         IReadOnlyList<DysonConversationAction>? actions = null,
         Guid? visualizationId = null,
         DysonUserQuestion? userQuestion = null,
-        DysonSecureDataRequest? secureDataRequest = null)
+        DysonSecureDataRequest? secureDataRequest = null,
+        DysonA2uiSurface? a2uiSurface = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
         var now = DateTime.UtcNow;
@@ -4950,6 +4953,7 @@ public abstract class DysonAgentSession
             VisualizationId = visualizationId,
             UserQuestion = userQuestion,
             SecureDataRequest = secureDataRequest,
+            A2uiSurface = a2uiSurface,
         };
         if (actions is { Count: > 0 })
             turn.RestoreConversationActions(actions);
@@ -5089,6 +5093,7 @@ public abstract class DysonAgentSession
                 return VoidResult<string>.AsError("DeleteUserQuestion: already answered.");
 
             turn.UserQuestion = null;
+            turn.A2uiSurface = null;
             turn.AssistantText = AppendWithdrawnMarker(turn.AssistantText);
             updated = turn;
         }
@@ -5292,6 +5297,282 @@ public abstract class DysonAgentSession
         }
 
         return null;
+    }
+
+    /// <summary>The question card for <paramref name="questionId"/> (answered or not), or null. SecureData ids are null.</summary>
+    public DysonUserQuestion? FindUserQuestion(Guid questionId)
+    {
+        lock (_userQuestionGate)
+            return FindUserQuestionTurn(questionId)?.UserQuestion;
+    }
+
+    /// <summary>
+    /// Applies one RenderA2ui call (messages already parsed by <see cref="DysonA2uiValidator"/>) to the
+    /// surface with that id. All-or-nothing: any error leaves every turn unchanged. The same id updates the
+    /// same DisplayInfo turn in place (<see cref="TurnUpdated"/>); a new unbound surface appends one
+    /// DisplayInfo turn (<see cref="TurnAdded"/>); <paramref name="questionId"/> binds a new surface to that
+    /// open question's turn.
+    /// </summary>
+    public Result<DysonA2uiApplied, DysonA2uiError> TryApplyA2ui(
+        IReadOnlyList<DysonA2uiMessage> messages,
+        Guid? questionId,
+        string? message)
+    {
+        if (messages is not { Count: > 0 })
+            return A2uiFail(null, "/messages", "messages must contain at least one message.");
+
+        var surfaceId = messages[0].SurfaceId;
+        DysonAgentTurn updated;
+        DysonA2uiApplied applied;
+        lock (_userQuestionGate)
+        {
+            var turn = FindA2uiSurfaceTurn(surfaceId);
+            var current = turn?.A2uiSurface;
+            var boundId = current?.QuestionId;
+            var creating = current is not { Components.Count: > 0 };
+
+            if (current is not null && questionId is { } passed && current.QuestionId != passed)
+                return A2uiFail(surfaceId, "/questionId", "questionId does not match the surface's question.");
+
+            if (questionId is { } q && creating)
+            {
+                var notOpen = CheckOpenQuestion(q);
+                if (notOpen is not null)
+                    return A2uiFail(surfaceId, "/questionId", notOpen);
+
+                var questionTurn = FindUserQuestionTurn(q)!;
+                if (turn is null)
+                {
+                    // A stub (failed create under another id) is replaced; a rendered surface is not.
+                    if (questionTurn.A2uiSurface is { Components.Count: > 0 } other)
+                        return A2uiFail(
+                            surfaceId,
+                            "/questionId",
+                            $"question already has surface {other.SurfaceId}; reuse that surfaceId.");
+                    turn = questionTurn;
+                }
+
+                boundId = q;
+            }
+
+            var result = DysonA2uiSurfaces.Apply(current, boundId, messages);
+            if (result.IsError)
+                return Result<DysonA2uiApplied, DysonA2uiError>.AsError(result.Error);
+
+            if (result.Value is not { } surface)
+            {
+                if (turn is null)
+                    return Result<DysonA2uiApplied, DysonA2uiError>.AsValue(
+                        new DysonA2uiApplied(Guid.Empty, surfaceId, 0, Deleted: true));
+
+                turn.A2uiSurface = null;
+                updated = turn;
+                applied = new DysonA2uiApplied(turn.Id, surfaceId, current?.Revision ?? 0, Deleted: true);
+            }
+            else
+            {
+                var slotError = CheckQuestionSlots(surface, current, messages);
+                if (slotError is not null)
+                    return Result<DysonA2uiApplied, DysonA2uiError>.AsError(slotError);
+
+                if (creating
+                    && surface.Components.Count > 0
+                    && CountLiveA2uiSurfaces() >= DysonA2uiProtocol.MaxLiveSurfacesPerSession)
+                {
+                    return A2uiFail(
+                        surfaceId,
+                        messages[0].Path,
+                        $"At most {DysonA2uiProtocol.MaxLiveSurfacesPerSession} live surfaces per session; deleteSurface one first.");
+                }
+
+                if (turn is null)
+                {
+                    // ponytail: appended under the gate so the live-surface cap and the append are atomic;
+                    // TurnAdded handlers then run inside the (reentrant) gate.
+                    var text = string.IsNullOrWhiteSpace(message) ? "Interactive view" : message;
+                    var added = AppendDisplayInfoTurn(text, a2uiSurface: surface);
+                    return Result<DysonA2uiApplied, DysonA2uiError>.AsValue(
+                        new DysonA2uiApplied(added.Id, surfaceId, surface.Revision, Deleted: false));
+                }
+
+                turn.A2uiSurface = surface;
+                updated = turn;
+                applied = new DysonA2uiApplied(turn.Id, surfaceId, surface.Revision, Deleted: false);
+            }
+        }
+
+        TurnUpdated?.Invoke(this, updated);
+        return Result<DysonA2uiApplied, DysonA2uiError>.AsValue(applied);
+    }
+
+    /// <summary>
+    /// Inline error strip for a failed RenderA2ui call. An existing surface keeps its last good render and
+    /// gets <see cref="DysonA2uiSurface.LastError"/>. Otherwise a stub (no components, revision 0) goes on
+    /// the open question's turn, or on one new DisplayInfo turn. A retry with the same id may createSurface
+    /// over the stub, so errors never stack bubbles. A blank or reserved id gets no stub.
+    /// </summary>
+    public void NoteA2uiError(string surfaceId, Guid? questionId, string? message, DysonA2uiError error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        if (string.IsNullOrWhiteSpace(surfaceId)
+            || surfaceId.StartsWith(DysonA2uiProtocol.ReservedSurfacePrefix, StringComparison.Ordinal))
+            return;
+
+        DysonAgentTurn updated;
+        lock (_userQuestionGate)
+        {
+            var turn = FindA2uiSurfaceTurn(surfaceId);
+            if (turn?.A2uiSurface is { } existing)
+            {
+                turn.A2uiSurface = existing with { LastError = error.Message };
+                updated = turn;
+            }
+            else if (questionId is { } q)
+            {
+                // A bad or busy questionId gets no stub; the tool result alone carries the error.
+                if (CheckOpenQuestion(q) is not null)
+                    return;
+                var questionTurn = FindUserQuestionTurn(q)!;
+                if (questionTurn.A2uiSurface is not null)
+                    return;
+                questionTurn.A2uiSurface = A2uiStub(surfaceId, q, error);
+                updated = questionTurn;
+            }
+            else
+            {
+                var text = string.IsNullOrWhiteSpace(message) ? "Interactive view" : message;
+                AppendDisplayInfoTurn(text, a2uiSurface: A2uiStub(surfaceId, null, error));
+                return;
+            }
+        }
+
+        TurnUpdated?.Invoke(this, updated);
+    }
+
+    private static DysonA2uiSurface A2uiStub(string surfaceId, Guid? questionId, DysonA2uiError error) =>
+        new(surfaceId, questionId, new Dictionary<string, JsonObject>(StringComparer.Ordinal), new JsonObject(), 0, error.Message);
+
+    private static Result<DysonA2uiApplied, DysonA2uiError> A2uiFail(string? surfaceId, string path, string message) =>
+        Result<DysonA2uiApplied, DysonA2uiError>.AsError(
+            new DysonA2uiError(DysonA2uiProtocol.ValidationFailed, surfaceId, path, message));
+
+    /// <summary>Null when <paramref name="questionId"/> is an open question card of this session; else the reason.</summary>
+    private string? CheckOpenQuestion(Guid questionId)
+    {
+        if (FindSecureDataTurn(questionId) is not null)
+            return "That id is a secure data request, not a question.";
+        return FindUserQuestionTurn(questionId)?.UserQuestion switch
+        {
+            null => "Question not found.",
+            { Answer: not null } => "Question already answered.",
+            _ => null,
+        };
+    }
+
+    private DysonAgentTurn? FindA2uiSurfaceTurn(string surfaceId)
+    {
+        foreach (var turn in Turns)
+        {
+            if (turn.Kind == DysonAgentTurnKind.DisplayInfo
+                && turn.A2uiSurface is { } surface
+                && string.Equals(surface.SurfaceId, surfaceId, StringComparison.Ordinal))
+            {
+                return turn;
+            }
+        }
+
+        return null;
+    }
+
+    private int CountLiveA2uiSurfaces()
+    {
+        var count = 0;
+        foreach (var turn in Turns)
+        {
+            if (turn.Kind == DysonAgentTurnKind.DisplayInfo && turn.A2uiSurface is { Components.Count: > 0 })
+                count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// QuestionSlot session checks on the applied, unpublished surface. Ids the previous revision already
+    /// embedded skip the open check, so a slot whose question was answered later still updates.
+    /// </summary>
+    private DysonA2uiError? CheckQuestionSlots(
+        DysonA2uiSurface surface,
+        DysonA2uiSurface? current,
+        IReadOnlyList<DysonA2uiMessage> messages)
+    {
+        var ids = DysonA2uiSurfaces.QuestionSlotIds(surface);
+        if (ids.Count == 0)
+            return null;
+
+        var before = current is null
+            ? new HashSet<Guid>()
+            : new HashSet<Guid>(DysonA2uiSurfaces.QuestionSlotIds(current));
+        var seen = new HashSet<Guid>();
+        foreach (var id in ids)
+        {
+            string? reason = null;
+            if (!seen.Add(id))
+                reason = "QuestionSlot: question already embedded in this surface";
+            else if (surface.QuestionId == id)
+                reason = "QuestionSlot: question is this surface's own bound question";
+            else if (!before.Contains(id) && CheckOpenQuestion(id) is not null)
+                reason = "QuestionSlot: question not found or not open";
+            else if (FindOtherSurfaceEmbedding(id, surface.SurfaceId) is { } other)
+                reason = $"QuestionSlot: question already embedded in surface {other}";
+
+            if (reason is not null)
+                return new DysonA2uiError(
+                    DysonA2uiProtocol.ValidationFailed,
+                    surface.SurfaceId,
+                    QuestionSlotPointer(messages, id),
+                    reason);
+        }
+
+        return null;
+    }
+
+    private string? FindOtherSurfaceEmbedding(Guid questionId, string surfaceId)
+    {
+        foreach (var turn in Turns)
+        {
+            if (turn.Kind != DysonAgentTurnKind.DisplayInfo
+                || turn.A2uiSurface is not { } other
+                || string.Equals(other.SurfaceId, surfaceId, StringComparison.Ordinal))
+                continue;
+            if (DysonA2uiSurfaces.QuestionSlotIds(other).Contains(questionId))
+                return other.SurfaceId;
+        }
+
+        return null;
+    }
+
+    /// <summary>Pointer to the last QuestionSlot in this call naming <paramref name="questionId"/>.</summary>
+    private static string QuestionSlotPointer(IReadOnlyList<DysonA2uiMessage> messages, Guid questionId)
+    {
+        var pointer = "/messages";
+        foreach (var m in messages)
+        {
+            if (m.Body["components"] is not JsonArray components)
+                continue;
+            for (var k = 0; k < components.Count; k++)
+            {
+                if (components[k] is JsonObject c
+                    && c["questionId"] is JsonValue v
+                    && v.TryGetValue<string>(out var raw)
+                    && Guid.TryParse(raw, out var parsed)
+                    && parsed == questionId)
+                {
+                    pointer = $"{m.Path}/components/{k}/questionId";
+                }
+            }
+        }
+
+        return pointer;
     }
 
     /// <summary>

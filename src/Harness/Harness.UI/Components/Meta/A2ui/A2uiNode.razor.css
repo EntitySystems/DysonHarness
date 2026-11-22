@@ -1,0 +1,244 @@
+/* Dyson A2UI kit. Tokens from app.css only; enum props map to these fixed classes. */
+.a2ui-row,
+.a2ui-column {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.a2ui-row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.a2ui-column {
+  flex-direction: column;
+}
+
+.a2ui-justify--start { justify-content: flex-start; }
+.a2ui-justify--center { justify-content: center; }
+.a2ui-justify--end { justify-content: flex-end; }
+.a2ui-justify--around { justify-content: space-around; }
+.a2ui-justify--between { justify-content: space-between; }
+.a2ui-justify--evenly { justify-content: space-evenly; }
+.a2ui-justify--stretch { justify-content: stretch; }
+
+.a2ui-align--start { align-items: flex-start; }
+.a2ui-align--center { align-items: center; }
+.a2ui-align--end { align-items: flex-end; }
+.a2ui-align--stretch { align-items: stretch; }
+
+.a2ui-weighted {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.a2ui-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.a2ui-divider {
+  width: 100%;
+  margin: var(--sp-1) 0;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.a2ui-divider--vertical {
+  width: 1px;
+  height: auto;
+  align-self: stretch;
+  margin: 0 var(--sp-1);
+  border-top: 0;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.a2ui-text {
+  margin: 0;
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* h5: the old .meta-chat__question-title look. */
+.a2ui-text--title {
+  margin-bottom: var(--sp-1);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.a2ui-text--caption {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.a2ui-button-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+
+.a2ui-btn span.a2ui-text {
+  font-size: inherit;
+}
+
+.a2ui-field {
+  margin-bottom: 0;
+}
+
+/* longText: the old .meta-chat__question-other textarea look. */
+.a2ui-field .a2ui-textarea {
+  min-height: 3.5rem;
+  max-height: 30vh;
+  field-sizing: content;
+  resize: vertical;
+  padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.a2ui-field .a2ui-textarea:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--accent-border), var(--accent-glow);
+}
+
+.a2ui-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.a2ui-picker--chips {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.a2ui-picker__label {
+  margin-bottom: var(--sp-1);
+  padding: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* Choice rows: the old .meta-chat__question-choice look. */
+.a2ui-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease);
+}
+
+.a2ui-choice:hover {
+  background: var(--bg-hover);
+}
+
+.a2ui-choice:has(input:checked) {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+.a2ui-choice:has(input:focus-visible),
+.a2ui-chip:has(input:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
+
+.a2ui-choice input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.a2ui-choice:has(input:disabled) {
+  cursor: default;
+}
+
+/* displayStyle chips: pill toggles, input visually hidden. */
+.a2ui-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--sp-3);
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease);
+}
+
+.a2ui-chip input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.a2ui-chip:hover {
+  background: var(--bg-hover);
+}
+
+.a2ui-chip:has(input:checked) {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+.a2ui-checkbox-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.a2ui-check-message {
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  color: var(--accent-red);
+  white-space: pre-wrap;
+}
+
+/* ponytail: mirrors .meta-chat__actions .btn; promote to a shared class if a third user appears */
+.a2ui-action {
+  border-radius: var(--radius-full);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+  color: var(--accent-text);
+}
+
+.a2ui-action:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.a2ui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

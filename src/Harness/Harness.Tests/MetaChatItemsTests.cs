@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using DysonHarness;
 using Harness.UI.Components.Meta;
 using Harness.UI.Demo;
@@ -372,5 +373,90 @@ public class MetaChatItemsTests
         Assert.Null(items[0].UserQuestion);
         Assert.Equal(MetaChatRole.Agent, items[1].Role);
         Assert.Equal(MetaChatRole.Agent, items[2].Role);
+    }
+
+    private static DysonA2uiSurface Surface(string messagesJson)
+    {
+        var parsed = DysonA2uiValidator.Parse(messagesJson);
+        Assert.False(parsed.IsError);
+        var applied = DysonA2uiSurfaces.Apply(null, null, parsed.Value);
+        Assert.False(applied.IsError);
+        return applied.Value!;
+    }
+
+    private static DysonUserQuestion OpenQuestion() =>
+        new(Guid.NewGuid(), "Which plan?", ["Ship", "Hold"], MultiSelect: false, AllowCustomAnswer: true, Answer: null);
+
+    [Fact]
+    public void MetaChatItems_meta_question_item_feeds_A2uiQuestionCard()
+    {
+        var question = OpenQuestion();
+        var post = new DysonAgentTurn { Kind = DysonAgentTurnKind.DisplayInfo, AssistantText = "Need a call.", UserQuestion = question };
+
+        var item = Assert.Single(MetaChatItems.Build([post], []));
+
+        Assert.Same(question, item.UserQuestion);
+        Assert.False(DysonA2uiQuestionCard.Build(item.UserQuestion!).IsError);
+    }
+
+    [Fact]
+    public void MetaChatItems_rendered_surface_hides_inline_actions()
+    {
+        DysonAgentTurn Post(DysonA2uiSurface? surface)
+        {
+            var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.DisplayInfo, AssistantText = "Status.", A2uiSurface = surface };
+            turn.RestoreConversationActions([new DysonConversationAction("Plan", "open_plan:1")]);
+            return turn;
+        }
+
+        var rendered = Surface("[{\"version\":\"1.0\",\"createSurface\":{\"surfaceId\":\"s1\",\"components\":[{\"id\":\"root\",\"component\":\"Text\",\"text\":\"hi\"}]}}]");
+        var stub = new DysonA2uiSurface("s1", null, new Dictionary<string, JsonObject>(), new JsonObject(), 0, "bad");
+
+        Assert.Empty(Assert.Single(MetaChatItems.Build([Post(rendered)], [])).Actions);
+        Assert.Single(Assert.Single(MetaChatItems.Build([Post(stub)], [])).Actions);
+        Assert.Single(Assert.Single(MetaChatItems.Build([Post(null)], [])).Actions);
+    }
+
+    [Fact]
+    public void MetaChatItems_Build_exposes_A2uiSurface_on_agent_item()
+    {
+        var surface = Surface("[{\"version\":\"1.0\",\"createSurface\":{\"surfaceId\":\"s1\",\"components\":[{\"id\":\"root\",\"component\":\"Text\",\"text\":\"hi\"}]}}]");
+        var post = new DysonAgentTurn { Kind = DysonAgentTurnKind.DisplayInfo, AssistantText = "Status.", A2uiSurface = surface };
+
+        var item = Assert.Single(MetaChatItems.Build([post], []));
+
+        Assert.Equal(MetaChatRole.Agent, item.Role);
+        Assert.True(item.A2uiSurface!.Components.ContainsKey("root"));
+    }
+
+    [Fact]
+    public void MetaChatItems_QuestionSlot_embeds_open_question()
+    {
+        var question = OpenQuestion();
+        var missing = Guid.NewGuid();
+        var ask = new DysonAgentTurn { Kind = DysonAgentTurnKind.DisplayInfo, AssistantText = "Need a call.", UserQuestion = question };
+        var layout = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.DisplayInfo,
+            AssistantText = "Review done.",
+            A2uiSurface = Surface(
+                "[{\"version\":\"1.0\",\"createSurface\":{\"surfaceId\":\"review\",\"components\":["
+                + "{\"id\":\"root\",\"component\":\"Column\",\"children\":[\"q\",\"gone\"]},"
+                + "{\"id\":\"q\",\"component\":\"QuestionSlot\",\"@catalogId\":\"a2ui://dyson/catalogs/v1/catalog.json\",\"questionId\":\"" + question.Id.ToString("D") + "\"},"
+                + "{\"id\":\"gone\",\"component\":\"QuestionSlot\",\"@catalogId\":\"a2ui://dyson/catalogs/v1/catalog.json\",\"questionId\":\"" + missing.ToString("D") + "\"}"
+                + "]}}]"),
+        };
+
+        var items = MetaChatItems.Build([ask, layout], []);
+
+        Assert.Equal(2, items.Count);
+        Assert.Null(items[0].UserQuestion);
+        Assert.Same(question, items[1].EmbeddedQuestions[question.Id]);
+        Assert.True(items[1].EmbeddedQuestions.ContainsKey(missing));
+        Assert.Null(items[1].EmbeddedQuestions[missing]);
+
+        // Without the layout the standalone card is back.
+        var alone = Assert.Single(MetaChatItems.Build([ask], []));
+        Assert.Same(question, alone.UserQuestion);
     }
 }

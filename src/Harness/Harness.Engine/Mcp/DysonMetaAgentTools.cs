@@ -30,6 +30,10 @@ public static class DysonMetaAgentTools
         "LoadSkill",
     ];
 
+    /// <summary>Last sentence of PostConversationMessage's description: the A2UI guidance under that tool's own text, whatever the catalog order.</summary>
+    public const string PostConversationMessageA2uiPointer =
+        "When a UI component would clarify or structure the reply, use RenderA2ui instead and put the actions in the surface; keep this tool for short plain messages and their inline actions.";
+
     /// <summary>Exact Meta Agent catalog when browser tools are not on the pipeline (no project file/shell/wait/completion tools). <c>WriteTempFile</c> and <c>ReadTempFile</c> are temp-scoped. Browser names are not listed here.</summary>
     public static readonly IReadOnlyList<string> AllowedToolNames =
     [
@@ -65,6 +69,7 @@ public static class DysonMetaAgentTools
         "ReadMetaScratchFile",
         "ReadTempFile",
         "RemoveTodos",
+        "RenderA2ui",
         "RenderHtmlVisualization",
         "RequestSecureData",
         "RespondToSubagentEvent",
@@ -498,7 +503,8 @@ public static class DysonMetaAgentTools
                 "When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. " +
                 "Omit actions or pass [] for a plain markdown bubble. " +
                 "visualizationId is separate from actions. " +
-                "Does not end the turn.",
+                "Does not end the turn. " +
+                PostConversationMessageA2uiPointer,
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -524,6 +530,31 @@ public static class DysonMetaAgentTools
                   },
                   "required": ["message"]
                 }
+                """,
+        };
+
+        // Declared next to PostConversationMessage for maintainers; the provider catalog is name-sorted,
+        // so PostConversationMessageA2uiPointer carries the guidance under that tool's own text.
+        yield return new DysonMcpTool
+        {
+            Name = "RenderA2ui",
+            Description =
+                "Render an interactive UI surface inline in the meta chat from A2UI v1.0 JSON. " +
+                "Use it often: whenever a component (cards, lists, rows, forms, choices, action buttons) would clarify or structure what you show the user. " +
+                "Skip it for a single-sentence reply or simple chatting; use PostConversationMessage for those. " +
+                "When you use a surface, put the actions in the surface as ActionButton components (func open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_url:{url}); " +
+                "PostConversationMessage actions are only for a plain message with no surface. " +
+                "JSON only: no markdown, HTML, or code fences. " +
+                "Kit: Text, Row, Column, List, Card, Divider, Button, TextField, CheckBox, ChoicePicker; Dyson catalog: ActionButton, QuestionSlot. " +
+                "Reuse a surfaceId to update it. " +
+                "The dyson-a2ui skill has the format and examples.",
+            InputSchemaJson = """
+                {"type":"object","additionalProperties":false,"required":["messages"],
+                 "properties":{
+                  "messages":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"object"},
+                    "description":"A2UI v1.0 agent-to-renderer messages, each {\"version\":\"1.0\", <one of createSurface|updateComponents|updateDataModel|deleteSurface>}. All messages target one surfaceId."},
+                  "questionId":{"type":"string","description":"Open PostUserQuestion id. Binds the surface to that card; a Button action.event answers it."},
+                  "message":{"type":"string","maxLength":2000,"description":"Bubble text when a new unbound surface is created. Default 'Interactive view'."}}}
                 """,
         };
 

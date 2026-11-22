@@ -316,6 +316,7 @@ public static class DysonAgentSystemPrompts
         - Secrets, passwords, API keys, and tokens go through RequestSecureData only. Never ask the user to paste one in chat, in PostUserQuestion, or in any other tool. The answer lists keys, never values. To use a secret, a drone calls WriteSecureDataToFile and pipes the file.
         - Conversation actions are required whenever a posted message names something the user would open. When you PostConversationMessage or PostUserQuestion and the message names a plan, a workspace file, or an http(s) URL the user would reasonably want to open, attach one action per target. Do this on status updates, questions, and results — not only when a plan is first submitted. A message may carry several actions, up to 8 (the tool maximum; do not ask for more). name is a short human label; func is one of these built-in keys and needs no RegisterConversationAction call: open_plan:{planId} opens that plan, open_file:{path} opens a work-relative file, and open_url:{url} opens an http or https link. Do not attach actions for data that is not a plan id, a workspace file, or an http(s) URL. Do not invent func keys.
         - RenderHtmlVisualization is on this catalog. For a short asset, pass inline html / css / js content. For a large or multiline asset, call WriteTempFile with a leaf name (chart.html, chart.css, or chart.js) and pass the returned path as that asset's tempFile on a later stage. ReadTempFile reads that path back. Do not call CreateFile, ReadFile, or WriteFile, and do not invent a .dyson/temp/ path. Pass the returned visualizationId to PostConversationMessage when the user should get a button for that visualization. Omit it for a plain bubble. It is not an action func.
+        - RenderA2ui renders A2UI v1.0 JSON inline in this chat with the Dyson kit; reuse a surfaceId to update it; pass questionId to answer a PostUserQuestion card from a form. Use it often when a component clarifies or structures the output; skip it for one sentence or small talk. With a surface, put the actions in it as ActionButtons, not in PostConversationMessage actions. The dyson-a2ui skill has the format.
         - Post when you dispatch, when a report lands, and when you are blocked. Silence looks like a hang.
         Parent events:
         - A harness continuation that names an eventId is a Meta Agent Drone blocked inside TriggerParentEvent. It stays blocked until you call RespondToSubagentEvent with that subagentId, that eventId, and a reply string. Ending your turn does not answer it.
@@ -725,17 +726,23 @@ public static class DysonAgentSystemPrompts
     /// <summary>
     /// Builds session system-prompt suffix: available-models catalog + openrules AutoInclude block.
     /// The session appends its immutable plugin always-apply snapshot after this suffix.
+    /// <paramref name="agentMode"/> filters openrules entries that carry <c>Modes</c>.
     /// </summary>
     public static async Task<string?> BuildSessionSystemPromptSuffixAsync(
         IDysonModelRepository? models,
         string providerKind,
         string? workDirectoryAbsolutePath,
+        string? agentMode = null,
         CancellationToken cancellationToken = default)
     {
         var modelsBlock = await BuildAvailableModelsBlockAsync(models, providerKind, cancellationToken)
             .ConfigureAwait(false);
         var openRulesBlock = await DysonOpenRules
-            .BuildSystemPromptBlockAsync(workDirectoryAbsolutePath, cancellationToken)
+            .BuildSystemPromptBlockAsync(
+                workDirectoryAbsolutePath,
+                DysonOpenRulesProviders.Dyson,
+                agentMode,
+                cancellationToken)
             .ConfigureAwait(false);
         return JoinSystemPromptSuffix(modelsBlock, openRulesBlock);
     }

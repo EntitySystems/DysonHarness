@@ -130,6 +130,10 @@ public class DysonMetaAgentDirectiveTests
             text,
             "Conversation actions are required whenever a posted message names something the user would open. When you PostConversationMessage or PostUserQuestion and the message names a plan, a workspace file, or an http(s) URL the user would reasonably want to open, attach one action per target. Do this on status updates, questions, and results — not only when a plan is first submitted. A message may carry several actions, up to 8 (the tool maximum; do not ask for more). name is a short human label; func is one of these built-in keys and needs no RegisterConversationAction call: open_plan:{planId} opens that plan, open_file:{path} opens a work-relative file, and open_url:{url} opens an http or https link. Do not attach actions for data that is not a plan id, a workspace file, or an http(s) URL. Do not invent func keys.",
             "Meta Agent ForMode");
+        MustContain(
+            text,
+            "RenderA2ui renders A2UI v1.0 JSON inline in this chat with the Dyson kit; reuse a surfaceId to update it; pass questionId to answer a PostUserQuestion card from a form. Use it often when a component clarifies or structures the output; skip it for one sentence or small talk. With a surface, put the actions in it as ActionButtons, not in PostConversationMessage actions. The dyson-a2ui skill has the format.",
+            "Meta Agent ForMode");
         MustContain(text, "visualizationId", "Meta Agent ForMode");
         MustContain(text, "WriteTempFile", "Meta Agent ForMode");
         MustContain(text, "ReadTempFile", "Meta Agent ForMode");

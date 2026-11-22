@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json.Nodes;
 using DysonHarness;
 using Harness.UI.Demo;
 
@@ -41,16 +42,67 @@ public readonly record struct MetaChatItem(
 
     /// <summary>Secrets card on a DisplayInfo bubble. Null everywhere else. Never a value.</summary>
     public DysonSecureDataRequest? SecureDataRequest { get; init; }
+
+    /// <summary>A2UI surface on a DisplayInfo bubble (may be a stub with only LastError). Null everywhere else.</summary>
+    public DysonA2uiSurface? A2uiSurface { get; init; }
+
+    /// <summary>
+    /// Questions placed by this item's QuestionSlots, looked up in all turns. Null value: withdrawn or unknown.
+    /// </summary>
+    public IReadOnlyDictionary<Guid, DysonUserQuestion?> EmbeddedQuestions { get; init; } = MetaChatItems.NoEmbeddedQuestions;
 }
 
 /// <summary>Click on a meta-chat conversation action button. Index is into that turn's actions.</summary>
 public readonly record struct MetaChatActionClick(Guid TurnId, int Index);
 
-/// <summary>Submit on a meta-chat question card. The host records the answer; the card does not.</summary>
-public readonly record struct MetaChatQuestionSubmit(
-    Guid QuestionId,
-    IReadOnlyList<string> Selected,
-    string? CustomText);
+/// <summary>Click on an A2UI ActionButton. <see cref="Func"/> is a built-in key from the validated surface.</summary>
+public readonly record struct MetaChatFuncClick(Guid TurnId, string Func);
+
+/// <summary>
+/// Button click on an A2UI surface. The host resolves it against the stored surface (or, for
+/// <c>dyson_question_*</c>, the server-rebuilt card); only the component id and local model come from here.
+/// </summary>
+public readonly record struct MetaChatA2uiAction(Guid TurnId, string SurfaceId, string SourceComponentId, JsonObject LocalModel);
+
+/// <summary>Per-surface busy flag and host error for A2UI actions in the meta feed, keyed by surface id.</summary>
+public sealed class MetaChatA2uiState
+{
+    private readonly HashSet<string> _busy = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _errors = new(StringComparer.Ordinal);
+
+    /// <summary>Bumps on every change so views holding this state know to re-render.</summary>
+    public int Version { get; private set; }
+
+    public bool IsBusy(string surfaceId) => _busy.Contains(surfaceId);
+
+    public string? ErrorFor(string surfaceId) => _errors.GetValueOrDefault(surfaceId);
+
+    /// <summary>Marks the surface busy and clears its error. False when it is already busy.</summary>
+    public bool TryBegin(string surfaceId)
+    {
+        if (!_busy.Add(surfaceId))
+            return false;
+        _errors.Remove(surfaceId);
+        Version++;
+        return true;
+    }
+
+    public void End(string surfaceId)
+    {
+        if (_busy.Remove(surfaceId))
+            Version++;
+    }
+
+    /// <summary>Empty clears the error.</summary>
+    public void NoteError(string surfaceId, string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+            _errors.Remove(surfaceId);
+        else
+            _errors[surfaceId] = error;
+        Version++;
+    }
+}
 
 /// <summary>
 /// Newest root Meta Agent session for a work-directory list (roots-only <see cref="DysonSessionSummary"/>).
@@ -88,6 +140,9 @@ public static class MetaAgentSessionLocator
 /// </summary>
 public static class MetaChatItems
 {
+    public static readonly IReadOnlyDictionary<Guid, DysonUserQuestion?> NoEmbeddedQuestions =
+        new Dictionary<Guid, DysonUserQuestion?>();
+
     public static IReadOnlyList<MetaChatItem> Build(
         IReadOnlyList<DysonAgentTurn> turns,
         IReadOnlyList<QueuedPrompt> queued)
@@ -97,6 +152,8 @@ public static class MetaChatItems
 
         var start = DysonMetaChatWindow.DisplayStart(turns);
         var items = new List<MetaChatItem>(turns.Count - start + queued.Count);
+        var embedded = EmbeddedQuestionIds(turns, start);
+        var questions = embedded.Count == 0 ? null : QuestionsById(turns);
         for (var t = start; t < turns.Count; t++)
         {
             var turn = turns[t];
@@ -144,6 +201,14 @@ public static class MetaChatItems
             {
                 // A voice utterance is the user's bubble. The prefix is stored on the turn, so reload keeps the side.
                 var voiceInput = DysonVoiceMode.IsVoiceInputDisplay(turn);
+                // A question placed by a QuestionSlot shows only inside that layout; its own card (and any
+                // surface bound to it) hides here. Derived, so deleting the layout brings the card back.
+                var embeddedHere = turn.UserQuestion is { } own && embedded.Contains(own.Id);
+                // A surface forwarding that embedded question hides with it; the slot draws the derived card.
+                var surface = voiceInput || (embeddedHere && turn.A2uiSurface?.QuestionId == turn.UserQuestion!.Id)
+                    ? null
+                    : turn.A2uiSurface;
+                var rendered = surface is { Components.Count: > 0 };
                 items.Add(new MetaChatItem(
                     voiceInput ? $"u:{turn.Id:D}" : $"a:{turn.Id:D}",
                     voiceInput ? MetaChatRole.User : MetaChatRole.Agent,
@@ -151,11 +216,16 @@ public static class MetaChatItems
                     Pending: false,
                     QueuedId: null)
                 {
-                    Actions = voiceInput ? [] : turn.ConversationActions,
+                    // The surface wins: a rendered surface's ActionButtons are the actions.
+                    Actions = voiceInput || rendered ? [] : turn.ConversationActions,
                     TurnId = voiceInput ? null : turn.Id,
                     VisualizationId = voiceInput ? null : turn.VisualizationId,
-                    UserQuestion = voiceInput ? null : turn.UserQuestion,
+                    UserQuestion = voiceInput || embeddedHere ? null : turn.UserQuestion,
                     SecureDataRequest = voiceInput ? null : turn.SecureDataRequest,
+                    A2uiSurface = surface,
+                    EmbeddedQuestions = rendered && questions is not null
+                        ? EmbeddedFor(surface!, questions)
+                        : NoEmbeddedQuestions,
                 });
             }
         }
@@ -178,6 +248,46 @@ public static class MetaChatItems
         }
 
         return items;
+    }
+
+    /// <summary>QuestionSlot ids of every rendered surface in the display window.</summary>
+    private static HashSet<Guid> EmbeddedQuestionIds(IReadOnlyList<DysonAgentTurn> turns, int start)
+    {
+        var ids = new HashSet<Guid>();
+        for (var t = start; t < turns.Count; t++)
+        {
+            if (turns[t].Kind == DysonAgentTurnKind.DisplayInfo && turns[t].A2uiSurface is { Components.Count: > 0 } surface)
+                ids.UnionWith(DysonA2uiSurfaces.QuestionSlotIds(surface));
+        }
+
+        return ids;
+    }
+
+    /// <summary>All turns, not just the window: an embedded question may be older than the display window.</summary>
+    private static Dictionary<Guid, DysonUserQuestion> QuestionsById(IReadOnlyList<DysonAgentTurn> turns)
+    {
+        var map = new Dictionary<Guid, DysonUserQuestion>();
+        foreach (var turn in turns)
+        {
+            if (turn.Kind == DysonAgentTurnKind.DisplayInfo && turn.UserQuestion is { } question)
+                map[question.Id] = question;
+        }
+
+        return map;
+    }
+
+    private static IReadOnlyDictionary<Guid, DysonUserQuestion?> EmbeddedFor(
+        DysonA2uiSurface surface,
+        Dictionary<Guid, DysonUserQuestion> questions)
+    {
+        var ids = DysonA2uiSurfaces.QuestionSlotIds(surface);
+        if (ids.Count == 0)
+            return NoEmbeddedQuestions;
+
+        var map = new Dictionary<Guid, DysonUserQuestion?>(ids.Count);
+        foreach (var id in ids)
+            map[id] = questions.GetValueOrDefault(id);
+        return map;
     }
 
     /// <summary>

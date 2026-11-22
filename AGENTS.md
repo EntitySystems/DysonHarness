@@ -42,5 +42,6 @@ All skills must live under [`skills/`](skills/).
 
 - C# / .NET: [skills/csharp/SKILL.md](skills/csharp/SKILL.md)
 - EF Core + SQLite: [skills/ef-core-sqlite/SKILL.md](skills/ef-core-sqlite/SKILL.md)
+- Dyson A2UI (Meta Agent only): [skills/dyson-a2ui/SKILL.md](skills/dyson-a2ui/SKILL.md) (`RenderA2ui` format, kit, question forwarding; AutoInclude with `Modes: ["MetaAgent"]`)
 
 Repo-root [`openrules.json`](openrules.json) lists these rules/skills as AgentOptional for `LoadSkill` / `/skill-`, plus the EntitySystems openrules skill URL. Root `AGENTS.md` is always AutoIncluded into the session system prompt when this work directory is active.

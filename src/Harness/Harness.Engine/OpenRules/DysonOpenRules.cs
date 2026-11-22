@@ -40,6 +40,12 @@ public sealed class DysonOpenRulesEntryDto
     /// runtime provider id is listed (case-insensitive).
     /// </summary>
     public string[]? Providers { get; set; }
+
+    /// <summary>
+    /// Optional agent-mode filter for AutoInclude. Null/empty → all modes; otherwise inject only
+    /// when the session agent mode is listed (case- and space-insensitive, e.g. <c>MetaAgent</c>).
+    /// </summary>
+    public string[]? Modes { get; set; }
 }
 
 /// <summary>Raw <c>openrules.json</c> document (PascalCase property names).</summary>
@@ -67,6 +73,12 @@ public sealed class DysonOpenRulesResolvedEntry
     /// runtime provider id is listed (case-insensitive).
     /// </summary>
     public IReadOnlyList<string>? Providers { get; init; }
+
+    /// <summary>
+    /// Optional agent-mode filter for AutoInclude. Null/empty → all modes; otherwise inject only
+    /// when the session agent mode is listed (case- and space-insensitive).
+    /// </summary>
+    public IReadOnlyList<string>? Modes { get; init; }
 }
 
 /// <summary>Loaded openrules config (manifest or implicit default).</summary>
@@ -154,6 +166,37 @@ public static class DysonOpenRules
     {
         ArgumentNullException.ThrowIfNull(entry);
         return AppliesToProvider(entry.Providers, providerId);
+    }
+
+    /// <summary>
+    /// Empty/omitted <paramref name="modes"/> → all agent modes. Non-empty → only when
+    /// <paramref name="agentMode"/> is listed; a null/blank <paramref name="agentMode"/> is excluded
+    /// so a mode-scoped entry never leaks into an unknown context. Comparison ignores case and
+    /// spaces, so <c>MetaAgent</c> matches <see cref="DysonAgentModes.MetaAgent"/> (<c>Meta Agent</c>)
+    /// but not <c>Meta Agent Drone</c>.
+    /// </summary>
+    // ponytail: the mode is fixed when the suffix is built (create/load/mode switch) and only work
+    // roots whose openrules.json lists the entry get it; other work dirs still see the tool text only.
+    // Upgrade path: a built-in per-mode skill registry if mode-scoped skills must apply everywhere.
+    public static bool AppliesToMode(IReadOnlyList<string>? modes, string? agentMode)
+    {
+        if (modes is null || modes.Count == 0)
+            return true;
+        if (string.IsNullOrWhiteSpace(agentMode))
+            return false;
+
+        var id = agentMode.Replace(" ", "", StringComparison.Ordinal);
+        for (var i = 0; i < modes.Count; i++)
+        {
+            var m = modes[i];
+            if (!string.IsNullOrWhiteSpace(m)
+                && string.Equals(m.Replace(" ", "", StringComparison.Ordinal), id, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -457,6 +500,7 @@ public static class DysonOpenRules
     public static async Task<string?> BuildSystemPromptBlockAsync(
         IDysonWorkspaceFileSystem fs,
         string? providerId = null,
+        string? agentMode = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fs);
@@ -471,6 +515,7 @@ public static class DysonOpenRules
                 loaded.Value,
                 fs,
                 providerId,
+                agentMode,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -478,6 +523,7 @@ public static class DysonOpenRules
     /// <summary>
     /// Creates a local FS for <paramref name="workDirectoryAbsolutePath"/> and builds the block.
     /// Returns null when path is empty, FS init fails, or there is no open-rules content.
+    /// No agent mode: entries with <c>Modes</c> are excluded (use the providerId/agentMode overload).
     /// </summary>
     public static async Task<string?> BuildSystemPromptBlockAsync(
         string? workDirectoryAbsolutePath,
@@ -485,16 +531,18 @@ public static class DysonOpenRules
         await BuildSystemPromptBlockAsync(
                 workDirectoryAbsolutePath,
                 DysonOpenRulesProviders.Dyson,
+                agentMode: null,
                 cancellationToken)
             .ConfigureAwait(false);
 
     /// <summary>
     /// Creates a local FS for <paramref name="workDirectoryAbsolutePath"/> and builds the block
-    /// filtered for <paramref name="providerId"/>.
+    /// filtered for <paramref name="providerId"/> and <paramref name="agentMode"/>.
     /// </summary>
     public static async Task<string?> BuildSystemPromptBlockAsync(
         string? workDirectoryAbsolutePath,
         string? providerId,
+        string? agentMode = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(workDirectoryAbsolutePath))
@@ -506,7 +554,7 @@ public static class DysonOpenRules
         if (fsResult.IsError)
             return null;
 
-        return await BuildSystemPromptBlockAsync(fsResult.Value, providerId, cancellationToken)
+        return await BuildSystemPromptBlockAsync(fsResult.Value, providerId, agentMode, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -727,6 +775,7 @@ public static class DysonOpenRules
         DysonOpenRulesConfig config,
         IDysonWorkspaceFileSystem fs,
         string? providerId,
+        string? agentMode,
         CancellationToken cancellationToken)
     {
         // Pre-fetch URL AutoInclude bodies that apply to this provider.
@@ -737,7 +786,8 @@ public static class DysonOpenRules
         foreach (var entry in config.Rules.Concat(config.Skills)
                      .Where(e => DysonOpenRulesModes.IsAutoInclude(e.Mode)
                          && e.IsUrl
-                         && AppliesToProvider(e, id)))
+                         && AppliesToProvider(e, id)
+                         && AppliesToMode(e.Modes, agentMode)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (urlBodies.ContainsKey(entry.Path))
@@ -753,6 +803,7 @@ public static class DysonOpenRules
             config,
             fs,
             providerId,
+            agentMode,
             urlPath =>
             {
                 if (urlBodies.TryGetValue(urlPath, out var body) && body is not null)
@@ -770,6 +821,7 @@ public static class DysonOpenRules
         DysonOpenRulesConfig config,
         IDysonWorkspaceFileSystem fs,
         string? providerId,
+        string? agentMode,
         Func<string, Result<string, string>>? urlBodyLoader,
         CancellationToken cancellationToken)
     {
@@ -812,7 +864,9 @@ public static class DysonOpenRules
             cancellationToken).ConfigureAwait(false);
 
         foreach (var entry in config.Rules.Where(e =>
-                     DysonOpenRulesModes.IsAutoInclude(e.Mode) && AppliesToProvider(e, id)))
+                     DysonOpenRulesModes.IsAutoInclude(e.Mode)
+                     && AppliesToProvider(e, id)
+                     && AppliesToMode(e.Modes, agentMode)))
         {
             remaining = await AppendFileSectionAsync(
                 sb,
@@ -830,7 +884,9 @@ public static class DysonOpenRules
         }
 
         foreach (var entry in config.Skills.Where(e =>
-                     DysonOpenRulesModes.IsAutoInclude(e.Mode) && AppliesToProvider(e, id)))
+                     DysonOpenRulesModes.IsAutoInclude(e.Mode)
+                     && AppliesToProvider(e, id)
+                     && AppliesToMode(e.Modes, agentMode)))
         {
             remaining = await AppendFileSectionAsync(
                 sb,
@@ -867,6 +923,7 @@ public static class DysonOpenRules
             exists = e.Exists,
             isUrl = e.IsUrl,
             Providers = e.Providers is { Count: > 0 } ? e.Providers : null,
+            Modes = e.Modes is { Count: > 0 } ? e.Modes : null,
         };
 
     private static async Task<Result<IReadOnlyList<DysonOpenRulesResolvedEntry>, string>> ResolveEntriesAsync(
@@ -930,6 +987,17 @@ public static class DysonOpenRules
                     providers = null;
             }
 
+            IReadOnlyList<string>? modes = null;
+            if (raw.Modes is { Length: > 0 })
+            {
+                modes = raw.Modes
+                    .Where(m => !string.IsNullOrWhiteSpace(m))
+                    .Select(m => m.Trim())
+                    .ToArray();
+                if (modes.Count == 0)
+                    modes = null;
+            }
+
             list.Add(new DysonOpenRulesResolvedEntry
             {
                 Path = path,
@@ -941,6 +1009,7 @@ public static class DysonOpenRules
                 IsSkill = isSkill,
                 IsUrl = isUrl,
                 Providers = providers,
+                Modes = modes,
             });
         }
 

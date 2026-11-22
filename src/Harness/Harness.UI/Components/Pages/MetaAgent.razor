@@ -157,7 +157,8 @@
                                           SessionBusy="IsMetaFocused && Host.IsBusy"
                                           OnRemoveQueued="RemoveQueuedAsync"
                                           OnConversationAction="OnConversationActionAsync"
-                                          OnUserQuestion="OnUserQuestionAsync"
+                                          OnA2uiAction="OnA2uiActionAsync"
+                                          OnConversationFunc="OnConversationFuncAsync"
                                           OnOpenVisualization="OpenFocusedVisualization" />
                         </div>
 
@@ -981,14 +982,20 @@
         _chatFeed?.NoteConversationActionResult(click.TurnId, result);
     }
 
-    private async Task OnUserQuestionAsync(MetaChatQuestionSubmit submit)
+    private async Task OnConversationFuncAsync(MetaChatFuncClick click)
     {
-        var result = await Host.SubmitMetaUserQuestionAnswerAsync(
-            submit.QuestionId,
-            submit.Selected,
-            submit.CustomText);
-        if (result.IsError)
-            _chatFeed?.NoteUserQuestionError(submit.QuestionId, result.Error);
+        var result = await Host.InvokeMetaConversationFuncAsync(click.Func);
+        _chatFeed?.NoteConversationActionResult(click.TurnId, result);
+    }
+
+    private async Task OnA2uiActionAsync(MetaChatA2uiAction action)
+    {
+        var result = await Host.SubmitMetaA2uiActionAsync(
+            action.TurnId,
+            action.SurfaceId,
+            action.SourceComponentId,
+            action.LocalModel);
+        _chatFeed?.NoteA2uiError(action.SurfaceId, result.IsError ? result.Error : null);
     }
 
     private void ToggleTasks() => _tasksOpen = !_tasksOpen;

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DysonHarness;
 using Harness.UI.Components.Meta;
 using Harness.UI.Theme;
@@ -3764,7 +3765,21 @@ public sealed class DysonUiHost : IAsyncDisposable
         if ((uint)index >= (uint)actions.Count)
             return Result<string, string>.AsError("Conversation action index is out of range.");
 
-        var funcKey = actions[index].FuncKey;
+        return await InvokeMetaConversationFuncAsync(actions[index].FuncKey, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Dispatches one func key (meta-chat button or A2UI ActionButton). Built-in keys open here; any other
+    /// key uses the session delegate map. Does not append or remove turns and does not set <see cref="LastError"/>.
+    /// </summary>
+    public async Task<Result<string, string>> InvokeMetaConversationFuncAsync(
+        string funcKey,
+        CancellationToken cancellationToken = default)
+    {
+        var session = _session;
+        if (session is null)
+            return Result<string, string>.AsError("No active session.");
+
         var resolved = await DysonBuiltInConversationActions
             .TryResolveAsync(funcKey, SessionWorkDirectoryPath(session), cancellationToken)
             .ConfigureAwait(true);
@@ -3815,6 +3830,33 @@ public sealed class DysonUiHost : IAsyncDisposable
             default:
                 return Result<string, string>.AsError($"Conversation action '{funcKey}' is reserved.");
         }
+    }
+
+    /// <summary>
+    /// Submits an A2UI Button action: the Engine validates it against the surface and the bound question,
+    /// then the answer takes the usual question-answer path.
+    /// </summary>
+    public async Task<VoidResult<string>> SubmitMetaA2uiActionAsync(
+        Guid turnId,
+        string surfaceId,
+        string sourceComponentId,
+        JsonObject localModel,
+        CancellationToken cancellationToken = default)
+    {
+        var session = _session;
+        if (session is null)
+            return VoidResult<string>.AsError("No active session.");
+
+        var prepared = DysonA2uiReturnHandler.Prepare(session, turnId, surfaceId, sourceComponentId, localModel);
+        if (prepared.IsError)
+            return VoidResult<string>.AsError(prepared.Error);
+
+        session.AppendLog($"A2UI action {prepared.Value.Action.ToWireJson()}");
+        return await SubmitMetaUserQuestionAnswerAsync(
+            prepared.Value.QuestionId,
+            prepared.Value.Selected,
+            prepared.Value.CustomText,
+            cancellationToken).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -4105,7 +4147,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var effectivePath = SessionWorkDirectoryPath(_session) ?? registeredPath;
         var openRulesBlock = await DysonOpenRules
-            .BuildSystemPromptBlockAsync(effectivePath, cancellationToken)
+            .BuildSystemPromptBlockAsync(
+                effectivePath, DysonOpenRulesProviders.Dyson, agentMode, cancellationToken)
             .ConfigureAwait(false);
         var worktreeBlock = DysonAgentSystemPrompts.BuildWorktreePromptBlock(
             _session.WorktreeEnabled,
@@ -6226,7 +6269,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _models, providerKind, cancellationToken)
             .ConfigureAwait(false);
         var openRulesBlock = await DysonOpenRules
-            .BuildSystemPromptBlockAsync(effectivePath, cancellationToken)
+            .BuildSystemPromptBlockAsync(
+                effectivePath, DysonOpenRulesProviders.Dyson, session.Mode, cancellationToken)
             .ConfigureAwait(false);
         var worktreeBlock = DysonAgentSystemPrompts.BuildWorktreePromptBlock(
             session.WorktreeEnabled,

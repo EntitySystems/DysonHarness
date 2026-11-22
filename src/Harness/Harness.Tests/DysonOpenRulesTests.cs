@@ -838,6 +838,135 @@ public class DysonOpenRulesTests
         }
     }
 
+    private const string A2uiSkillMarker = "[OpenRules AutoInclude Skill: skills/dyson-a2ui/SKILL.md]";
+
+    private static string WriteModesFixture(string tag)
+    {
+        var root = TempRoot(tag);
+        File.WriteAllText(Path.Combine(root, "AGENTS.md"), "# Root\n");
+        Directory.CreateDirectory(Path.Combine(root, "skills", "dyson-a2ui"));
+        Directory.CreateDirectory(Path.Combine(root, "rules"));
+        File.WriteAllText(Path.Combine(root, "skills", "dyson-a2ui", "SKILL.md"), "# A2UI skill body\n");
+        File.WriteAllText(Path.Combine(root, "rules", "everyone.md"), "# Everyone rule\n");
+        File.WriteAllText(
+            Path.Combine(root, "openrules.json"),
+            """
+            {
+              "Root": "AGENTS.md",
+              "Rules": [
+                { "Path": "rules/everyone.md", "Mode": "AutoInclude" }
+              ],
+              "Skills": [
+                { "Path": "skills/dyson-a2ui/SKILL.md", "Mode": "AutoInclude", "Modes": ["MetaAgent"], "Providers": ["dyson"], "Description": "A2UI" }
+              ]
+            }
+            """);
+        return root;
+    }
+
+    [Fact]
+    public async Task AutoInclude_with_Modes_MetaAgent_is_in_meta_block_only()
+    {
+        var root = WriteModesFixture("modes");
+        try
+        {
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+
+            var meta = await DysonOpenRules.BuildSystemPromptBlockAsync(
+                fs, DysonOpenRulesProviders.Dyson, DysonAgentModes.MetaAgent);
+            Assert.NotNull(meta);
+            Assert.Contains(A2uiSkillMarker, meta, StringComparison.Ordinal);
+            Assert.Contains("# A2UI skill body", meta, StringComparison.Ordinal);
+            Assert.Contains("# Everyone rule", meta, StringComparison.Ordinal);
+
+            foreach (var mode in new string?[]
+                     {
+                         DysonAgentModes.Work, DysonAgentModes.MetaAgentDrone, DysonAgentModes.Explore, null,
+                     })
+            {
+                var block = await DysonOpenRules.BuildSystemPromptBlockAsync(
+                    fs, DysonOpenRulesProviders.Dyson, mode);
+                Assert.NotNull(block);
+                Assert.DoesNotContain(A2uiSkillMarker, block, StringComparison.Ordinal);
+                Assert.DoesNotContain("# A2UI skill body", block, StringComparison.Ordinal);
+                // Regression: entries without Modes apply in every mode.
+                Assert.Contains("# Everyone rule", block, StringComparison.Ordinal);
+            }
+
+            Assert.True(DysonOpenRules.AppliesToMode(null, null));
+            Assert.True(DysonOpenRules.AppliesToMode([], DysonAgentModes.Work));
+            Assert.True(DysonOpenRules.AppliesToMode(["metaagent"], DysonAgentModes.MetaAgent));
+            Assert.False(DysonOpenRules.AppliesToMode(["MetaAgent"], DysonAgentModes.MetaAgentDrone));
+            Assert.False(DysonOpenRules.AppliesToMode(["MetaAgent"], null));
+
+            var summary = await DysonOpenRules.FormatConfigSummaryJsonAsync(fs);
+            using var doc = JsonDocument.Parse(summary);
+            var modes = doc.RootElement.GetProperty("Skills")[0].GetProperty("Modes");
+            Assert.Equal("MetaAgent", modes[0].GetString());
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public async Task BuildSessionSystemPromptSuffixAsync_threads_agentMode()
+    {
+        var root = WriteModesFixture("suffix-mode");
+        try
+        {
+            var meta = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                null, DysonProviderKinds.Demo, root, DysonAgentModes.MetaAgent);
+            Assert.NotNull(meta);
+            Assert.Contains(A2uiSkillMarker, meta, StringComparison.Ordinal);
+
+            var work = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                null, DysonProviderKinds.Demo, root, DysonAgentModes.Work);
+            Assert.NotNull(work);
+            Assert.DoesNotContain(A2uiSkillMarker, work, StringComparison.Ordinal);
+            Assert.Contains("# Everyone rule", work, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public async Task Repo_openrules_registers_dyson_a2ui_for_MetaAgent_only()
+    {
+        string? repoRoot = null;
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "openrules.json"))
+                && Directory.Exists(Path.Combine(dir.FullName, "src", "Harness")))
+            {
+                repoRoot = dir.FullName;
+                break;
+            }
+        }
+
+        Assert.NotNull(repoRoot);
+        Assert.True(File.Exists(Path.Combine(repoRoot, "skills", "dyson-a2ui", "SKILL.md")));
+
+        var fs = await DysonWorkspaceTestFs.CreateLocalAsync(repoRoot);
+        var loaded = await DysonOpenRules.TryLoadAsync(fs);
+        Assert.False(loaded.IsError);
+        Assert.NotNull(loaded.Value);
+
+        var entry = Assert.Single(
+            loaded.Value.Skills,
+            s => string.Equals(s.Path, "skills/dyson-a2ui/SKILL.md", StringComparison.Ordinal));
+        Assert.True(entry.Exists);
+        Assert.Equal(DysonOpenRulesModes.AutoInclude, entry.Mode);
+        Assert.Equal(new[] { "MetaAgent" }, entry.Modes);
+        Assert.True(DysonOpenRules.AppliesToProvider(entry, DysonOpenRulesProviders.Dyson));
+        Assert.True(DysonOpenRules.AppliesToMode(entry.Modes, DysonAgentModes.MetaAgent));
+        foreach (var mode in new[] { DysonAgentModes.Work, DysonAgentModes.MetaAgentDrone, DysonAgentModes.Explore })
+            Assert.False(DysonOpenRules.AppliesToMode(entry.Modes, mode));
+    }
+
     private static string TempRoot(string tag)
     {
         var root = Path.Combine(

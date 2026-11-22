@@ -246,6 +246,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "WriteTempFile" => await WriteTempFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "ReadTempFile" => await ReadTempFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "RenderHtmlVisualization" => await RenderHtmlVisualizationAsync(call, cancellationToken).ConfigureAwait(false),
+                "RenderA2ui" => await RenderA2uiAsync(call, cancellationToken).ConfigureAwait(false),
                 "GenerateImage" => await GenerateImageAsync(call, cancellationToken).ConfigureAwait(false),
                 "WriteFile" => await WriteFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "Grep" => await GrepAsync(call, cancellationToken).ConfigureAwait(false),

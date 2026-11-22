@@ -549,7 +549,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Ok(call, """{"ok":true}""");
     }
 
-    private const int MaxConversationActions = 8;
+    internal const int MaxConversationActions = 8;
     private const int MaxUserQuestionChoices = 12;
 
     private DysonToolCallResult PostUserQuestion(DysonToolCall call)

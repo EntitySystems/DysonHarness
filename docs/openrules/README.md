@@ -15,6 +15,12 @@ Work-directory root manifest that controls which project docs are always injecte
       "Providers": ["claude", "cursor"]
     },
     {
+      "Path": "skills/meta-only/SKILL.md",
+      "Mode": "AutoInclude",
+      "Modes": ["MetaAgent"],
+      "Description": "…"
+    },
+    {
       "Path": "./path/to/other.md",
       "Mode": "AgentOptional",
       "Description": "…"
@@ -38,6 +44,7 @@ Work-directory root manifest that controls which project docs are always injecte
 | `Mode` | Exactly `AutoInclude` or `AgentOptional`. |
 | `Description` | Optional; used as catalog display name for AgentOptional. |
 | `Providers` | Optional string array. Omitted or `[]` → all agents (including Dyson). Non-empty → load only when the runtime provider id is listed (case-insensitive). Dyson’s id is `dyson` (`DysonOpenRulesProviders.Dyson`). |
+| `Modes` | Optional string array of agent-mode ids; filters **AutoInclude** injection only. Omitted or `[]` → all modes. Non-empty → inject only when the session agent mode is listed. Comparison ignores case and spaces, so `MetaAgent` matches `Meta Agent` (`DysonAgentModes.MetaAgent`) but not `Meta Agent Drone`. A build with no known mode excludes mode-scoped entries. Unknown values are kept (never match). The mode is fixed when the prompt is built: session create, load, child spawn, and mode switch (`DysonOpenRules.AppliesToMode`). |
 
 Property names are PascalCase (as shown). Nested `AGENTS.md` files are **not** auto-discovered — only `Root` plus listed entries. Do not seed `Providers` on the EntitySystems openrules skill by default — agents/users add filtering when they want it.
 
@@ -53,7 +60,7 @@ On session **create / load / child spawn / mode switch**, the harness appends an
 
 1. `[OpenRules Manifest: openrules.json]` + raw JSON body, or `(missing: openrules.json)` when the file is absent but implicit Root (`AGENTS.md`) still applies
 2. Root (`[OpenRules Root: …]` + body)
-3. AutoInclude rules/skills (provider-filtered): each `AutoInclude` Rule/Skill that **applies to the runtime provider** (`dyson` by default), with path, optional description, and body (local FS or URL fetch)
+3. AutoInclude rules/skills (provider- and mode-filtered): each `AutoInclude` Rule/Skill that **applies to the runtime provider** (`dyson` by default) **and to the session agent mode** (`Modes`), with path, optional description, and body (local FS or URL fetch)
 
 AgentOptional **bodies** are still not injected; their **rows** are visible in the injected manifest JSON. That is the point.
 
@@ -76,7 +83,7 @@ Do not `LoadSkill` AutoInclude entries to re-inject them into the turn — they 
 
 ## MCP: `GetOpenRulesConfig`
 
-No required args. Returns a JSON summary (no bodies) of **all** manifest rows (no provider filter): `Root` + `RootExists`, each Rule/Skill as `{ Path, Mode, Description, exists, isUrl, Providers }`, plus `manifestPresent` / `note` when the manifest is missing. Loading / catalog still filters by provider.
+No required args. Returns a JSON summary (no bodies) of **all** manifest rows (no provider filter): `Root` + `RootExists`, each Rule/Skill as `{ Path, Mode, Description, exists, isUrl, Providers, Modes }`, plus `manifestPresent` / `note` when the manifest is missing. Loading / catalog still filters by provider.
 
 ## MCP: `InitializeOpenRules`
 
@@ -105,7 +112,7 @@ No `Providers` on the seeded skill.
 
 ## This repository
 
-Repo-root [`openrules.json`](../../openrules.json) sets `Root: "AGENTS.md"`, lists `rules/*.md` + `skills/*/SKILL.md` as AgentOptional, and includes the EntitySystems openrules skill URL (no `Providers`) so `/skill-` and `LoadSkill` can reach them.
+Repo-root [`openrules.json`](../../openrules.json) sets `Root: "AGENTS.md"`, lists `rules/*.md` + `skills/*/SKILL.md` as AgentOptional, and includes the EntitySystems openrules skill URL (no `Providers`) so `/skill-` and `LoadSkill` can reach them. `skills/dyson-a2ui/SKILL.md` is AutoInclude with `Modes: ["MetaAgent"]` and `Providers: ["dyson"]`, so only Meta Agent sessions get it in their system prompt.
 
 ## Related
 
