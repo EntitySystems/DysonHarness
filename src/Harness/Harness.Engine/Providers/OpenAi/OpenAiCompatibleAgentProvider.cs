@@ -99,7 +99,14 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
     /// <summary>Top-level request reasoning_effort; null/empty = omit.</summary>
     public string? ReasoningEffort { get; set; }
     /// <summary>Slug default max target context; null = harness 200K.</summary>
-    public int? DefaultMaxTargetContextTokens { get; }
+    public int? DefaultMaxTargetContextTokens { get; private set; }
+
+    /// <summary>
+    /// Replace the copied slug default so a later <c>SetModel</c> does not re-apply a stale window.
+    /// Null means cleared (sessions inherit the harness 200K).
+    /// </summary>
+    public void SetDefaultMaxTargetContextTokens(int? maxTargetContextTokens) =>
+        DefaultMaxTargetContextTokens = maxTargetContextTokens;
 
     public static string? NormalizeReasoningEffort(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

@@ -1,0 +1,150 @@
+/* Table family. Tokens from app.css only; align/highlight/state enums map to these fixed classes. */
+.a2ui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.a2ui-title {
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.a2ui-table-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.a2ui-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.a2ui-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.a2ui-table th,
+.a2ui-table td {
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.a2ui-table thead th {
+  background: var(--surface-sunken);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.a2ui-table tbody tr:last-child th,
+.a2ui-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.a2ui-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.a2ui-table tbody th[scope="row"] {
+  font-weight: var(--fw-semibold);
+}
+
+.a2ui-cell--center { text-align: center !important; }
+.a2ui-cell--end { text-align: right !important; font-variant-numeric: tabular-nums; }
+.a2ui-cell--start { text-align: left !important; }
+
+.a2ui-table__empty {
+  padding: var(--sp-4) !important;
+  text-align: center !important;
+  color: var(--text-muted);
+}
+
+/* DataTable header sort buttons and filter box. */
+.a2ui-th-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.a2ui-th-btn:hover {
+  color: var(--text);
+}
+
+.a2ui-th-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.a2ui-th-btn__mark {
+  min-width: 1em;
+  font-size: 9px;
+  color: var(--accent-text);
+}
+
+.a2ui-table__search {
+  align-self: flex-start;
+  min-width: 12rem;
+  padding: var(--sp-1) var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.a2ui-table__search:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--accent-border), var(--accent-glow);
+}
+
+.a2ui-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.a2ui-pager__text {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* ComparisonTable. */
+.a2ui-table--compare th:not(:first-child),
+.a2ui-table--compare td {
+  text-align: center;
+}
+
+.a2ui-col--highlight {
+  background: var(--accent-soft);
+}
+
+.a2ui-yes { color: var(--success); font-weight: var(--fw-semibold); }
+.a2ui-no { color: var(--text-dim); }

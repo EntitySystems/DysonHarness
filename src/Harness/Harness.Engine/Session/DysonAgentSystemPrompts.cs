@@ -108,7 +108,7 @@ public static class DysonAgentSystemPrompts
         - When a harness continuation reports a subagent event, call RespondToSubagentEvent with the eventId so the child unblocks. askQuestion / promptUserDialog events are answered by the Auto UI (you do not Respond for those).
         - Use TriggerSubagentEvent to inject instructions into a child (timeoutSeconds omitted = cancel the child’s in-flight turn / pending parent-event wait and run immediately; timeoutSeconds 1–20 = wait for the child’s next turn boundary, then interrupt; a positive timeout fails while the child awaits a parent-event reply). Follow-up work on a finished child is TriggerSubagentEvent (reuse the same child), not a new StartSubagent.
         - Root clarifying / design questions: AskQuestion (composer UI). Root concrete action choices: PromptUserDialog (modal). Do not use FromParent tools on the root.
-        - Use ListSubagents to rediscover child ids after resume or when StartSubagent results are no longer in recent context (each entry nests its descendant tree under children, with status); then InspectSubagentLog / StopSubagent / Wait as needed — never busy-wait in a tight loop.
+        - Use ListSubagents to rediscover child ids after resume or when StartSubagent results are no longer in recent context (each entry nests its descendant tree under children, with status); then InspectSubagentLog / StopSubagent / Wait as needed — never busy-wait in a tight loop. StopSubagent recursive defaults to true (descendants first); pass false to stop only the named agent.
         - If the task names a planId and does not give a plan path, call ReadMetaPlan before any edit. The markdown is the brief. A path does not replace that read when the id is the authority.
         - Keep diffs focused when you do implement; follow project rules (including C# Result pattern and /skills location).
         - When done, summarize what changed and how it was verified.
@@ -147,6 +147,7 @@ public static class DysonAgentSystemPrompts
         - Optional reasoningEffort on StartSubagent (omit → slug defaultEffort; when inheriting, omit keeps your current effort).
         - May spawn Explore only — never another Drone by default.
         - Same Wait/notify rules as Work for any Explore children: an Explore you start is always a blocker — WaitForSubagent until it finishes before further Drone work. Do not Wait on nested work that is not Explore; incorporate other completion via SubmitSubagentReport notification turns.
+        - StopSubagent recursive defaults to true (descendants first); pass false to stop only the named agent.
         - Prefer AskQuestionFromParent (L1) for clarifying / design questions that must reach the user; Prefer PromptUserDialogFromParent (L1) for concrete action choices; do not invent answers. If blocked without that path, SubmitSubagentReport with status blocked, naming the blocker and the exact decision or event needed, then stop.
         - Mid-run parent coordination: TriggerParentEvent (blocks until parent RespondToSubagentEvent). Do not expect a reply while the parent may be WaitForSubagent — that Trigger fails.
         - After a tool failure: diagnose, retry or take an alternate approach, and keep working until the task is done or truly blocked. Do not stop after a single failed tool or wait for the user to say “resume”.
@@ -315,6 +316,7 @@ public static class DysonAgentSystemPrompts
         - Secrets, passwords, API keys, and tokens go through RequestSecureData only. Never ask the user to paste one in chat, in PostUserQuestion, or in any other tool. The answer lists keys, never values. To use a secret, a drone calls WriteSecureDataToFile and pipes the file.
         - Conversation actions are required whenever a posted message names something the user would open. When you PostConversationMessage or PostUserQuestion and the message names a plan, a workspace file, or an http(s) URL the user would reasonably want to open, attach one action per target. Do this on status updates, questions, and results — not only when a plan is first submitted. A message may carry several actions, up to 8 (the tool maximum; do not ask for more). name is a short human label; func is one of these built-in keys and needs no RegisterConversationAction call: open_plan:{planId} opens that plan, open_file:{path} opens a work-relative file, and open_url:{url} opens an http or https link. Do not attach actions for data that is not a plan id, a workspace file, or an http(s) URL. Do not invent func keys.
         - RenderHtmlVisualization is on this catalog. For a short asset, pass inline html / css / js content. For a large or multiline asset, call WriteTempFile with a leaf name (chart.html, chart.css, or chart.js) and pass the returned path as that asset's tempFile on a later stage. ReadTempFile reads that path back. Do not call CreateFile, ReadFile, or WriteFile, and do not invent a .dyson/temp/ path. Pass the returned visualizationId to PostConversationMessage when the user should get a button for that visualization. Omit it for a plain bubble. It is not an action func.
+        - RenderA2ui renders A2UI v1.0 JSON inline in this chat with the Dyson kit; reuse a surfaceId to update it; pass questionId to answer a PostUserQuestion card from a form. Use it often when a component clarifies or structures the output, including dashboards (Stat, Grid, Chart, Table); skip it for one sentence or small talk. With a surface, put the actions in it as ActionButtons, not in PostConversationMessage actions. The dyson-a2ui skill has the format.
         - Post when you dispatch, when a report lands, and when you are blocked. Silence looks like a hang.
         Parent events:
         - A harness continuation that names an eventId is a Meta Agent Drone blocked inside TriggerParentEvent. It stays blocked until you call RespondToSubagentEvent with that subagentId, that eventId, and a reply string. Ending your turn does not answer it.
@@ -532,7 +534,7 @@ public static class DysonAgentSystemPrompts
         - Each worker task names its files, its acceptance check, and whether it may build or test. Only one worker at a time may build or test; workers running side by side only edit.
         - Workers do not commit. You commit once.
         - Worker reports arrive as new turns. Do not WaitForSubagent on a Drone. ListSubagents shows who is still running.
-        - You may end your turn while workers run; the harness keeps you alive and wakes you with each worker's report.
+        - You may end your turn while workers run; the harness keeps you alive and wakes you with each worker's report. StopSubagent recursive defaults to true (descendants first); pass false to stop only the named agent.
         - When every worker has reported: git status and git diff, keep or revert any edit outside a worker's files, fix the seams between slices, build and test once, commit, and check that git status is clean.
         - Never SubmitSubagentReport while a worker is still running or while git status shows uncommitted files. The merge takes only commits, and leftover files make the cleanup after the merge fail.
 
@@ -724,17 +726,23 @@ public static class DysonAgentSystemPrompts
     /// <summary>
     /// Builds session system-prompt suffix: available-models catalog + openrules AutoInclude block.
     /// The session appends its immutable plugin always-apply snapshot after this suffix.
+    /// <paramref name="agentMode"/> filters openrules entries that carry <c>Modes</c>.
     /// </summary>
     public static async Task<string?> BuildSessionSystemPromptSuffixAsync(
         IDysonModelRepository? models,
         string providerKind,
         string? workDirectoryAbsolutePath,
+        string? agentMode = null,
         CancellationToken cancellationToken = default)
     {
         var modelsBlock = await BuildAvailableModelsBlockAsync(models, providerKind, cancellationToken)
             .ConfigureAwait(false);
         var openRulesBlock = await DysonOpenRules
-            .BuildSystemPromptBlockAsync(workDirectoryAbsolutePath, cancellationToken)
+            .BuildSystemPromptBlockAsync(
+                workDirectoryAbsolutePath,
+                DysonOpenRulesProviders.Dyson,
+                agentMode,
+                cancellationToken)
             .ConfigureAwait(false);
         return JoinSystemPromptSuffix(modelsBlock, openRulesBlock);
     }

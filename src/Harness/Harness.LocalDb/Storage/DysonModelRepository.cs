@@ -5,7 +5,8 @@ namespace DysonHarness;
 public sealed class DysonModelRepository(
     DysonDbAccessor accessor,
     IDysonSubjectContext subjectContext,
-    IDysonAccessEvaluator access) : IDysonModelRepository
+    IDysonAccessEvaluator access,
+    Action<Guid, int?>? slugContextChanged = null) : IDysonModelRepository
 {
     // Mirror Engine DysonProviderKinds (LocalDb must not reference Engine).
     private const string KindDemo = "demo";
@@ -16,6 +17,8 @@ public sealed class DysonModelRepository(
         subjectContext ?? throw new ArgumentNullException(nameof(subjectContext));
     private readonly IDysonAccessEvaluator _access =
         access ?? throw new ArgumentNullException(nameof(access));
+    // ponytail: LocalDb cannot reference the Engine bus; the host wires the publish. Null skips it.
+    private readonly Action<Guid, int?>? _slugContextChanged = slugContextChanged;
 
     public Task<Result<IReadOnlyList<DysonModelProviderEntity>, string>> ListProvidersAsync(
         CancellationToken cancellationToken = default)
@@ -897,7 +900,11 @@ public sealed class DysonModelRepository(
                 if (writeGate is not null)
                     return new VoidResult<string>(writeGate);
 
-                if (string.IsNullOrWhiteSpace(existing.Provider?.ManagedSource))
+                if (string.IsNullOrWhiteSpace(existing.Provider?.ManagedSource)
+                    && !string.Equals(
+                        existing.Provider?.ProviderKind,
+                        KindOpenAICompatible,
+                        StringComparison.Ordinal))
                 {
                     return new VoidResult<string>(
                         "Default max target context can only be set for managed provider slugs.");
@@ -908,6 +915,7 @@ public sealed class DysonModelRepository(
                 existing.UpdatedUtc = DateTime.UtcNow;
 
                 await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+                _slugContextChanged?.Invoke(existing.Id, existing.DefaultMaxTargetContextTokens);
                 return VoidResult<string>.Success;
             }
             catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))

@@ -1524,7 +1524,9 @@ public sealed class DysonMcpPipeline
             Name = "StopSubagent",
             Description =
                 "Cancel a running subagent (cooperative stop via its run CancellationToken). " +
-                "Marks the child Stopped and notifies the parent.",
+                "Marks the child Stopped and notifies the parent. " +
+                "recursive defaults to true when omitted: descendants are stopped first (deepest first), then the named agent. " +
+                "Pass false to stop only the named agent.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1537,6 +1539,10 @@ public sealed class DysonMcpPipeline
                     "reason": {
                       "type": "string",
                       "description": "Optional reason for the stop request."
+                    },
+                    "recursive": {
+                      "type": "boolean",
+                      "description": "Also stop descendants (deepest first). Omitted means true. Pass false to stop only the named agent."
                     }
                   },
                   "required": ["subagentId"]
@@ -1710,7 +1716,8 @@ public sealed class DysonMcpPipeline
             Name = "WaitForSeconds",
             Description =
                 "Block until the given number of seconds elapses (1–300). " +
-                "Use for short deliberate delays; prompt cancel aborts the wait.",
+                "Use for short deliberate delays; prompt cancel aborts the wait. " +
+                "In a Meta Agent Drone, a subagent parent event ends the wait early with status interrupted and the event to answer.",
             InputSchemaJson = """
                 {
                   "type": "object",

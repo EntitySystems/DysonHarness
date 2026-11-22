@@ -140,7 +140,7 @@ window.dysonMetaReveal = {
   _mask: function (el, hidden) {
     var msg = el.closest(".meta-chat__msg");
     if (!msg) return;
-    var tail = msg.querySelectorAll(".meta-chat__question, .meta-chat__actions");
+    var tail = msg.querySelectorAll(".meta-chat__a2ui, .meta-chat__actions");
     for (var i = 0; i < tail.length; i++) {
       if (hidden) tail[i].setAttribute("hidden", "");
       else tail[i].removeAttribute("hidden");

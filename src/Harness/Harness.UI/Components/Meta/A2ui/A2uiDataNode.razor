@@ -1,0 +1,402 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
+@using System.Text.Json.Nodes
+@using DysonHarness
+
+@* Data display group. Render only: resolves go through DysonA2uiBinding, sort/format/initials through DysonA2uiTable.
+   Bound lists are validated at render only: wrong-typed items are skipped, numbers clamped, nothing throws.
+   Text is Blazor-escaped (never MarkupString); enums (tone, trend, status, size) map to fixed classes; the only
+   attribute numbers are ones we format ourselves. *@
+@switch (_name)
+{
+    case "Table":
+    case "TableSection":
+    case "TableRow":
+    case "TableCell":
+    case "DataTable":
+    case "ComparisonTable":
+        <A2uiTable View="View" Id="@Id" Component="Component" Scope="@Scope" Depth="Depth" />
+        break;
+    case "ListItem":
+        <div class="a2ui-li" @attributes="_aria">
+            <div class="a2ui-li__row">
+                @if (IconPath(Component["icon"]) is { } liIcon)
+                {
+                    <svg class="a2ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="@liIcon" /></svg>
+                }
+                <div class="a2ui-li__main">
+                    <span class="a2ui-li__label">@Txt("label")</span>
+                    @if (Txt("description") is { Length: > 0 } liDescription)
+                    {
+                        <span class="a2ui-li__desc">@liDescription</span>
+                    }
+                </div>
+                @if (Show(Component["value"]) is { Length: > 0 } liValue)
+                {
+                    <span class="a2ui-li__value">@liValue</span>
+                }
+            </div>
+            @if (Component["children"] is not null)
+            {
+                <div class="a2ui-li__children">
+                    @foreach (var (liChild, liScope) in A2uiProps.Children(View, Component, Scope))
+                    {
+                        <A2uiNode View="View" Id="@liChild" Scope="@liScope" Depth="Depth + 1" />
+                    }
+                </div>
+            }
+        </div>
+        break;
+    case "Stat":
+    case "StatGroup":
+        <div class="@(_name == "Stat" ? "a2ui-stats a2ui-stats--single" : "a2ui-stats")" @attributes="_aria">
+            @if (Txt("title") is { Length: > 0 } statsTitle)
+            {
+                <div class="a2ui-title">@statsTitle</div>
+            }
+            <div class="a2ui-stats__strip">
+                @foreach (var stat in StatItems())
+                {
+                    <div class="@("a2ui-stat " + Tone(stat["tone"]))">
+                        <div class="a2ui-stat__label">
+                            @if (IconPath(stat["icon"]) is { } statIcon)
+                            {
+                                <svg class="a2ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="@statIcon" /></svg>
+                            }
+                            <span>@Show(stat["label"])</span>
+                        </div>
+                        <div class="a2ui-stat__value">@Show(stat["value"])</div>
+                        @if (Show(stat["delta"]) is { Length: > 0 } statDelta)
+                        {
+                            var trend = Trend(stat["trend"]);
+                            <div class="@("a2ui-stat__delta a2ui-trend--" + trend)">
+                                <svg class="a2ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="@TrendPath(trend)" /></svg>
+                                <span class="a2ui-sr-only">@trend</span>
+                                <span>@statDelta</span>
+                            </div>
+                        }
+                        @if (Show(stat["caption"]) is { Length: > 0 } statCaption)
+                        {
+                            <div class="a2ui-stat__caption">@statCaption</div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+        break;
+    case "KeyValueList":
+        <div class="a2ui-kv-wrap" @attributes="_aria">
+            @if (Txt("title") is { Length: > 0 } kvTitle)
+            {
+                <div class="a2ui-title">@kvTitle</div>
+            }
+            <dl class="@("a2ui-kv a2ui-kv--" + Columns())">
+                @foreach (var kv in Items(Component["items"], DysonA2uiProtocol.MaxListItems))
+                {
+                    <div class="a2ui-kv__item">
+                        <dt>@Show(kv["label"])</dt>
+                        <dd>
+                            @Show(kv["value"])
+                            @if (Show(kv["hint"]) is { Length: > 0 } kvHint)
+                            {
+                                <small class="a2ui-kv__hint">@kvHint</small>
+                            }
+                        </dd>
+                    </div>
+                }
+            </dl>
+        </div>
+        break;
+    case "Timeline":
+        <div class="a2ui-timeline-wrap" @attributes="_aria">
+            @if (Txt("title") is { Length: > 0 } tlTitle)
+            {
+                <div class="a2ui-title">@tlTitle</div>
+            }
+            <ol class="a2ui-timeline">
+                @foreach (var step in Items(Component["items"], DysonA2uiProtocol.MaxListItems))
+                {
+                    <li class="@("a2ui-timeline__item a2ui-status--" + TimelineStatus(step["status"]))">
+                        <span class="a2ui-timeline__dot">
+                            @if (IconPath(step["icon"]) is { } stepIcon)
+                            {
+                                <svg class="a2ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="@stepIcon" /></svg>
+                            }
+                        </span>
+                        <div class="a2ui-timeline__body">
+                            <div class="a2ui-timeline__head">
+                                <span class="a2ui-timeline__title">@Show(step["title"])</span>
+                                @if (Show(step["time"]) is { Length: > 0 } stepTime)
+                                {
+                                    <span class="a2ui-timeline__time">@stepTime</span>
+                                }
+                            </div>
+                            @if (Show(step["description"]) is { Length: > 0 } stepText)
+                            {
+                                <div class="a2ui-timeline__desc">@stepText</div>
+                            }
+                        </div>
+                    </li>
+                }
+            </ol>
+        </div>
+        break;
+    case "Progress":
+        var progress = Pct(Component["value"]);
+        <div class="@("a2ui-progress " + Tone(Component["tone"]))" @attributes="_aria">
+            @if (Txt("label") is { Length: > 0 } progLabel)
+            {
+                <div class="a2ui-progress__head">
+                    <span>@progLabel</span>
+                    <span class="a2ui-progress__pct">@DysonA2uiFormat.Number(progress, "percent")</span>
+                </div>
+            }
+            <progress class="a2ui-progress__bar" max="100" value="@Fixed(progress)">@DysonA2uiFormat.Number(progress, "percent")</progress>
+            @if (Txt("caption") is { Length: > 0 } progCaption)
+            {
+                <div class="a2ui-progress__caption">@progCaption</div>
+            }
+        </div>
+        break;
+    case "RadialProgress":
+        var ring = Pct(Component["value"]);
+        var ringPercent = DysonA2uiFormat.Number(ring, "percent");
+        var ringText = Txt("display") is { Length: > 0 } custom ? custom : ringPercent;
+        <div class="@("a2ui-radial " + Tone(Component["tone"]))" @attributes="_aria">
+            <div class="a2ui-radial__ring">
+                <svg viewBox="0 0 40 40" role="img" aria-label="@ringPercent">
+                    <circle class="a2ui-radial__track" cx="20" cy="20" r="16" />
+                    <circle class="a2ui-radial__arc" cx="20" cy="20" r="16" stroke-dasharray="@DysonA2uiTable.RingDash(ring, 16)" />
+                </svg>
+                <span class="a2ui-radial__text">@ringText</span>
+            </div>
+            @if (Txt("label") is { Length: > 0 } ringLabel)
+            {
+                <div class="a2ui-radial__label">@ringLabel</div>
+            }
+        </div>
+        break;
+    case "Rating":
+        var ratingValue = DysonA2uiTable.Clamp(DysonA2uiBinding.ResolveNumber(Component["value"], View.Model, Scope) ?? 0, 0, 5);
+        var ratingText = DysonA2uiFormat.Number(ratingValue, null);
+        <div class="a2ui-rating" @attributes="_aria">
+            <span class="a2ui-rating__stars" role="img" aria-label="@(ratingText + " out of 5")">
+                @foreach (var star in DysonA2uiTable.Stars(ratingValue))
+                {
+                    <span class="a2ui-star @(star == DysonA2uiStar.Half ? "a2ui-star--half" : null)">
+                        <svg class="a2ui-star__outline" viewBox="0 0 24 24" aria-hidden="true"><path d="@StarPath" /></svg>
+                        @if (star != DysonA2uiStar.Empty)
+                        {
+                            <svg class="a2ui-star__fill" viewBox="0 0 24 24" aria-hidden="true"><path d="@StarPath" /></svg>
+                        }
+                    </span>
+                }
+            </span>
+            <span class="a2ui-rating__text">@ratingText</span>
+            @if (DysonA2uiBinding.ResolveNumber(Component["count"], View.Model, Scope) is { } ratingCount && ratingCount >= 0)
+            {
+                <span class="a2ui-rating__count">(@DysonA2uiFormat.Number(ratingCount, null))</span>
+            }
+            @if (Txt("label") is { Length: > 0 } ratingLabel)
+            {
+                <span class="a2ui-rating__label">@ratingLabel</span>
+            }
+        </div>
+        break;
+    case "TagList":
+        <ul class="@("a2ui-tags " + Tone(Component["tone"]))" @attributes="_aria">
+            @foreach (var tag in DysonA2uiBinding.ResolveStringList(Component["tags"], View.Model, Scope).Take(50))
+            {
+                <li class="a2ui-tag">@tag</li>
+            }
+        </ul>
+        break;
+    case "Avatar":
+        var avatarName = Txt("name");
+        <div class="a2ui-avatar-row" @attributes="_aria">
+            @Circle(avatarName, Size(Component["size"]), Status(Component["status"]))
+            @if (Txt("subtitle") is { Length: > 0 } avatarSub)
+            {
+                <div class="a2ui-avatar-row__text">
+                    <span class="a2ui-avatar-row__name">@avatarName</span>
+                    <span class="a2ui-avatar-row__sub">@avatarSub</span>
+                </div>
+            }
+        </div>
+        break;
+    case "AvatarGroup":
+        var people = Items(Component["people"], 50).ToList();
+        var maxShown = A2uiProps.Int(Component["max"]) is { } m ? Math.Clamp(m, 1, 20) : 4;
+        <div class="a2ui-avatar-group" @attributes="_aria">
+            <span class="a2ui-avatar-group__stack">
+                @foreach (var person in people.Take(maxShown))
+                {
+                    @Circle(Show(person["name"]), "a2ui-avatar--md", null)
+                }
+                @if (people.Count > maxShown)
+                {
+                    <span class="a2ui-avatar a2ui-avatar--md a2ui-avatar--more" title="@(people.Count - maxShown) more">+@(people.Count - maxShown)</span>
+                }
+            </span>
+            @if (Txt("label") is { Length: > 0 } groupLabel)
+            {
+                <span class="a2ui-avatar-group__label">@groupLabel</span>
+            }
+        </div>
+        break;
+    case "Agenda":
+        <div class="a2ui-agenda" @attributes="_aria">
+            @if (Txt("title") is { Length: > 0 } agendaTitle)
+            {
+                <div class="a2ui-title">@agendaTitle</div>
+            }
+            @foreach (var day in Items(Component["days"], 31))
+            {
+                var dayLabel = Show(day["label"]);
+                <section class="a2ui-agenda__day">
+                    <h4 class="a2ui-agenda__date">
+                        @(dayLabel.Length > 0 ? dayLabel : DysonA2uiFormat.Date(Show(day["date"])))
+                        @if (dayLabel.Length > 0 && Show(day["date"]) is { Length: > 0 } dayDate)
+                        {
+                            <small>@DysonA2uiFormat.Date(dayDate)</small>
+                        }
+                    </h4>
+                    <ul class="a2ui-agenda__events">
+                        @foreach (var ev in Items(day["events"], 50))
+                        {
+                            <li class="a2ui-agenda__event">
+                                <span class="a2ui-agenda__time">@Show(ev["time"])</span>
+                                <div class="a2ui-agenda__body">
+                                    <span class="a2ui-agenda__title">@Show(ev["title"])</span>
+                                    @if (Show(ev["description"]) is { Length: > 0 } evText)
+                                    {
+                                        <span class="a2ui-agenda__desc">@evText</span>
+                                    }
+                                    @if (Show(ev["location"]) is { Length: > 0 } evPlace)
+                                    {
+                                        <span class="a2ui-agenda__place">@evPlace</span>
+                                    }
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                </section>
+            }
+        </div>
+        break;
+}
+@if (_description is not null)
+{
+    <span id="@($"{_domId}-desc")" class="a2ui-sr-only">@_description</span>
+}
+
+@code {
+    private static readonly string StarPath = A2uiIcons.Path("star") ?? "";
+    private readonly string _domId = "a2ui-" + Guid.NewGuid().ToString("N");
+    private string? _name;
+    private string? _description;
+    private Dictionary<string, object> _aria = new();
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public string? Id { get; set; }
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public int Depth { get; set; } = 1;
+
+    protected override void OnParametersSet()
+    {
+        _name = A2uiProps.Str(Component["component"]);
+        _description = null;
+        // The table family builds its own aria.
+        _aria = _name is "Table" or "TableSection" or "TableRow" or "TableCell" or "DataTable" or "ComparisonTable"
+            ? new Dictionary<string, object>()
+            : A2uiProps.Aria(View, Component, Scope, _domId, out _description);
+    }
+
+    private string Txt(string key) => A2uiProps.String(View, Component[key], Scope);
+
+    /// <summary>Any scalar as display text (numbers formatted by us, invariant); objects, arrays and null are "".</summary>
+    private string Show(JsonNode? node) =>
+        DysonA2uiTable.Display(DysonA2uiBinding.ResolveValue(node, View.Model, Scope), null).Text ?? "";
+
+    private string? IconPath(JsonNode? node) => A2uiIcons.Path(A2uiProps.String(View, node, Scope));
+
+    private static string AvatarClass(string name, string size) =>
+        "a2ui-avatar " + size + " a2ui-avatar--c" + DysonA2uiTable.ColorIndex(name).ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>Object items of a literal or bound array, wrong-typed entries skipped, capped.</summary>
+    private IEnumerable<JsonObject> Items(JsonNode? node, int max) =>
+        DysonA2uiBinding.ResolveValue(node, View.Model, Scope) is JsonArray array
+            ? array.OfType<JsonObject>().Take(max)
+            : Enumerable.Empty<JsonObject>();
+
+    /// <summary>Stat is one item (the component itself); StatGroup reads its items.</summary>
+    private IEnumerable<JsonObject> StatItems() =>
+        _name == "Stat" ? new[] { Component } : Items(Component["items"], 12);
+
+    private string Tone(JsonNode? node) => Show(node) switch
+    {
+        "positive" or "success" => "a2ui-tone--positive",
+        "negative" or "danger" => "a2ui-tone--negative",
+        "warning" => "a2ui-tone--warning",
+        "info" => "a2ui-tone--info",
+        "accent" => "a2ui-tone--accent",
+        "discovery" => "a2ui-tone--discovery",
+        "secondary" => "a2ui-tone--secondary",
+        _ => "",
+    };
+
+    private string Trend(JsonNode? node) => Show(node) switch
+    {
+        "up" => "up",
+        "down" => "down",
+        _ => "flat",
+    };
+
+    private static string TrendPath(string trend) =>
+        A2uiIcons.Path(trend switch { "up" => "arrow-up", "down" => "arrow-down", _ => "minus" }) ?? "";
+
+    private string TimelineStatus(JsonNode? node) => Show(node).Trim().ToLowerInvariant() switch
+    {
+        "done" or "complete" or "completed" or "success" => "done",
+        "active" or "current" or "running" or "in_progress" => "active",
+        "pending" or "upcoming" or "todo" => "pending",
+        "error" or "failed" or "failure" => "error",
+        "warning" => "warning",
+        _ => "default",
+    };
+
+    private int Columns() => A2uiProps.Int(Component["columns"]) is { } n ? Math.Clamp(n, 1, 3) : 1;
+
+    private double Pct(JsonNode? node) =>
+        DysonA2uiTable.Clamp(DysonA2uiBinding.ResolveNumber(node, View.Model, Scope) ?? 0, 0, 100);
+
+    private static string Fixed(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private string Size(JsonNode? node) => Show(node) switch
+    {
+        "sm" => "a2ui-avatar--sm",
+        "lg" => "a2ui-avatar--lg",
+        _ => "a2ui-avatar--md",
+    };
+
+    private string? Status(JsonNode? node) => Show(node) switch
+    {
+        "online" => "online",
+        "away" => "away",
+        "offline" => "offline",
+        _ => null,
+    };
+
+    /// <summary>Initials circle. The image prop is validated upstream and never loaded; colour index is a stable hash of the name.</summary>
+    private RenderFragment Circle(string name, string size, string? status) => __builder =>
+    {
+        <span class="@AvatarClass(name, size)" role="img" aria-label="@name" title="@name">
+            <span aria-hidden="true">@DysonA2uiTable.Initials(name)</span>
+            @if (status is not null)
+            {
+                <span class="@("a2ui-avatar__status a2ui-avatar__status--" + status)"></span>
+            }
+        </span>
+    };
+}

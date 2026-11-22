@@ -246,6 +246,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "WriteTempFile" => await WriteTempFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "ReadTempFile" => await ReadTempFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "RenderHtmlVisualization" => await RenderHtmlVisualizationAsync(call, cancellationToken).ConfigureAwait(false),
+                "RenderA2ui" => await RenderA2uiAsync(call, cancellationToken).ConfigureAwait(false),
+                "ListPipelineRuns" => await ListPipelineRunsAsync(call, cancellationToken).ConfigureAwait(false),
                 "GenerateImage" => await GenerateImageAsync(call, cancellationToken).ConfigureAwait(false),
                 "WriteFile" => await WriteFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "Grep" => await GrepAsync(call, cancellationToken).ConfigureAwait(false),
@@ -868,6 +870,7 @@ public sealed partial class DysonWorkspaceToolExecutor
     {
         int subagentId;
         string? reason;
+        var recursive = true;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -876,6 +879,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 return Error(call, "StopSubagent: subagentId (≥ 1) is required.");
             subagentId = id.Value;
             reason = GetOptionalString(doc.RootElement, "reason");
+            recursive = GetBool(doc.RootElement, "recursive", defaultValue: true);
         }
         catch (JsonException)
         {
@@ -885,15 +889,34 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (!_session.TryGetSubagent(subagentId, out var child))
             return Error(call, $"Unknown subagentId {subagentId}.");
 
-        var stopped = await _session.StopSubagentAsync(subagentId, reason, cancellationToken)
+        var stopped = await _session.StopSubagentAsync(subagentId, reason, recursive, cancellationToken)
             .ConfigureAwait(false);
         if (stopped.IsError)
             return Error(call, stopped.Error);
+
+        if (recursive)
+        {
+            foreach (var descendant in EnumerateStoppedDescendants(child))
+            {
+                await PersistSessionStatusAsync(descendant, descendant.Status, reason, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
 
         await PersistSessionStatusAsync(child, child.Status, reason, cancellationToken)
             .ConfigureAwait(false);
 
         return Ok(call, stopped.Value);
+    }
+
+    private static IEnumerable<DysonAgentSession> EnumerateStoppedDescendants(DysonAgentSession session)
+    {
+        foreach (var child in session.SubSessions)
+        {
+            foreach (var nested in EnumerateStoppedDescendants(child))
+                yield return nested;
+            yield return child;
+        }
     }
 
     private async Task<DysonToolCallResult> ChangeSubagentAIModelAsync(
@@ -1703,13 +1726,123 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (seconds < 1 || seconds > 300)
             return Error(call, "WaitForSeconds: seconds must be between 1 and 300.");
 
-        await Task.Delay(TimeSpan.FromSeconds(seconds), cancellationToken).ConfigureAwait(false);
+        var span = TimeSpan.FromSeconds(seconds);
+        if (!string.Equals(_session.Mode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+        {
+            await Task.Delay(span, cancellationToken).ConfigureAwait(false);
+            return WaitOk(call, seconds);
+        }
 
-        return Ok(call, JsonSerializer.Serialize(new
+        // Meta Agent Drone: a child's parent event ends the wait with a successful result (plan 365).
+        var started = DateTime.UtcNow;
+        var wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnInterrupt(object? sender, DysonAgentInterrupt interrupt)
+        {
+            if (interrupt.Kind == DysonAgentInterruptKind.SubagentEvent)
+                wake.TrySetResult();
+        }
+
+        _session.InterruptEnqueued += OnInterrupt;
+        try
+        {
+            var delay = Task.Delay(span, cancellationToken);
+            while (true)
+            {
+                // A cancelled wait aborts as before; never surface (and flag) an event the model will not see.
+                cancellationToken.ThrowIfCancellationRequested();
+                var events = CollectWakeEvents();
+                if (events.Count > 0)
+                    return WaitInterrupted(call, seconds, started, events);
+
+                if (await Task.WhenAny(delay, wake.Task).ConfigureAwait(false) == delay)
+                {
+                    await delay.ConfigureAwait(false);
+                    return WaitOk(call, seconds);
+                }
+
+                // Re-arm before re-checking so an event landing in between still wakes the next loop.
+                wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+        finally
+        {
+            _session.InterruptEnqueued -= OnInterrupt;
+        }
+    }
+
+    private static DysonToolCallResult WaitOk(DysonToolCall call, int seconds) =>
+        Ok(call, JsonSerializer.Serialize(new
         {
             status = "ok",
             waitedSeconds = seconds,
         }));
+
+    private static DysonToolCallResult WaitInterrupted(
+        DysonToolCall call,
+        int seconds,
+        DateTime started,
+        IReadOnlyList<DysonParentEvent> events)
+    {
+        foreach (var evt in events)
+            evt.WokeWait = true;
+
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            status = "interrupted",
+            reason = "subagentEvent",
+            requestedSeconds = seconds,
+            waitedSeconds = (int)(DateTime.UtcNow - started).TotalSeconds,
+            events = events.Select(e => new
+            {
+                subagentId = e.SubagentId,
+                persistenceId = e.PersistenceId,
+                eventId = e.EventId,
+                kind = e.Kind,
+                payload = e.Payload,
+            }),
+            instruction =
+                "A subagent is blocked on you. Call RespondToSubagentEvent(subagentId, eventId, reply) this turn. " +
+                "If only your parent can answer, TriggerParentEvent kind message first, then Respond.",
+        }));
+    }
+
+    /// <summary>
+    /// Pending child events this drone's WaitForSeconds should surface. Empty while the drone itself
+    /// blocks in TriggerParentEvent (a sibling wait cannot answer then).
+    /// ponytail: reads <see cref="DysonAgentSession.PendingOrRecentParentEvents"/> (20 newest), and an
+    /// event surfaced before a compaction keeps WokeWait; the deferred host continuation still delivers both.
+    /// </summary>
+    private List<DysonParentEvent> CollectWakeEvents()
+    {
+        if (_session.HasPendingParentEventWait)
+            return [];
+
+        var inFlight = _session.InFlightPromptTurns;
+        return _session.PendingOrRecentParentEvents
+            .Where(e => ShouldWakeForParentEvent(e, inFlight))
+            .ToList();
+    }
+
+    /// <summary>
+    /// True for a still-pending event not yet surfaced by a wait and not being answered by an
+    /// in-flight turn (its continuation prompt carries the eventId).
+    /// </summary>
+    internal static bool ShouldWakeForParentEvent(DysonParentEvent evt, IReadOnlyList<DysonAgentTurn> inFlight)
+    {
+        if (evt.Status != DysonParentEventStatus.Pending || evt.WokeWait)
+            return false;
+
+        var id = evt.EventId.ToString("D");
+        foreach (var turn in inFlight)
+        {
+            if (turn.Instruction?.Contains(id, StringComparison.OrdinalIgnoreCase) == true
+                || turn.HiddenInstruction?.Contains(id, StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private async Task<DysonToolCallResult> JsonDynamicStructuredLanguageToolchainAsync(

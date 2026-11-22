@@ -551,6 +551,27 @@ public sealed class DysonVersionControlServiceTests
         public ConcurrentQueue<long> JobRunIds { get; } = new();
         public int MaxInFlight { get; private set; }
         public int ProbeResets { get; private set; }
+        public ConcurrentQueue<long> RunIds { get; } = new();
+        public ConcurrentQueue<long> JobIds { get; } = new();
+        public Func<long, Result<DysonPipelineRun, DysonPipelineError>>? RunById { get; set; }
+        public Func<long, Result<DysonPipelineJob, DysonPipelineError>>? JobById { get; set; }
+        public Func<long, DysonPipelineError?>? JobsError { get; set; }
+
+        public Task<Result<DysonPipelineRun, DysonPipelineError>> GetRunAsync(
+            DysonPipelineTarget target, long runId, CancellationToken ct)
+        {
+            RunIds.Enqueue(runId);
+            return Task.FromResult(RunById?.Invoke(runId) ?? Result<DysonPipelineRun, DysonPipelineError>.AsError(
+                new DysonPipelineError(DysonPipelineErrorKind.RepoNotFound, "404")));
+        }
+
+        public Task<Result<DysonPipelineJob, DysonPipelineError>> GetJobAsync(
+            DysonPipelineTarget target, long jobId, CancellationToken ct)
+        {
+            JobIds.Enqueue(jobId);
+            return Task.FromResult(JobById?.Invoke(jobId) ?? Result<DysonPipelineJob, DysonPipelineError>.AsError(
+                new DysonPipelineError(DysonPipelineErrorKind.RepoNotFound, "404")));
+        }
 
         public string Id => "github";
         public string DisplayName => "GitHub";
@@ -591,6 +612,8 @@ public sealed class DysonVersionControlServiceTests
             DysonPipelineTarget target, long runId, string? etag, CancellationToken ct)
         {
             JobRunIds.Enqueue(runId);
+            if (JobsError?.Invoke(runId) is { } jobsError)
+                return Task.FromResult(Result<DysonPipelineFetch<DysonPipelineJob>, DysonPipelineError>.AsError(jobsError));
             IReadOnlyList<DysonPipelineJob> jobs =
             [
                 new(runId * 10, runId, "build", DysonPipelineState.Running, "Running", T0, null, "https://github.com/o/r/job"),

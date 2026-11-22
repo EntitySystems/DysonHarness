@@ -1,0 +1,223 @@
+/* Feedback and overlay components. In-surface only: absolute/fixed panels, no portal, no JS. */
+.a2ui-popover,
+.a2ui-modal {
+  position: relative;
+  display: inline-block;
+  min-width: 0;
+}
+
+.a2ui-overlay-part {
+  min-width: 0;
+}
+
+.a2ui-overlay__trigger--button {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.a2ui-overlay__trigger--button:focus-visible {
+  outline: none;
+  border-radius: var(--radius-xs);
+  box-shadow: var(--focus-ring);
+}
+
+.a2ui-popover__panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  min-width: 12rem;
+  max-width: min(22rem, 80vw);
+  padding: var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 35%, transparent);
+}
+
+/* Modal: a backdrop scoped to the surface (position: fixed inside the chat column), no <dialog>. */
+.a2ui-modal__backdrop {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  background: color-mix(in srgb, #000 55%, transparent);
+}
+
+.a2ui-modal__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 100%;
+  max-height: 85vh;
+  padding: var(--sp-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: 0 16px 48px color-mix(in srgb, #000 45%, transparent);
+}
+
+.a2ui-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.a2ui-modal__title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.a2ui-modal__close {
+  margin-left: auto;
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--fs-xl);
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.a2ui-modal__close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.a2ui-modal__close:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.a2ui-modal__body {
+  min-width: 0;
+  overflow-y: auto;
+}
+
+/* Tooltip: pure CSS, shown on hover and keyboard focus inside the wrapper. */
+.a2ui-tooltip {
+  position: relative;
+  display: inline-block;
+}
+
+.a2ui-tooltip__tip {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + var(--sp-1));
+  left: 50%;
+  width: max-content;
+  max-width: 16rem;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%);
+  transition: opacity var(--motion-fast) var(--ease);
+}
+
+.a2ui-tooltip:hover .a2ui-tooltip__tip,
+.a2ui-tooltip:focus-within .a2ui-tooltip__tip {
+  opacity: 1;
+}
+
+.a2ui-flash {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  width: 100%;
+  min-height: 5rem;
+  padding: var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease);
+}
+
+.a2ui-flash:hover {
+  background: var(--bg-hover);
+}
+
+.a2ui-flash:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.a2ui-flash--back {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+.a2ui-flash__side {
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.a2ui-flash__face {
+  font-size: var(--fs-md);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.a2ui-flash__hint {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* PulseIndicator: the halo reuses the global dyson-status-pulse keyframes (static dot under reduced motion). */
+.a2ui-pulse {
+  --a2ui-tone: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.a2ui-pulse--success { --a2ui-tone: var(--success); }
+.a2ui-pulse--danger { --a2ui-tone: var(--danger); }
+.a2ui-pulse--warning { --a2ui-tone: var(--warning); }
+.a2ui-pulse--info { --a2ui-tone: var(--info); }
+.a2ui-pulse--secondary { --a2ui-tone: var(--text-dim); }
+
+.a2ui-pulse__dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--a2ui-tone);
+}
+
+.a2ui-pulse__dot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--a2ui-tone);
+  animation: dyson-status-pulse var(--motion-pulse) var(--ease-standard) infinite;
+}

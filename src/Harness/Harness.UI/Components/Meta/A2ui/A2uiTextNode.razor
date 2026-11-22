@@ -1,0 +1,229 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Text.Json.Nodes
+@using DysonHarness
+
+@* Text, content and link components. Render only: text is Blazor-escaped (never MarkupString); enum props map to
+   fixed classes; no agent string reaches href/src/style/class/event attributes. Overlay and feedback components
+   are A2uiOverlay. *@
+@if (IsOverlay)
+{
+    <A2uiOverlay View="View" Id="@Id" Component="Component" Scope="@Scope" Depth="Depth" />
+}
+else
+{
+    var aria = A2uiProps.Aria(View, Component, Scope, _domId, out var description);
+    switch (Name)
+    {
+        case "Title":
+            switch (TitleLevel)
+            {
+                case 2:
+                    <h2 class="a2ui-title a2ui-title--2" @attributes="aria">@S("text")</h2>
+                    break;
+                case 3:
+                    <h3 class="a2ui-title a2ui-title--3" @attributes="aria">@S("text")</h3>
+                    break;
+                default:
+                    <h4 class="a2ui-title a2ui-title--4" @attributes="aria">@S("text")</h4>
+                    break;
+            }
+            break;
+        case "Heading":
+            <header class="a2ui-heading" @attributes="aria">
+                @if (S("eyebrow") is { Length: > 0 } eyebrow)
+                {
+                    <span class="a2ui-heading__eyebrow">@eyebrow</span>
+                }
+                @switch (HeadingLevel)
+                {
+                    case 2:
+                        <h2 class="a2ui-title a2ui-title--2">@S("text")</h2>
+                        break;
+                    case 3:
+                        <h3 class="a2ui-title a2ui-title--3">@S("text")</h3>
+                        break;
+                    case 4:
+                        <h4 class="a2ui-title a2ui-title--4">@S("text")</h4>
+                        break;
+                    default:
+                        <h5 class="a2ui-title a2ui-title--5">@S("text")</h5>
+                        break;
+                }
+                @if (S("subtitle") is { Length: > 0 } subtitle)
+                {
+                    <p class="a2ui-heading__subtitle">@subtitle</p>
+                }
+            </header>
+            break;
+        case "Caption":
+            <span class="a2ui-caption" @attributes="aria">@S("text")</span>
+            break;
+        case "Label":
+            <span class="a2ui-label" @attributes="aria">@S("text")</span>
+            break;
+        case "Bold":
+            <strong class="a2ui-inline" @attributes="aria">@S("text")</strong>
+            break;
+        case "Italic":
+            <em class="a2ui-inline" @attributes="aria">@S("text")</em>
+            break;
+        case "Underline":
+            <u class="a2ui-inline" @attributes="aria">@S("text")</u>
+            break;
+        case "Strikethrough":
+            <s class="a2ui-inline" @attributes="aria">@S("text")</s>
+            break;
+        case "ShimmerText":
+            <span class="a2ui-shimmer-text" @attributes="aria">@S("text")</span>
+            break;
+        case "Badge":
+            <span class="@BadgeClass" @attributes="aria">@S("text")</span>
+            break;
+        case "Blockquote":
+        case "Quote":
+            <blockquote class="a2ui-quote" @attributes="aria">
+                <p class="a2ui-quote__text">@S("text")</p>
+                @if (Attribution() is { Length: > 0 } credit)
+                {
+                    <footer class="a2ui-quote__by">@credit</footer>
+                }
+            </blockquote>
+            break;
+        case "Code":
+        case "CodeBlock":
+            var codeTitle = S("title");
+            var codeLang = S("language");
+            <figure class="a2ui-code" @attributes="aria">
+                @if (codeTitle.Length > 0 || codeLang.Length > 0)
+                {
+                    <figcaption class="a2ui-code__head">
+                        <span class="a2ui-code__title">@codeTitle</span>
+                        <span class="a2ui-code__lang">@codeLang</span>
+                    </figcaption>
+                }
+                <pre class="a2ui-code__pre"><code>@CodeText()</code></pre>
+            </figure>
+            break;
+        case "Kbd":
+            <span class="a2ui-kbd-group" @attributes="aria">
+                @if (S("label") is { Length: > 0 } kbdLabel)
+                {
+                    <span class="a2ui-caption">@kbdLabel</span>
+                }
+                @{
+                    var keys = DysonA2uiBinding.ResolveStringList(Component["keys"], View.Model, Scope).Take(MaxKeys).ToList();
+                }
+                @for (var i = 0; i < keys.Count; i++)
+                {
+                    if (i > 0)
+                    {
+                        <span class="a2ui-kbd-plus" aria-hidden="true">+</span>
+                    }
+                    <kbd class="a2ui-kbd">@keys[i]</kbd>
+                }
+            </span>
+            break;
+        case "Markdown":
+            <div class="a2ui-markdown" @attributes="aria">
+                <A2uiMarkdown Text="@MarkdownText()" />
+            </div>
+            break;
+        case "Math":
+            <div class="a2ui-math @(DysonA2uiBinding.ResolveBool(Component["display"], View.Model, Scope) ? "a2ui-math--display" : null)" @attributes="aria">
+                <span class="a2ui-math__label">TeX</span>
+                <code class="a2ui-math__src">@MathText()</code>
+            </div>
+            break;
+        case "Link":
+            var func = Str("href");
+            <button type="button"
+                    class="a2ui-link"
+                    disabled="@(View.OpenBusy || func.Length == 0)"
+                    @attributes="aria"
+                    @onclick="() => View.OpenAsync(func)">@S("text")</button>
+            break;
+    }
+    if (description is not null)
+    {
+        <span id="@($"{_domId}-desc")" class="a2ui-sr-only">@description</span>
+    }
+}
+
+@code {
+    private const int MaxKeys = 8;
+    private readonly string _domId = "a2ui-" + Guid.NewGuid().ToString("N");
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public string? Id { get; set; }
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public int Depth { get; set; } = 1;
+
+    private string Name => A2uiProps.Str(Component["component"]) ?? "";
+
+    private bool IsOverlay => Name is "Popover" or "PopoverTrigger" or "PopoverContent" or "Modal" or "Tooltip"
+        or "FlashcardFlip" or "PulseIndicator";
+
+    /// <summary>Literal enum/string prop, "" when absent or bound.</summary>
+    private string Str(string key) => A2uiProps.Str(Component[key]) ?? "";
+
+    /// <summary>String literal or binding, "" when unresolved.</summary>
+    private string S(string key) => A2uiProps.String(View, Component[key], Scope);
+
+    /// <summary>Title size → HTML level: xs/sm → h4, md/lg → h3, xl and up → h2.</summary>
+    private int TitleLevel => Str("size") switch
+    {
+        "xl" or "2xl" or "3xl" => 2,
+        "xs" or "sm" => 4,
+        _ => 3,
+    };
+
+    /// <summary>Heading level 1..4 → h2..h5 (h1 belongs to the page); default 2 → h3.</summary>
+    private int HeadingLevel => Str("level") switch
+    {
+        "1" => 2,
+        "3" => 4,
+        "4" => 5,
+        _ => 3,
+    };
+
+    private string BadgeVariant => Str("variant") switch
+    {
+        "solid" => "solid",
+        "outline" => "outline",
+        _ => "soft",
+    };
+
+    private string BadgeClass => $"a2ui-badge a2ui-badge--{BadgeVariant} a2ui-badge--size-{BadgeSize} a2ui-tone--{Tone(Str("color"))}";
+
+    private string BadgeSize => Str("size") switch
+    {
+        "sm" => "sm",
+        "lg" => "lg",
+        _ => "md",
+    };
+
+    /// <summary>Tone enum → one of a fixed set of class suffixes (never the agent string).</summary>
+    internal static string Tone(string? tone) => tone switch
+    {
+        "positive" or "success" => "success",
+        "negative" or "danger" => "danger",
+        "warning" => "warning",
+        "info" => "info",
+        "accent" or "discovery" => "accent",
+        "secondary" => "secondary",
+        _ => "default",
+    };
+
+    private string MarkdownText() => S("text") is { Length: > 0 } text ? text : S("content");
+
+    private string MathText() => S("tex") is { Length: > 0 } tex ? tex : S("text");
+
+    private string CodeText() => S("code") is { Length: > 0 } code ? code : S("text");
+
+    private string Attribution()
+    {
+        var parts = new[] { S("author"), S("source"), S("attribution"), S("cite") }.Where(static p => p.Length > 0);
+        return string.Join(" · ", parts);
+    }
+}

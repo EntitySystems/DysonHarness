@@ -1,0 +1,390 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Text.Json.Nodes
+@using DysonHarness
+@implements IAsyncDisposable
+@inject DysonMessageBus Bus
+
+@{
+    var card = BuildCard();
+}
+<div class="a2ui-pipeline" aria-live="polite">
+    @if (!_loaded)
+    {
+        <p class="a2ui-pipeline__note"><span class="subagent-card__spinner" aria-hidden="true"></span> Loading…</p>
+    }
+    else if (card.Message is { } message)
+    {
+        <p class="a2ui-pipeline__note">@message</p>
+    }
+    else
+    {
+        @foreach (var group in card.Groups)
+        {
+            <section class="a2ui-pipeline__run" data-state="@(group.Run?.StateClass ?? "neutral")" data-active="@(group.Run is { IsActive: true } ? "true" : null)">
+                @if (group.Run is { } run)
+                {
+                    <div class="a2ui-pipeline__head">
+                        <span class="a2ui-pipeline__dot" aria-hidden="true"></span>
+                        <span class="a2ui-pipeline__text">
+                            <span class="a2ui-pipeline__name">@run.Header</span>
+                            @if (run.Title.Length > 0)
+                            {
+                                <span class="a2ui-pipeline__title">@run.Title</span>
+                            }
+                            @if (run.Meta.Length > 0)
+                            {
+                                <span class="a2ui-pipeline__meta mono">@run.Meta</span>
+                            }
+                        </span>
+                        @if (run.IsRunning)
+                        {
+                            <span class="subagent-card__spinner" aria-hidden="true"></span>
+                        }
+                        else
+                        {
+                            <span class="a2ui-pipeline__state">@run.StateLabel</span>
+                        }
+                        @if (run.OpenFunc is { } runFunc)
+                        {
+                            <button type="button" class="btn a2ui-pipeline__open" aria-label="@($"Open {run.Header}")" @onclick="() => View.OpenAsync(runFunc)">Open</button>
+                        }
+                    </div>
+                }
+                <div class="a2ui-pipeline__jobs">
+                    @foreach (var job in group.Jobs)
+                    {
+                        @if (job.Message is { } line)
+                        {
+                            <p class="a2ui-pipeline__job a2ui-pipeline__job--note">@line</p>
+                        }
+                        else
+                        {
+                            <div class="a2ui-pipeline__job" data-state="@job.StateClass">
+                                <span class="a2ui-pipeline__jobdot" aria-hidden="true"></span>
+                                <span class="a2ui-pipeline__jobname">@job.Name</span>
+                                @if (job.IsRunning)
+                                {
+                                    <span class="subagent-card__spinner" aria-hidden="true"></span>
+                                }
+                                else
+                                {
+                                    <span class="a2ui-pipeline__jobstate">@job.StateLabel</span>
+                                }
+                                @if (job.Duration is { } duration)
+                                {
+                                    <span class="a2ui-pipeline__jobstate mono">@duration</span>
+                                }
+                                @if (job.OpenFunc is { } jobFunc)
+                                {
+                                    <button type="button" class="btn a2ui-pipeline__open" aria-label="@($"Open job {job.Name}")" @onclick="() => View.OpenAsync(jobFunc)">Open</button>
+                                }
+                            </div>
+                        }
+                    }
+                    @if (group.More > 0)
+                    {
+                        <p class="a2ui-pipeline__job a2ui-pipeline__job--note">+@group.More more</p>
+                    }
+                </div>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public string? Id { get; set; }
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public int Depth { get; set; } = 1;
+
+    /// <summary>The meta page's work-directory service; null outside it (then the card says there is no repository).</summary>
+    [CascadingParameter(Name = "DysonVcs")] public DysonVersionControlService? Vcs { get; set; }
+
+    private readonly CancellationTokenSource _cts = new();
+    private readonly Dictionary<long, DysonPipelineRun> _runs = new();
+    private readonly Dictionary<long, DysonPipelineJob> _found = new();
+    private readonly HashSet<long> _gone = new();
+    private IReadOnlyList<DysonPipelineJob>? _runJobs;
+    private DysonPipelineError? _error;
+    private bool _detected = true;
+    private bool _loaded;
+    private bool _loading;
+    private bool _again;
+    private bool _needLoad;
+    private string? _signature;
+    private long _runId;
+    private List<long> _jobIds = [];
+    private IDisposable? _lease;
+    private IDisposable? _sub;
+    private DateTimeOffset _now = DateTimeOffset.Now;
+    private bool _ticking;
+    private bool _disposed;
+
+    protected override void OnParametersSet()
+    {
+        _runId = Component["runId"] is JsonValue r && r.TryGetValue<long>(out var id) ? id : 0;
+        _jobIds = Component["jobIds"] is JsonArray array
+            ? array.Select(static n => n is JsonValue v && v.TryGetValue<long>(out var x) ? x : 0).Where(static x => x > 0).ToList()
+            : [];
+        var signature = _runId > 0 ? $"r{_runId}" : "j" + string.Join(",", _jobIds);
+        if (signature == _signature)
+            return;
+        _signature = signature;
+        _runs.Clear();
+        _found.Clear();
+        _gone.Clear();
+        _runJobs = null;
+        _error = null;
+        _needLoad = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && Vcs is { } service)
+        {
+            var sub = Bus.Subscribe<DysonPipelinesChangedEvent>(
+                DysonBusScopes.WorkDirectory(service.WorkDirectoryId), OnPipelinesChanged);
+            if (sub.IsSuccess)
+                _sub = sub.Value;
+        }
+
+        if (!_needLoad)
+            return;
+        _needLoad = false;
+        await LoadAsync().ConfigureAwait(true);
+    }
+
+    private void OnPipelinesChanged(DysonPipelinesChangedEvent evt) => _ = InvokeAsync(async () =>
+    {
+        if (_cts.IsCancellationRequested || Vcs is not { } service || evt.WorkDirectoryId != service.WorkDirectoryId)
+            return;
+        await LoadAsync().ConfigureAwait(true);
+    });
+
+    private async Task LoadAsync()
+    {
+        if (_loading)
+        {
+            _again = true;
+            return;
+        }
+
+        _loading = true;
+        try
+        {
+            do
+            {
+                _again = false;
+                if (Vcs is null)
+                    _detected = false;
+                else if (_runId > 0)
+                    await LoadRunAsync(Vcs, _cts.Token).ConfigureAwait(true);
+                else
+                    await LoadJobsAsync(Vcs, _cts.Token).ConfigureAwait(true);
+                if (_disposed)
+                    return;
+                _now = DateTimeOffset.Now;
+                _loaded = true;
+                SyncLeaseAndTicker();
+                StateHasChanged();
+            }
+            while (_again && !_cts.IsCancellationRequested);
+        }
+        catch (OperationCanceledException)
+        {
+            // Disposed while a gh call was in flight.
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static bool Active(DysonPipelineState state) =>
+        state is DysonPipelineState.Queued or DysonPipelineState.Waiting or DysonPipelineState.Running;
+
+    private async Task LoadRunAsync(DysonVersionControlService service, CancellationToken ct)
+    {
+        var snapshot = service.Snapshot;
+        _error = null;
+        if (snapshot?.Runs.FirstOrDefault(r => r.Id == _runId) is { } inSnapshot)
+        {
+            _runs[_runId] = inSnapshot;
+            if (snapshot.Jobs.TryGetValue(_runId, out var jobs))
+                _runJobs = jobs;
+            else
+            {
+                service.RequestJobs(_runId);
+                _runJobs ??= [];
+            }
+
+            return;
+        }
+
+        // Outside the recent 20: fetch once, and again only while it is still active.
+        if (_runs.TryGetValue(_runId, out var cached) && !Active(cached.State) && _runJobs is not null)
+            return;
+
+        var run = await service.GetRunAsync(_runId, ct).ConfigureAwait(true);
+        if (run.IsError)
+        {
+            _error = run.Error;
+            _runs.Remove(_runId);
+            return;
+        }
+
+        _runs[_runId] = run.Value;
+        var fetched = await service.GetJobsAsync(_runId, ct).ConfigureAwait(true);
+        if (fetched.IsSuccess)
+            _runJobs = fetched.Value;
+        else
+            _error = fetched.Error;
+    }
+
+    private async Task LoadJobsAsync(DysonVersionControlService service, CancellationToken ct)
+    {
+        var snapshot = service.Snapshot;
+        _error = null;
+        var wanted = _jobIds.ToHashSet();
+        var all = snapshot?.Jobs.Values.SelectMany(static j => j).ToList() ?? [];
+        foreach (var id in _jobIds)
+        {
+            var inSnapshot = all.FirstOrDefault(j => j.Id == id);
+            if (inSnapshot is not null)
+                _found[id] = inSnapshot;
+        }
+
+        foreach (var id in _jobIds)
+        {
+            if (_gone.Contains(id) || (_found.TryGetValue(id, out var known) && (all.Any(j => j.Id == id) || !Active(known.State))))
+                continue;
+
+            var job = await service.GetJobAsync(id, ct).ConfigureAwait(true);
+            if (job.IsError)
+            {
+                if (job.Error.Kind == DysonPipelineErrorKind.RepoNotFound)
+                    _gone.Add(id);
+                else
+                {
+                    _error = job.Error;
+                    return;
+                }
+
+                continue;
+            }
+
+            _found[id] = job.Value;
+            if (wanted.Any(w => !_found.ContainsKey(w) && !_gone.Contains(w)))
+            {
+                // Siblings of the same run in one call.
+                var siblings = await service.GetJobsAsync(job.Value.RunId, ct).ConfigureAwait(true);
+                if (siblings.IsSuccess)
+                {
+                    foreach (var sibling in siblings.Value.Where(s => wanted.Contains(s.Id)))
+                        _found[sibling.Id] = sibling;
+                }
+            }
+        }
+
+        foreach (var runId in _found.Values.Select(static j => j.RunId).Distinct().ToList())
+        {
+            if (snapshot?.Runs.FirstOrDefault(r => r.Id == runId) is { } inSnapshot)
+            {
+                _runs[runId] = inSnapshot;
+                continue;
+            }
+
+            if (_runs.TryGetValue(runId, out var cached) && !Active(cached.State))
+                continue;
+            var run = await service.GetRunAsync(runId, ct).ConfigureAwait(true);
+            if (run.IsSuccess)
+                _runs[runId] = run.Value;
+        }
+    }
+
+    private DysonA2uiPipelineRunCard BuildCard()
+    {
+        var detected = _detected && _error?.Kind != DysonPipelineErrorKind.NotDetected;
+        if (_runId > 0)
+        {
+            _runs.TryGetValue(_runId, out var run);
+            return DysonA2uiPipelineRunCard.Build(_runId, run, _runJobs, _error, detected, _now);
+        }
+
+        var missing = _jobIds.Where(id => !_found.ContainsKey(id)).ToList();
+        if (_error is not null && missing.Count == _jobIds.Count)
+            return DysonA2uiPipelineRunCard.BuildJobs(_jobIds, _found, _runs, _error, detected, _now);
+        return DysonA2uiPipelineRunCard.BuildJobs(_jobIds, _found, _runs, null, detected, _now);
+    }
+
+    private void SyncLeaseAndTicker()
+    {
+        // A fetch that completes after dispose must not take a new watch lease.
+        if (_disposed)
+            return;
+        var active = BuildCard().IsActive;
+        if (active && _lease is null && Vcs is { } service)
+        {
+            try
+            {
+                _lease = service.Watch(panelOpen: true);
+            }
+            catch (ObjectDisposedException)
+            {
+                // The work directory was removed; nothing left to watch.
+            }
+        }
+        else if (!active && _lease is not null)
+        {
+            _lease.Dispose();
+            _lease = null;
+        }
+
+        if (active && !_ticking && !_cts.IsCancellationRequested)
+        {
+            _ticking = true;
+            _ = TickAsync(_cts.Token);
+        }
+    }
+
+    private async Task TickAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            {
+                var stop = false;
+                await InvokeAsync(() =>
+                {
+                    stop = !BuildCard().IsActive;
+                    _now = DateTimeOffset.Now;
+                    StateHasChanged();
+                }).ConfigureAwait(false);
+                if (stop)
+                    break;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Disposed.
+        }
+        finally
+        {
+            _ticking = false;
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _cts.Cancel();
+        _lease?.Dispose();
+        _lease = null;
+        _sub?.Dispose();
+        _sub = null;
+        _cts.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

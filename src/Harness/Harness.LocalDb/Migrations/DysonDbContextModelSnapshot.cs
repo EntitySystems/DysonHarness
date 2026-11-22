@@ -1095,6 +1095,9 @@ namespace Harness.LocalDb.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("A2uiSurfaceJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("AgentTitle")
                         .HasColumnType("TEXT");
 

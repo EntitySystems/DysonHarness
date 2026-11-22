@@ -212,6 +212,27 @@ public static class DysonSubagentHostLogic
             && !TryBuildUserDialogUi(eventKind, payload, out _);
     }
 
+    /// <summary>
+    /// True when the interrupt's event is known on <paramref name="parent"/> and no longer Pending
+    /// (answered in-turn or cancelled), so its queued continuation is stale.
+    /// ponytail: reads the 20 newest events; an older id counts as open (today's behaviour).
+    /// </summary>
+    public static bool IsParentEventClosed(DysonAgentSession parent, DysonAgentInterrupt interrupt)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentNullException.ThrowIfNull(interrupt);
+        if (interrupt.EventId is not Guid eventId)
+            return false;
+
+        foreach (var evt in parent.PendingOrRecentParentEvents)
+        {
+            if (evt.EventId == eventId)
+                return evt.Status != DysonParentEventStatus.Pending;
+        }
+
+        return false;
+    }
+
     public static bool IsMetaSessionMode(string? mode) =>
         string.Equals(mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
         || string.Equals(mode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase);

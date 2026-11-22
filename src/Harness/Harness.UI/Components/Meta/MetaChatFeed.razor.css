@@ -149,123 +149,12 @@
   padding: 0;
 }
 
-/* Question card. */
-.meta-chat__question {
+/* A2UI block (question card + surfaces): feed-owned so the agent indent above reaches it. */
+.meta-chat__a2ui {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  padding: var(--sp-4);
-  border-radius: var(--radius-lg);
-  background: linear-gradient(var(--accent-softer), var(--accent-softer)), var(--surface-raised);
-  box-shadow: inset 3px 0 0 var(--accent), var(--shadow-2);
-  color: var(--text);
-}
-
-.meta-chat__question-title {
-  margin-bottom: var(--sp-1);
-  font-size: var(--fs-md);
-  font-weight: var(--fw-semibold);
-  line-height: var(--lh-tight);
-}
-
-.meta-chat__question-choice {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
-  font-size: var(--fs-sm);
-  cursor: pointer;
-  transition: background var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease);
-}
-
-.meta-chat__question-choice:hover {
-  background: var(--bg-hover);
-}
-
-.meta-chat__question-choice:has(input:checked) {
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px var(--accent-border);
-}
-
-.meta-chat__question-choice:has(input:focus-visible) {
-  box-shadow: var(--focus-ring);
-}
-
-.meta-chat__question-choice input {
-  margin: 2px 0 0;
-  accent-color: var(--accent);
-}
-
-.meta-chat__question-other {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
-}
-
-.meta-chat__question-other textarea {
-  width: 100%;
-  min-height: 3.5rem;
-  max-height: 30vh;
-  field-sizing: content;
-  resize: vertical;
-  padding: var(--sp-2) var(--sp-3);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
-  box-shadow: inset 0 0 0 1px var(--border-subtle);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--fs-sm);
-}
-
-.meta-chat__question-other textarea:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 1px var(--accent-border), var(--accent-glow);
-}
-
-.meta-chat__question-locked {
-  white-space: pre-wrap;
-  color: var(--text);
-  font-size: var(--fs-sm);
-}
-
-.meta-chat__question-submit {
-  align-self: flex-end;
-  margin-top: var(--sp-1);
-  background: var(--accent-gradient);
-  color: var(--text-on-accent);
-}
-
-.meta-chat__question-submit:hover:not(:disabled) {
-  background: var(--accent-strong);
-}
-
-/* Locked (answered) card: no submit button rendered. Subdued, with a check glyph. */
-.meta-chat__question:not(:has(.meta-chat__question-submit)) {
-  opacity: 0.85;
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-1);
-}
-
-.meta-chat__question:not(:has(.meta-chat__question-submit)) .meta-chat__question-title::before {
-  content: "✓";
-  margin-right: var(--sp-2);
-  color: color-mix(in srgb, var(--success) 78%, var(--text));
-}
-
-.meta-chat__question:not(:has(.meta-chat__question-submit)) .meta-chat__question-choice {
-  cursor: default;
-}
-
-.meta-chat__question-error {
-  font-size: var(--fs-xs);
-  line-height: 1.35;
-  color: color-mix(in srgb, var(--danger) 78%, var(--text));
-  white-space: pre-wrap;
+  min-width: 0;
 }
 
 /* Action chips. */

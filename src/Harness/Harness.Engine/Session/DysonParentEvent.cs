@@ -27,6 +27,9 @@ public sealed class DysonParentEvent
     /// <summary>Root posted DisplayInfo and is waiting on the user. Not persisted. Cleared when the event leaves Pending.</summary>
     public bool AwaitingUserAnswer { get; set; }
 
+    /// <summary>A WaitForSeconds already returned this event to the parent. Not persisted.</summary>
+    public bool WokeWait { get; set; }
+
     internal TaskCompletionSource<Result<string, string>> ReplyTcs { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 }

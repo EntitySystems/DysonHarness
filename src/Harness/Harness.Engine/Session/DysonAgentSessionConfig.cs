@@ -292,4 +292,10 @@ public class DysonAgentSessionConfig
     /// Null is the same as nobody owning the application for the work-directory tools.
     /// </summary>
     public DysonWorkDirectoryFocus? Focus { get; set; }
+
+    /// <summary>
+    /// Resolves the pipeline service of a work directory (ListPipelineRuns). Set by the host next to
+    /// <see cref="Focus"/>. Not persisted. Null means "Pipelines are not available in this host".
+    /// </summary>
+    public Func<Guid, CancellationToken, Task<Result<DysonVersionControlService, string>>>? Pipelines { get; set; }
 }

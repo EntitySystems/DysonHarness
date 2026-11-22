@@ -1,0 +1,17 @@
+.a2ui-surface {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+  color: var(--text);
+}
+
+.a2ui-error {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--danger) 78%, var(--text));
+  white-space: pre-wrap;
+}

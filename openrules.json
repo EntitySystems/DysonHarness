@@ -81,6 +81,13 @@
       "Path": "skills/ef-core-sqlite/SKILL.md",
       "Mode": "AgentOptional",
       "Description": "EF Core + SQLite conventions for DysonHarness"
+    },
+    {
+      "Path": "skills/dyson-a2ui/SKILL.md",
+      "Mode": "AutoInclude",
+      "Modes": ["MetaAgent"],
+      "Providers": ["dyson"],
+      "Description": "Dyson A2UI v1.0: RenderA2ui JSON format, Dyson kit components, question forwarding (Meta Agent only)"
     }
   ]
 }

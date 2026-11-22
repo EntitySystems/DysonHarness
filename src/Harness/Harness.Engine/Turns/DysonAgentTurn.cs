@@ -124,6 +124,12 @@ public sealed class DysonAgentTurn
     /// </summary>
     public DysonSecureDataRequest? SecureDataRequest { get; set; }
 
+    /// <summary>
+    /// Validated A2UI surface on a DisplayInfo bubble (RenderA2ui). Null on every other turn.
+    /// Mutated in place by <see cref="DysonAgentSession.TryApplyA2ui"/>.
+    /// </summary>
+    public DysonA2uiSurface? A2uiSurface { get; set; }
+
     /// <summary>UTC when this turn began (live create or restored from persistence).</summary>
     public DateTime StartedUtc { get; set; }
 

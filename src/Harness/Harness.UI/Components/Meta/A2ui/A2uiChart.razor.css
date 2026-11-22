@@ -1,0 +1,173 @@
+.a2ui-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  min-width: 0;
+}
+
+.a2ui-chart__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.a2ui-chart__title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.a2ui-chart__subtitle,
+.a2ui-chart__note,
+.a2ui-chart__empty {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.a2ui-chart__empty {
+  padding: var(--sp-4) 0;
+  text-align: center;
+}
+
+.a2ui-chart__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.a2ui-chart--pie .a2ui-chart__svg,
+.a2ui-chart--gauge .a2ui-chart__svg {
+  max-width: 220px;
+  margin-inline: auto;
+}
+
+.a2ui-chart--spark .a2ui-chart__svg {
+  width: 120px;
+  height: 24px;
+}
+
+/* Palette: accent first, then the app's fixed accents. Series elements read --series. */
+.a2ui-series--0 { --series: var(--accent); }
+.a2ui-series--1 { --series: var(--accent-blue); }
+.a2ui-series--2 { --series: var(--accent-green); }
+.a2ui-series--3 { --series: var(--accent-purple); }
+.a2ui-series--4 { --series: var(--accent-red); }
+.a2ui-series--5 { --series: var(--warning); }
+.a2ui-series--6 { --series: var(--text-muted); }
+.a2ui-series--7 { --series: var(--accent-strong); }
+
+.a2ui-tone--1 { --tone: 0.72; }
+.a2ui-tone--2 { --tone: 0.5; }
+
+.a2ui-chart__bar,
+.a2ui-chart__arc,
+.a2ui-chart__dot,
+.a2ui-chart__swatch {
+  fill: color-mix(in srgb, var(--series) calc(var(--tone, 1) * 100%), var(--bg-2));
+}
+
+.a2ui-chart__swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: var(--sp-1);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--series) calc(var(--tone, 1) * 100%), var(--bg-2));
+}
+
+.a2ui-chart__arc {
+  stroke: var(--bg-2);
+  stroke-width: 1.5;
+}
+
+.a2ui-chart__line {
+  fill: none;
+  stroke: var(--series);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.a2ui-chart--spark .a2ui-chart__line {
+  stroke-width: 1.5;
+}
+
+.a2ui-chart__area {
+  fill: var(--series);
+  fill-opacity: 0.22;
+  stroke: none;
+}
+
+.a2ui-chart__dot {
+  stroke: var(--bg-2);
+  stroke-width: 1;
+}
+
+.a2ui-chart__grid {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+}
+
+.a2ui-chart__text {
+  fill: var(--text-muted);
+  font-size: 10px;
+  font-family: var(--font-sans);
+}
+
+.a2ui-chart__text--end { text-anchor: end; }
+.a2ui-chart__text--middle { text-anchor: middle; }
+
+.a2ui-chart__text--big {
+  fill: var(--text);
+  font-size: 22px;
+  font-weight: var(--fw-semibold);
+}
+
+.a2ui-chart__track,
+.a2ui-chart__gauge {
+  fill: none;
+  stroke-width: 14;
+  stroke-linecap: round;
+}
+
+.a2ui-chart__track {
+  stroke: var(--bg-3);
+}
+
+.a2ui-chart__gauge { stroke: var(--accent); }
+.a2ui-chart__gauge--success { stroke: var(--success); }
+.a2ui-chart__gauge--danger { stroke: var(--danger); }
+.a2ui-chart__gauge--warning { stroke: var(--warning); }
+.a2ui-chart__gauge--info { stroke: var(--accent-blue); }
+
+.a2ui-chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.a2ui-chart__legend-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Visually hidden data table (and description) for screen readers. */
+.a2ui-chart__table {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

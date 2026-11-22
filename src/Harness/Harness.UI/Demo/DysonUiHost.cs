@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DysonHarness;
 using Harness.UI.Components.Meta;
 using Harness.UI.Theme;
@@ -556,6 +557,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 EnsureRegistered(session);
             if (session.Config.Focus is null)
                 session.Config.Focus = runtime.Focus;
+            session.Config.Pipelines ??= ResolvePipelinesAsync;
 
             var sessionId = session.PersistenceId;
             if (sessionId == Guid.Empty)
@@ -864,6 +866,18 @@ public sealed class DysonUiHost : IAsyncDisposable
             DysonRuntimeChangeKind.Recovery => DysonHostChangeKind.All,
             _ => DysonHostChangeKind.All,
         };
+
+    /// <summary>ListPipelineRuns hook (<see cref="DysonAgentSessionConfig.Pipelines"/>): the work directory's service, created on demand. Starts no polling.</summary>
+    private async Task<Result<DysonVersionControlService, string>> ResolvePipelinesAsync(
+        Guid workDirectoryId, CancellationToken cancellationToken)
+    {
+        if (_vcs is null)
+            return Result<DysonVersionControlService, string>.AsError("Pipelines are not available in this host");
+        var wd = await _workDirectories.GetAsync(workDirectoryId, cancellationToken).ConfigureAwait(false);
+        return wd.IsError
+            ? Result<DysonVersionControlService, string>.AsError(wd.Error)
+            : _vcs.GetOrCreate(wd.Value);
+    }
 
     private bool TryGetAttachedRuntime(out DysonSessionRuntime runtime)
     {
@@ -3764,7 +3778,21 @@ public sealed class DysonUiHost : IAsyncDisposable
         if ((uint)index >= (uint)actions.Count)
             return Result<string, string>.AsError("Conversation action index is out of range.");
 
-        var funcKey = actions[index].FuncKey;
+        return await InvokeMetaConversationFuncAsync(actions[index].FuncKey, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Dispatches one func key (meta-chat button or A2UI ActionButton). Built-in keys open here; any other
+    /// key uses the session delegate map. Does not append or remove turns and does not set <see cref="LastError"/>.
+    /// </summary>
+    public async Task<Result<string, string>> InvokeMetaConversationFuncAsync(
+        string funcKey,
+        CancellationToken cancellationToken = default)
+    {
+        var session = _session;
+        if (session is null)
+            return Result<string, string>.AsError("No active session.");
+
         var resolved = await DysonBuiltInConversationActions
             .TryResolveAsync(funcKey, SessionWorkDirectoryPath(session), cancellationToken)
             .ConfigureAwait(true);
@@ -3815,6 +3843,33 @@ public sealed class DysonUiHost : IAsyncDisposable
             default:
                 return Result<string, string>.AsError($"Conversation action '{funcKey}' is reserved.");
         }
+    }
+
+    /// <summary>
+    /// Submits an A2UI Button action: the Engine validates it against the surface and the bound question,
+    /// then the answer takes the usual question-answer path.
+    /// </summary>
+    public async Task<VoidResult<string>> SubmitMetaA2uiActionAsync(
+        Guid turnId,
+        string surfaceId,
+        string sourceComponentId,
+        JsonObject localModel,
+        CancellationToken cancellationToken = default)
+    {
+        var session = _session;
+        if (session is null)
+            return VoidResult<string>.AsError("No active session.");
+
+        var prepared = DysonA2uiReturnHandler.Prepare(session, turnId, surfaceId, sourceComponentId, localModel);
+        if (prepared.IsError)
+            return VoidResult<string>.AsError(prepared.Error);
+
+        session.AppendLog($"A2UI action {prepared.Value.Action.ToWireJson()}");
+        return await SubmitMetaUserQuestionAnswerAsync(
+            prepared.Value.QuestionId,
+            prepared.Value.Selected,
+            prepared.Value.CustomText,
+            cancellationToken).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -4105,7 +4160,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var effectivePath = SessionWorkDirectoryPath(_session) ?? registeredPath;
         var openRulesBlock = await DysonOpenRules
-            .BuildSystemPromptBlockAsync(effectivePath, cancellationToken)
+            .BuildSystemPromptBlockAsync(
+                effectivePath, DysonOpenRulesProviders.Dyson, agentMode, cancellationToken)
             .ConfigureAwait(false);
         var worktreeBlock = DysonAgentSystemPrompts.BuildWorktreePromptBlock(
             _session.WorktreeEnabled,
@@ -5023,7 +5079,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (parent is not null && child.Id > 0 && !child.IsTerminal)
         {
-            var stopped = await parent.StopSubagentAsync(child.Id, "Stopped by user.")
+            var stopped = await parent.StopSubagentAsync(child.Id, "Stopped by user.", recursive: false)
                 .ConfigureAwait(false);
             if (!stopped.IsError)
                 await PersistStoppedSessionAsync(child).ConfigureAwait(false);
@@ -5073,7 +5129,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (focused is { Parent: not null, Id: > 0 } child)
         {
-            var stopped = await child.Parent.StopSubagentAsync(child.Id, "Stopped by user.")
+            var stopped = await child.Parent.StopSubagentAsync(child.Id, "Stopped by user.", recursive: false)
                 .ConfigureAwait(false);
             if (!stopped.IsError)
                 await PersistStoppedSessionAsync(child).ConfigureAwait(false);
@@ -5155,7 +5211,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (child.Id <= 0)
                 continue;
 
-            var stopped = await parent.StopSubagentAsync(child.Id, reason: "Stopped by user.")
+            var stopped = await parent.StopSubagentAsync(child.Id, reason: "Stopped by user.", recursive: false)
                 .ConfigureAwait(false);
             if (!stopped.IsError)
                 await PersistStoppedSessionAsync(child).ConfigureAwait(false);
@@ -5870,6 +5926,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,
         };
+        config.Pipelines = ResolvePipelinesAsync;
         if (TryGetAttachedRuntime(out var runtimeFocus))
         {
             config.Focus = runtimeFocus.Focus;
@@ -6226,7 +6283,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _models, providerKind, cancellationToken)
             .ConfigureAwait(false);
         var openRulesBlock = await DysonOpenRules
-            .BuildSystemPromptBlockAsync(effectivePath, cancellationToken)
+            .BuildSystemPromptBlockAsync(
+                effectivePath, DysonOpenRulesProviders.Dyson, session.Mode, cancellationToken)
             .ConfigureAwait(false);
         var worktreeBlock = DysonAgentSystemPrompts.BuildWorktreePromptBlock(
             session.WorktreeEnabled,
@@ -7630,6 +7688,10 @@ public sealed class DysonUiHost : IAsyncDisposable
 
                 if (interrupt.Kind == DysonAgentInterruptKind.SubagentEvent)
                 {
+                    // Answered in-turn (e.g. after a WaitForSeconds wake) or cancelled: no stale prompt.
+                    if (DysonSubagentHostLogic.IsParentEventClosed(parent, interrupt))
+                        continue;
+
                     var prompt = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
                         interrupt, title, parent.Mode);
                     var turn = DysonSubagentHostLogic.CreateTurn(prompt);
@@ -8207,11 +8269,22 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (sessionId == Guid.Empty || IsUserStopped(sessionId))
             return;
 
+        DysonAgentTurn? childReflection = null;
         while (session.TryDequeuePendingTurn(out var pending))
         {
-            if (!pending.AllowEnqueue)
-                continue;
-            EnqueuePrompt(sessionId, pending);
+            if (pending.AllowEnqueue)
+                EnqueuePrompt(sessionId, pending);
+            else if (session.Parent is not null && pending.Kind == DysonAgentTurnKind.TaskEndReflect)
+                childReflection = pending;
+        }
+
+        // The child-report watch's task-end reflection cannot enter the host FIFO (AllowEnqueue false).
+        // It runs on the child's own background run, as on the KickOff path; host prompts defer behind it.
+        if (childReflection is not null && !session.IsTerminal)
+        {
+            session.EnqueuePendingTurn(childReflection);
+            if (!session.HasActiveBackgroundRun)
+                DysonAgentSession.StartNextPendingTurn(session);
         }
 
         var last = session.Turns.Count > 0 ? session.Turns[^1] : null;

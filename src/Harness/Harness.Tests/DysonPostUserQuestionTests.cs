@@ -60,6 +60,37 @@ public class DysonPostUserQuestionTests
     }
 
     [Fact]
+    public void RenderA2ui_is_on_root_meta_catalog_only()
+    {
+        var meta = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent);
+        Assert.True(meta.Tools.ContainsKey("RenderA2ui"));
+
+        var work = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.Work);
+        var metaDrone = DysonSessionToolsetBuilder.Build(
+            new DysonAgentSessionConfig(),
+            DysonAgentModes.MetaAgentDrone,
+            interAgentDepth: 1,
+            omitRootTaskCompletionTools: true);
+        Assert.False(work.Tools.ContainsKey("RenderA2ui"));
+        Assert.False(metaDrone.Tools.ContainsKey("RenderA2ui"));
+    }
+
+    [Fact]
+    public void RenderA2ui_description_incentivizes_and_PostConversationMessage_points_to_it()
+    {
+        var meta = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent);
+        var description = meta.Tools["RenderA2ui"].Description;
+        Assert.Contains("Use it often", description, StringComparison.Ordinal);
+        Assert.Contains("Skip it for a single-sentence reply or simple chatting", description, StringComparison.Ordinal);
+        Assert.Contains("put the actions in the surface as ActionButton", description, StringComparison.Ordinal);
+        Assert.True(description.Length <= 1000, $"RenderA2ui description is {description.Length} chars.");
+        Assert.EndsWith(
+            DysonMetaAgentTools.PostConversationMessageA2uiPointer,
+            meta.Tools["PostConversationMessage"].Description,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task PostUserQuestion_rejects_when_not_meta_agent()
     {
         using var http = new HttpClient();

@@ -1,0 +1,175 @@
+/* Copied (trimmed) from PipelinesModal.razor.css: that file is scoped to the modal. */
+.a2ui-pipeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.a2ui-pipeline__note {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.a2ui-pipeline__run {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+}
+
+.a2ui-pipeline__run[data-active] {
+  box-shadow: inset 3px 0 0 var(--accent), var(--shadow-1);
+}
+
+.a2ui-pipeline__run[data-state="failed"] {
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface-raised));
+}
+
+.a2ui-pipeline__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.a2ui-pipeline__dot,
+.a2ui-pipeline__jobdot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  box-sizing: border-box;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--text-dim);
+  background: transparent;
+}
+
+.a2ui-pipeline__jobdot {
+  width: 8px;
+  height: 8px;
+  margin-top: 0;
+}
+
+.a2ui-pipeline__run[data-state="succeeded"] .a2ui-pipeline__dot,
+.a2ui-pipeline__job[data-state="succeeded"] .a2ui-pipeline__jobdot {
+  border-color: var(--success);
+  background: var(--success);
+}
+
+.a2ui-pipeline__run[data-state="failed"] .a2ui-pipeline__dot,
+.a2ui-pipeline__job[data-state="failed"] .a2ui-pipeline__jobdot {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.a2ui-pipeline__run[data-state="running"] .a2ui-pipeline__dot,
+.a2ui-pipeline__job[data-state="running"] .a2ui-pipeline__jobdot {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.a2ui-pipeline__run[data-state="queued"] .a2ui-pipeline__dot,
+.a2ui-pipeline__job[data-state="queued"] .a2ui-pipeline__jobdot {
+  border-color: var(--accent-border);
+}
+
+.a2ui-pipeline__run[data-state="waiting"] .a2ui-pipeline__dot,
+.a2ui-pipeline__job[data-state="waiting"] .a2ui-pipeline__jobdot {
+  border-color: var(--warning);
+}
+
+.a2ui-pipeline__text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.a2ui-pipeline__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.a2ui-pipeline__title {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-pipeline__meta {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.a2ui-pipeline__state,
+.a2ui-pipeline__jobstate {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+
+.a2ui-pipeline__run[data-state="succeeded"] .a2ui-pipeline__state,
+.a2ui-pipeline__job[data-state="succeeded"] .a2ui-pipeline__jobstate {
+  color: color-mix(in srgb, var(--success) 78%, var(--text));
+}
+
+.a2ui-pipeline__run[data-state="failed"] .a2ui-pipeline__state,
+.a2ui-pipeline__job[data-state="failed"] .a2ui-pipeline__jobstate {
+  color: color-mix(in srgb, var(--danger) 78%, var(--text));
+}
+
+.a2ui-pipeline__jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 var(--sp-2) var(--sp-2) 22px;
+  padding-left: var(--sp-2);
+  border-left: 1px solid var(--border-subtle);
+}
+
+.a2ui-pipeline__jobs:empty {
+  display: none;
+}
+
+.a2ui-pipeline__job {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+}
+
+.a2ui-pipeline__job--note {
+  color: var(--text-muted);
+}
+
+.a2ui-pipeline__jobname {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.a2ui-pipeline__open {
+  flex: 0 0 auto;
+  padding: 2px var(--sp-2);
+  font-size: var(--fs-xs);
+}
+
+.a2ui-pipeline__open:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}

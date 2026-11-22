@@ -1,0 +1,306 @@
+/* A2UI layout group (Box, Grid, Flow, Carousel, Tabs, Section, Accordion, Spacer). Tokens from app.css only.
+   Scoped CSS: A2uiNode.razor.css does not reach this markup, so the gap/pad/justify/align classes are defined here too.
+   Enum props map to these fixed classes; the only agent-derived values in style are clamped ints we format ourselves. */
+.a2ui-box,
+.a2ui-stack,
+.a2ui-section__body,
+.a2ui-weighted {
+  display: flex;
+  min-width: 0;
+  gap: var(--sp-2);
+}
+
+.a2ui-box--col,
+.a2ui-stack,
+.a2ui-section__body,
+.a2ui-weighted {
+  flex-direction: column;
+}
+
+.a2ui-box--row {
+  flex-direction: row;
+  align-items: center;
+}
+
+.a2ui-box--wrap {
+  flex-wrap: wrap;
+}
+
+.a2ui-weighted {
+  gap: 0;
+}
+
+/* gap / padding int 0..12 in 4px steps. */
+.a2ui-gap--0 { gap: 0; }
+.a2ui-gap--1 { gap: 4px; }
+.a2ui-gap--2 { gap: 8px; }
+.a2ui-gap--3 { gap: 12px; }
+.a2ui-gap--4 { gap: 16px; }
+.a2ui-gap--5 { gap: 20px; }
+.a2ui-gap--6 { gap: 24px; }
+.a2ui-gap--7 { gap: 28px; }
+.a2ui-gap--8 { gap: 32px; }
+.a2ui-gap--9 { gap: 36px; }
+.a2ui-gap--10 { gap: 40px; }
+.a2ui-gap--11 { gap: 44px; }
+.a2ui-gap--12 { gap: 48px; }
+
+.a2ui-pad--0 { padding: 0; }
+.a2ui-pad--1 { padding: 4px; }
+.a2ui-pad--2 { padding: 8px; }
+.a2ui-pad--3 { padding: 12px; }
+.a2ui-pad--4 { padding: 16px; }
+.a2ui-pad--5 { padding: 20px; }
+.a2ui-pad--6 { padding: 24px; }
+.a2ui-pad--7 { padding: 28px; }
+.a2ui-pad--8 { padding: 32px; }
+.a2ui-pad--9 { padding: 36px; }
+.a2ui-pad--10 { padding: 40px; }
+.a2ui-pad--11 { padding: 44px; }
+.a2ui-pad--12 { padding: 48px; }
+
+.a2ui-justify--start { justify-content: flex-start; }
+.a2ui-justify--center { justify-content: center; }
+.a2ui-justify--end { justify-content: flex-end; }
+.a2ui-justify--around { justify-content: space-around; }
+.a2ui-justify--between { justify-content: space-between; }
+.a2ui-justify--evenly { justify-content: space-evenly; }
+.a2ui-justify--stretch { justify-content: stretch; }
+
+.a2ui-align--start { align-items: flex-start; }
+.a2ui-align--center { align-items: center; }
+.a2ui-align--end { align-items: flex-end; }
+.a2ui-align--stretch { align-items: stretch; }
+
+/* Grid / Flow. The host is the size container; a grid cannot query itself. */
+.a2ui-grid-host {
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.a2ui-grid {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.a2ui-grid--cols {
+  grid-template-columns: repeat(var(--a2ui-cols, 1), minmax(0, 1fr));
+}
+
+.a2ui-grid--auto {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--a2ui-min, 160px)), 1fr));
+}
+
+.a2ui-grid--flow {
+  grid-auto-flow: dense;
+}
+
+/* Narrow container: one column. */
+@container (max-width: 359px) {
+  .a2ui-grid--cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.a2ui-griditem {
+  grid-column: span var(--a2ui-span, 1);
+  grid-row: span var(--a2ui-rowspan, 1);
+}
+
+@container (max-width: 359px) {
+  .a2ui-griditem {
+    grid-column: auto;
+  }
+}
+
+/* Spacer: flexible by default, fixed when size is set. */
+.a2ui-spacer {
+  flex: 1 1 var(--a2ui-space, 0);
+  min-width: var(--a2ui-space, 0);
+  min-height: var(--a2ui-space, 0);
+}
+
+/* Carousel */
+.a2ui-carousel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.a2ui-carousel__track {
+  display: grid;
+  grid-template-columns: repeat(var(--a2ui-visible, 1), minmax(0, 1fr));
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.a2ui-carousel__slot {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.a2ui-carousel__nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+}
+
+.a2ui-carousel__status {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.a2ui-carousel__btn {
+  min-width: 28px;
+  line-height: 1;
+}
+
+/* Tabs */
+.a2ui-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.a2ui-tabs__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.a2ui-tab {
+  margin-bottom: -1px;
+  padding: var(--sp-1) var(--sp-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
+}
+
+.a2ui-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.a2ui-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.a2ui-tab--active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+  font-weight: var(--fw-semibold);
+}
+
+.a2ui-tabs__panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Section */
+.a2ui-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.a2ui-section__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.a2ui-section__eyebrow {
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.a2ui-section__title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-section__desc {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Accordion: native details/summary. */
+.a2ui-accordion {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+
+.a2ui-accordion__item + .a2ui-accordion__item {
+  border-top: 1px solid var(--border);
+}
+
+.a2ui-accordion__summary {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.a2ui-accordion__summary:hover {
+  background: var(--bg-hover);
+}
+
+.a2ui-accordion__summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.a2ui-accordion__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  min-width: 0;
+}
+
+.a2ui-accordion__text {
+  margin: 0;
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.a2ui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

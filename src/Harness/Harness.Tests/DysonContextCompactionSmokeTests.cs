@@ -926,6 +926,110 @@ public class DysonContextCompactionSmokeTests
             .GetValue(session)!;
 
     [Fact]
+    public async Task SlugDefaultContextChange_UpdatesLiveSessionWithoutInterrupting()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        await using var _keepAlive = conn;
+        var sessions = DysonTempDb.Sessions(accessor);
+        using var http = new HttpClient(new ScriptedHandler([]));
+        using var bus = new DysonMessageBus();
+        var slugId = Guid.NewGuid();
+        var otherSlugId = Guid.NewGuid();
+        var session = CreateSession(http, Path.GetTempPath(), bus, provider: CreateProvider(slugId, 200_000));
+        var other = CreateSession(http, Path.GetTempPath(), bus, provider: CreateProvider(otherSlugId, 200_000));
+        // CreateAsync copies this; the constructor does not.
+        session.SlugDefaultMaxTargetContextTokens = 200_000;
+        other.SlugDefaultMaxTargetContextTokens = 200_000;
+        await using var runtime = new DysonSessionRuntime(
+            DysonFixedLocalSubjectContext.Instance,
+            sessions,
+            new ContextChangeFactory(sessions, session, other),
+            bus: bus);
+        var workDirectoryId = Guid.NewGuid();
+        var loaded = await runtime.CreateRootAsync(new DysonAgentSessionRuntimeCreateRequest
+        {
+            AgentMode = DysonAgentModes.Work,
+            WorkDirectoryId = workDirectoryId,
+        });
+        Assert.True(loaded.IsSuccess, loaded.IsError ? loaded.Error : "");
+        var otherLoaded = await runtime.CreateRootAsync(new DysonAgentSessionRuntimeCreateRequest
+        {
+            AgentMode = DysonAgentModes.Work,
+            WorkDirectoryId = workDirectoryId,
+        });
+        Assert.True(otherLoaded.IsSuccess, otherLoaded.IsError ? otherLoaded.Error : "");
+        Assert.Same(session, loaded.Value);
+        Assert.Same(other, otherLoaded.Value);
+
+        var limits = new List<DysonSessionContextLimitReachedEvent>();
+        using var limitSub = bus.Subscribe<DysonSessionContextLimitReachedEvent>(
+            DysonBusScopes.Wildcard, limits.Add).Value;
+        var status = session.Status;
+        var turns = session.Turns.Count;
+
+        bus.Publish(
+            DysonBusScopes.Wildcard,
+            new DysonSlugDefaultMaxTargetContextChangedEvent(slugId, 300_000));
+        Assert.Equal(300_000, session.ResolveEffectiveMaxTargetContextTokens());
+        Assert.Equal(status, session.Status);
+        Assert.Equal(turns, session.Turns.Count);
+        Assert.Empty(limits);
+
+        bus.Publish(
+            DysonBusScopes.Wildcard,
+            new DysonSlugDefaultMaxTargetContextChangedEvent(slugId, 100_000));
+        Assert.Equal(100_000, session.ResolveEffectiveMaxTargetContextTokens());
+        Assert.Equal(status, session.Status);
+        Assert.Equal(turns, session.Turns.Count);
+        Assert.Empty(limits);
+        Assert.Equal(200_000, other.ResolveEffectiveMaxTargetContextTokens());
+
+        session.MaxTargetContextTokens = 50_000;
+        bus.Publish(
+            DysonBusScopes.Wildcard,
+            new DysonSlugDefaultMaxTargetContextChangedEvent(slugId, 400_000));
+        Assert.Equal(50_000, session.ResolveEffectiveMaxTargetContextTokens());
+        Assert.Equal(400_000, session.SlugDefaultMaxTargetContextTokens);
+        Assert.Equal(
+            400_000,
+            ((OpenAiCompatibleAgentProvider)session.Provider).DefaultMaxTargetContextTokens);
+        Assert.Equal(200_000, other.SlugDefaultMaxTargetContextTokens);
+    }
+
+    private sealed class ContextChangeFactory(
+        IDysonSessionRepository store,
+        OpenAiCompatibleAgentSession first,
+        OpenAiCompatibleAgentSession second) : IDysonAgentSessionRuntimeFactory
+    {
+        private int _created;
+
+        public async Task<Result<DysonAgentSessionRuntimeLease, string>> CreateRootAsync(
+            DysonAgentSessionRuntimeCreateRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var session = Interlocked.Increment(ref _created) == 1 ? first : second;
+            var created = await store.CreateSessionAsync(
+                new DysonSessionCreateRequest
+                {
+                    AgentMode = request.AgentMode,
+                    SystemPromptSnapshot = "",
+                },
+                cancellationToken);
+            if (created.IsError)
+                return Result<DysonAgentSessionRuntimeLease, string>.AsError(created.Error);
+
+            SetPersistenceId(session, created.Value);
+            return Result<DysonAgentSessionRuntimeLease, string>.AsValue(
+                new DysonAgentSessionRuntimeLease(session, () => ValueTask.CompletedTask));
+        }
+
+        public Task<Result<DysonAgentSessionRuntimeLease, string>> LoadAsync(
+            Guid sessionId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result<DysonAgentSessionRuntimeLease, string>.AsError("not used"));
+    }
+
+    [Fact]
     public void ContextLengthClassifier()
     {
         Assert.True(OpenAiCompatibleHttp.IsContextLengthError("OpenAI API 400 Bad Request: {\"code\":\"context_length_exceeded\"}"));
@@ -943,15 +1047,16 @@ public class DysonContextCompactionSmokeTests
         HttpClient http,
         string workDir,
         DysonMessageBus? bus = null,
-        string mode = DysonAgentModes.Work) =>
+        string mode = DysonAgentModes.Work,
+        OpenAiCompatibleAgentProvider? provider = null) =>
         new(
             mode,
             new DysonAgentSessionConfig { Bus = bus },
-            CreateProvider(),
+            provider ?? CreateProvider(),
             http,
             workDir);
 
-    private static OpenAiCompatibleAgentProvider CreateProvider()
+    private static OpenAiCompatibleAgentProvider CreateProvider(Guid? slugId = null, int? defaultContext = null)
     {
         var entity = new DysonModelProviderEntity
         {
@@ -966,11 +1071,12 @@ public class DysonContextCompactionSmokeTests
             entity,
             new DysonModelSlugEntity
             {
-                Id = Guid.NewGuid(),
+                Id = slugId ?? Guid.NewGuid(),
                 ProviderId = entity.Id,
                 Slug = "gpt-test",
                 DisplayAlias = "gpt-test",
                 Provider = entity,
+                DefaultMaxTargetContextTokens = defaultContext,
             });
     }
 

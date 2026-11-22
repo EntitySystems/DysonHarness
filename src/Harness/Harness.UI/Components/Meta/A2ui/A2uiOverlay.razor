@@ -1,0 +1,223 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
+@using System.Text.Json.Nodes
+@using DysonHarness
+
+@* Feedback and overlay components: Popover (+ PopoverTrigger/PopoverContent), Modal, Tooltip, FlashcardFlip,
+   PulseIndicator. In-surface only: no JS interop, no portal. Text is Blazor-escaped; enums map to fixed classes;
+   the only number that reaches style is Modal.maxWidth, clamped and formatted by us. *@
+@{
+    var aria = A2uiProps.Aria(View, Component, Scope, _domId, out var description);
+}
+@switch (Name)
+{
+    case "Popover":
+        var popoverTrigger = PartId("PopoverTrigger");
+        var popoverContent = PartId("PopoverContent");
+        <div class="a2ui-popover" @attributes="aria" @onkeydown="OnKey">
+            @Trigger(popoverTrigger)
+            @if (_open && popoverContent is not null)
+            {
+                <div class="a2ui-popover__panel" id="@PanelId" role="dialog">
+                    <A2uiNode View="View" Id="@popoverContent" Scope="@Scope" Depth="Depth + 1" />
+                </div>
+            }
+        </div>
+        break;
+    case "PopoverTrigger":
+    case "PopoverContent":
+        <div class="a2ui-overlay-part" @attributes="aria">
+            @foreach (var (childId, childScope) in PartChildren(Component))
+            {
+                <A2uiNode View="View" Id="@childId" Scope="@childScope" Depth="Depth + 1" />
+            }
+        </div>
+        break;
+    case "Modal":
+        var modalTitle = A2uiProps.String(View, Component["title"], Scope);
+        <div class="a2ui-modal" @attributes="aria" @onkeydown="OnKey">
+            @Trigger(Str("trigger"))
+            @if (_open)
+            {
+                <div class="a2ui-modal__backdrop" @onclick="Close">
+                    <div class="a2ui-modal__panel"
+                         id="@PanelId"
+                         role="dialog"
+                         aria-modal="true"
+                         aria-labelledby="@(modalTitle.Length > 0 ? TitleId : null)"
+                         aria-label="@(modalTitle.Length > 0 ? null : "Dialog")"
+                         style="max-width: @MaxWidth"
+                         @onclick:stopPropagation="true">
+                        <div class="a2ui-modal__head">
+                            <h4 class="a2ui-modal__title" id="@TitleId">@modalTitle</h4>
+                            <button type="button" class="a2ui-modal__close" aria-label="Close" @onclick="Close">
+                                <span aria-hidden="true">×</span>
+                            </button>
+                        </div>
+                        <div class="a2ui-modal__body">
+                            <A2uiNode View="View" Id="@Str("content")" Scope="@Scope" Depth="Depth + 1" />
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+        break;
+    case "Tooltip":
+        var tip = A2uiProps.String(View, Component["tip"], Scope) is { Length: > 0 } t ? t : A2uiProps.String(View, Component["text"], Scope);
+        <span class="a2ui-tooltip" aria-describedby="@($"{_domId}-tip")">
+            <A2uiNode View="View" Id="@Str("child")" Scope="@Scope" Depth="Depth + 1" />
+            <span class="a2ui-tooltip__tip" id="@($"{_domId}-tip")" role="tooltip">@tip</span>
+        </span>
+        break;
+    case "FlashcardFlip":
+        var hint = A2uiProps.String(View, Component["hint"], Scope);
+        <button type="button"
+                class="a2ui-flash @(_flipped ? "a2ui-flash--back" : null)"
+                aria-pressed="@(_flipped ? "true" : "false")"
+                @attributes="aria"
+                @onclick="() => _flipped = !_flipped">
+            <span class="a2ui-flash__side">@(_flipped ? "Back" : "Front")</span>
+            <span class="a2ui-flash__face">@A2uiProps.String(View, Component[_flipped ? "back" : "front"], Scope)</span>
+            @if (hint.Length > 0)
+            {
+                <span class="a2ui-flash__hint">@hint</span>
+            }
+        </button>
+        break;
+    case "PulseIndicator":
+        var pulseLabel = A2uiProps.String(View, Component["label"], Scope);
+        <span class="@PulseClass" @attributes="aria">
+            <span class="a2ui-pulse__dot" aria-hidden="true"></span>
+            @if (pulseLabel.Length > 0)
+            {
+                <span class="a2ui-pulse__label">@pulseLabel</span>
+            }
+        </span>
+        break;
+}
+@if (description is not null)
+{
+    <span id="@($"{_domId}-desc")" class="a2ui-sr-only">@description</span>
+}
+
+@code {
+    private readonly string _domId = "a2ui-" + Guid.NewGuid().ToString("N");
+    private bool _open;
+    private bool _flipped;
+    private bool _initialised;
+    private bool? _seenBound;
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public string? Id { get; set; }
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public int Depth { get; set; } = 1;
+
+    private string Name => A2uiProps.Str(Component["component"]) ?? "";
+    private string PanelId => _domId + "-panel";
+    private string TitleId => _domId + "-title";
+
+    /// <summary>Modal.maxWidth (int 240..960), formatted invariant; the only number that reaches style here.</summary>
+    private string MaxWidth =>
+        (A2uiProps.Int(Component["maxWidth"]) is { } w ? Math.Clamp(w, 240, 960) : 560).ToString(CultureInfo.InvariantCulture) + "px";
+
+    private string Str(string key) => A2uiProps.Str(Component[key]) ?? "";
+
+    /// <summary>Tone enum → fixed class (never the agent string).</summary>
+    private string PulseClass => "a2ui-pulse a2ui-pulse--" + A2uiTextNode.Tone(Str("tone"));
+
+    protected override void OnParametersSet()
+    {
+        if (Name is not ("Popover" or "Modal"))
+            return;
+
+        var declared = DysonA2uiBinding.ResolveBool(Component["open"], View.Model, Scope);
+        if (Component["open"] is JsonObject)
+        {
+            // Bound: adopt the model value whenever it changes; local toggles survive a locked surface.
+            if (_seenBound != declared)
+            {
+                _open = declared;
+                _seenBound = declared;
+            }
+        }
+        else if (!_initialised)
+        {
+            _open = declared;
+        }
+
+        _initialised = true;
+    }
+
+    private void Toggle()
+    {
+        _open = !_open;
+        View.Write(Component["open"], Scope, JsonValue.Create(_open));
+    }
+
+    private void Close()
+    {
+        if (!_open)
+            return;
+        _open = false;
+        View.Write(Component["open"], Scope, JsonValue.Create(false));
+    }
+
+    private void OnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            Close();
+    }
+
+    /// <summary>Popover child with the given component name, from its (static or template) children.</summary>
+    private string? PartId(string componentName)
+    {
+        foreach (var (childId, _) in A2uiProps.Children(View, Component, Scope))
+        {
+            if (A2uiProps.Str(View.Component(childId)?["component"]) == componentName)
+                return childId;
+        }
+
+        return null;
+    }
+
+    /// <summary>PopoverTrigger/PopoverContent content: <c>child</c> or <c>children</c>.</summary>
+    private IReadOnlyList<(string ComponentId, string Scope)> PartChildren(JsonObject part)
+    {
+        if (A2uiProps.Str(part["child"]) is { } child)
+            return [(child, Scope)];
+        return A2uiProps.Children(View, part, Scope);
+    }
+
+    /// <summary>True when the trigger already is a button/link: it gets a plain wrapper so no button nests in a button.</summary>
+    private bool TriggerIsInteractive(string? triggerId)
+    {
+        var component = View.Component(triggerId);
+        if (A2uiProps.Str(component?["component"]) == "PopoverTrigger" && component is not null)
+            component = PartChildren(component).Select(static c => c.ComponentId).FirstOrDefault() is { } first ? View.Component(first) : null;
+        return A2uiProps.Str(component?["component"]) is "Button" or "ActionButton" or "Link" or "Pressable";
+    }
+
+    private RenderFragment Trigger(string? triggerId) => @<text>
+        @if (triggerId is not null)
+        {
+            if (TriggerIsInteractive(triggerId))
+            {
+                <div class="a2ui-overlay__trigger" @onclick="Toggle">
+                    <A2uiNode View="View" Id="@triggerId" Scope="@Scope" Depth="Depth + 1" />
+                </div>
+            }
+            else
+            {
+                <button type="button"
+                        class="a2ui-overlay__trigger a2ui-overlay__trigger--button"
+                        aria-haspopup="dialog"
+                        aria-expanded="@(_open ? "true" : "false")"
+                        aria-controls="@PanelId"
+                        @onclick="Toggle">
+                    <A2uiNode View="View" Id="@triggerId" Scope="@Scope" Depth="Depth + 1" />
+                </button>
+            }
+        }
+    </text>;
+}

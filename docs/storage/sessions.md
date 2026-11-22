@@ -52,6 +52,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `VisualizationId` | `Guid?`. Set only on a meta `DisplayInfo` post. Null otherwise. The viz body stays in `ToolStateJson` |
 | `UserQuestionJson` | string?. Meta `DisplayInfo` question card (question and answer in one JSON blob). Null on every other turn. `answeredUtc` inside the blob is UTC `DateTime`, not its own column |
 | `SecureDataRequestJson` | string?. Meta `DisplayInfo` `RequestSecureData` card (`DysonSecureDataRequestSerializer`): request id, `{key, description}` fields, and the outcome (`cancelled`, `stored` / `skipped` key lists, `completedUtc` UTC). Never a value. Migration `20261103201328_AddSessionSecrets` |
+| `A2uiSurfaceJson` | string?. Meta `DisplayInfo` A2UI surface from `RenderA2ui` (`DysonA2uiSurfaceSerializer`): surface id, bound question id, components, data model, revision, last error. Re-validated on load; a bad row reads as null. Migration `20261122033738_AddA2uiSurface` |
 | `ToolHistoryOptimized` | bool |
 | `CompactToolHistory` | string? |
 | `CreatedUtc`, `CompletedUtc`? | `DateTime` UTC |

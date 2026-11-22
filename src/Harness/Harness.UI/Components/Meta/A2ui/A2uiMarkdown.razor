@@ -1,0 +1,146 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
+
+@* Markdown for A2UI: the Markdig AST is walked into plain elements (A2uiMarkdownBlocks). No MarkupString.
+   Links are inert text plus the muted URL; images are alt text. *@
+<div class="a2ui-md">
+    @foreach (var block in _blocks)
+    {
+        <text>@RenderBlock(block)</text>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<A2uiMdBlock> _blocks = [];
+    private string? _source;
+
+    [Parameter] public string? Text { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (string.Equals(Text, _source, StringComparison.Ordinal))
+            return;
+        _source = Text;
+        _blocks = A2uiMarkdownBlocks.Parse(Text);
+    }
+
+    private RenderFragment RenderBlock(A2uiMdBlock block) => @<text>
+        @switch (block)
+        {
+            case A2uiMdParagraph p:
+                <p>@RenderInlines(p.Inlines)</p>
+                break;
+            case A2uiMdHeading { Level: <= 2 } h:
+                <h3>@RenderInlines(h.Inlines)</h3>
+                break;
+            case A2uiMdHeading { Level: 3 } h:
+                <h4>@RenderInlines(h.Inlines)</h4>
+                break;
+            case A2uiMdHeading { Level: 4 } h:
+                <h5>@RenderInlines(h.Inlines)</h5>
+                break;
+            case A2uiMdHeading h:
+                <h6>@RenderInlines(h.Inlines)</h6>
+                break;
+            case A2uiMdCode c:
+                <pre class="a2ui-md__pre"><code>@c.Text</code></pre>
+                break;
+            case A2uiMdQuote q:
+                <blockquote>
+                    @foreach (var inner in q.Blocks)
+                    {
+                        <text>@RenderBlock(inner)</text>
+                    }
+                </blockquote>
+                break;
+            case A2uiMdList { Ordered: true } ol:
+                <ol start="@ol.Start.ToString(CultureInfo.InvariantCulture)">
+                    @foreach (var item in ol.Items)
+                    {
+                        <li>
+                            @foreach (var inner in item)
+                            {
+                                <text>@RenderBlock(inner)</text>
+                            }
+                        </li>
+                    }
+                </ol>
+                break;
+            case A2uiMdList ul:
+                <ul>
+                    @foreach (var item in ul.Items)
+                    {
+                        <li>
+                            @foreach (var inner in item)
+                            {
+                                <text>@RenderBlock(inner)</text>
+                            }
+                        </li>
+                    }
+                </ul>
+                break;
+            case A2uiMdTable t:
+                <div class="a2ui-md__table-wrap">
+                    <table>
+                        @foreach (var row in t.Rows)
+                        {
+                            <tr>
+                                @foreach (var cell in row.Cells)
+                                {
+                                    if (row.Header)
+                                    {
+                                        <th scope="col">@RenderInlines(cell)</th>
+                                    }
+                                    else
+                                    {
+                                        <td>@RenderInlines(cell)</td>
+                                    }
+                                }
+                            </tr>
+                        }
+                    </table>
+                </div>
+                break;
+            case A2uiMdRule:
+                <hr />
+                break;
+        }
+    </text>;
+
+    private RenderFragment RenderInlines(IReadOnlyList<A2uiMdInline> inlines) => @<text>
+        @foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case A2uiMdText t:
+                    <text>@t.Text</text>
+                    break;
+                case A2uiMdCodeSpan c:
+                    <code>@c.Text</code>
+                    break;
+                case A2uiMdBreak:
+                    <br />
+                    break;
+                case A2uiMdStyled { Style: A2uiMdStyle.Bold } b:
+                    <strong>@RenderInlines(b.Children)</strong>
+                    break;
+                case A2uiMdStyled { Style: A2uiMdStyle.Italic } i:
+                    <em>@RenderInlines(i.Children)</em>
+                    break;
+                case A2uiMdStyled s:
+                    <del>@RenderInlines(s.Children)</del>
+                    break;
+                case A2uiMdLink l:
+                    <text>@RenderInlines(l.Content)</text>
+                    if (ShowUrl(l))
+                    {
+                        <span class="a2ui-md__url"> (@l.Url)</span>
+                    }
+                    break;
+            }
+        }
+    </text>;
+
+    private static bool ShowUrl(A2uiMdLink link) =>
+        link.Url.Length > 0 && !string.Equals(link.Url, A2uiMarkdownBlocks.PlainText(link.Content), StringComparison.Ordinal);
+}

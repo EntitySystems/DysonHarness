@@ -584,6 +584,49 @@ public class DysonSubagentHostLogicTests
         Assert.Equal(childId, Assert.Single(ids));
     }
 
+    [Fact]
+    public async Task IsParentEventClosed_rules()
+    {
+        var parent = new StubSession();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+
+        var answered = child.TriggerParentEventAsync("message", "q");
+        var evt = Assert.Single(parent.PendingOrRecentParentEvents);
+        var interrupt = new DysonAgentInterrupt
+        {
+            Kind = DysonAgentInterruptKind.SubagentEvent,
+            SubagentId = child.Id,
+            EventId = evt.EventId,
+        };
+        Assert.False(DysonSubagentHostLogic.IsParentEventClosed(parent, interrupt));
+        Assert.True(parent.RespondToSubagentEvent(child.Id, evt.EventId, "a").IsSuccess);
+        await answered.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(DysonSubagentHostLogic.IsParentEventClosed(parent, interrupt));
+
+        var failed = child.TriggerParentEventAsync("message", "q2");
+        var evt2 = parent.PendingOrRecentParentEvents.First(e => e.Status == DysonParentEventStatus.Pending);
+        Assert.True(parent.FailPendingParentEvent(evt2.EventId, "gone").IsSuccess);
+        await failed.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(DysonSubagentHostLogic.IsParentEventClosed(
+            parent,
+            new DysonAgentInterrupt
+            {
+                Kind = DysonAgentInterruptKind.SubagentEvent,
+                SubagentId = child.Id,
+                EventId = evt2.EventId,
+            }));
+
+        Assert.False(DysonSubagentHostLogic.IsParentEventClosed(
+            parent,
+            new DysonAgentInterrupt
+            {
+                Kind = DysonAgentInterruptKind.SubagentEvent,
+                SubagentId = child.Id,
+                EventId = Guid.NewGuid(),
+            }));
+    }
+
     private sealed class StubProvider : DysonAgentProvider;
 
     private sealed class StubSession(string mode = DysonAgentModes.Work) : DysonAgentSession(

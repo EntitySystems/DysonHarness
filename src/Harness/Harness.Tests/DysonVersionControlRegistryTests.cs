@@ -279,5 +279,13 @@ public sealed class DysonVersionControlRegistryTests
             DysonPipelineTarget target, long runId, string? etag, CancellationToken ct) =>
             Task.FromResult(Result<DysonPipelineFetch<DysonPipelineJob>, DysonPipelineError>.AsValue(
                 new DysonPipelineFetch<DysonPipelineJob>(true, [], null, null, null)));
+
+        public Task<Result<DysonPipelineRun, DysonPipelineError>> GetRunAsync(
+            DysonPipelineTarget target, long runId, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<Result<DysonPipelineJob, DysonPipelineError>> GetJobAsync(
+            DysonPipelineTarget target, long jobId, CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 }
