@@ -3985,6 +3985,7 @@ public abstract class DysonAgentSession
         {
             var gateHeld = false;
             var promptStarted = false;
+            var stoppedAtStart = false;
             var requeuedHere = false;
             try
             {
@@ -4013,6 +4014,7 @@ public abstract class DysonAgentSession
                 }
 
                 promptStarted = true;
+                stoppedAtStart = child.Status == DysonSessionStatus.Stopped;
                 var result = await child.PromptHarnessTurnAsync(turn, runCts.Token).ConfigureAwait(false);
                 if (runCts.IsCancellationRequested)
                 {
@@ -4078,7 +4080,9 @@ public abstract class DysonAgentSession
                 lock (child._injectInterruptGate)
                 {
                     child.DetachBackgroundRun(runCts);
+                    // Only a run that began Stopped: a Stop that lands mid-run marks Stopped before it cancels.
                     var resumeStopped = promptStarted
+                        && stoppedAtStart
                         && !runCts.IsCancellationRequested
                         && child.Status == DysonSessionStatus.Stopped
                         && child._pendingTurns.TryPeek(out var head)

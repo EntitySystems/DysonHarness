@@ -76,8 +76,10 @@ public static class DysonTaskEndReflectFlow
             return false;
         }
 
+        // Not CompletedUtc: KickOff child turns are only stamped when a host persists them, and
+        // InFlightPromptTurn is already null here, so the last turn has ended.
         var last = child.Turns[^1];
-        if (last.CompletedUtc is null
+        if (child.IsTurnInFlight(last.Id)
             || !DysonTaskLifecycleFlow.IsTaskEndReflectionTriggerKind(last.Kind)
             || last.Kind == DysonAgentTurnKind.TaskEndReflect)
         {

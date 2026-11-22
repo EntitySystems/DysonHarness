@@ -270,6 +270,27 @@ public class DysonSyntheticReportTests
         Assert.Equal(DysonSessionStatus.Stopped, drone.Status);
     }
 
+    [Fact]
+    public async Task Stop_marked_mid_run_before_its_cancel_does_not_start_the_continuation()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var drone = new StubSession(DysonAgentModes.MetaAgentDrone) { QueueContinuationOnFirstPrompt = true };
+        root.RegisterForTest(drone);
+        // StopSubagentAsync marks Stopped before it cancels the run: the run must not read that as "began Stopped".
+        drone.BeforeContinuationQueued = () =>
+        {
+            Assert.True(drone.TryMarkTerminal(DysonSessionStatus.Stopped, "Stopped by user."));
+            return Task.CompletedTask;
+        };
+
+        Assert.True((await root.TriggerSubagentEventAsync(drone.Id, "go on").ConfigureAwait(false)).IsSuccess);
+        await drone.ContinuationQueued.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await drone.WaitForBackgroundRunIdleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.False(drone.ContinuationStarted.Task.IsCompleted);
+        Assert.Equal(DysonSessionStatus.Stopped, drone.Status);
+    }
+
     private static async Task<StubSession> IdleChildWithOpenTodo(StubSession parent, string mode = DysonAgentModes.MetaAgentDrone)
     {
         var child = new StubSession(mode);
@@ -277,7 +298,8 @@ public class DysonSyntheticReportTests
         var todo = await child.CreateTodoAsync("verify-it", "Finish verification", DysonSessionTodoStatus.Ongoing)
             .ConfigureAwait(false);
         Assert.True(todo.IsSuccess, todo.IsError ? todo.Error : null);
-        child.AddTurnForTest(Completed(DysonAgentSession.CreateNormalTurn("work")));
+        // Unstamped, as on the KickOff path: CompletedUtc is only set when a host persists the turn.
+        child.AddTurnForTest(DysonAgentSession.CreateNormalTurn("work"));
         return child;
     }
 
@@ -517,7 +539,6 @@ public class DysonSyntheticReportTests
             }
 
             AddTurn(turn);
-            turn.CompletedUtc = DateTime.UtcNow;
             if (turn.AfterSummaryResume)
                 ContinuationStarted.TrySetResult(turn);
 
