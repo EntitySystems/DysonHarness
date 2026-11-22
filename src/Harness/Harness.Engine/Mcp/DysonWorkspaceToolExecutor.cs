@@ -1747,6 +1747,8 @@ public sealed partial class DysonWorkspaceToolExecutor
             var delay = Task.Delay(span, cancellationToken);
             while (true)
             {
+                // A cancelled wait aborts as before; never surface (and flag) an event the model will not see.
+                cancellationToken.ThrowIfCancellationRequested();
                 var events = CollectWakeEvents();
                 if (events.Count > 0)
                     return WaitInterrupted(call, seconds, started, events);

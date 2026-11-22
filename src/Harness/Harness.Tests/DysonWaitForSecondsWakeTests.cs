@@ -127,6 +127,25 @@ public class DysonWaitForSecondsWakeTests
         Assert.Equal(workResult.Content, droneResult.Content);
     }
 
+    [Fact]
+    public async Task Cancelled_wait_does_not_surface_pending_event()
+    {
+        var (_, drone, worker) = BuildTree();
+        using var http = new HttpClient();
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(drone, Path.GetTempPath(), http);
+        var trigger = worker.TriggerParentEventAsync("message", "q");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var result = await executor.ExecuteAsync(Wait(30), cts.Token).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(result.IsError);
+        var evt = Assert.Single(drone.PendingOrRecentParentEvents);
+        Assert.False(evt.WokeWait);
+
+        drone.RespondToSubagentEvent(worker.Id, evt.EventId, "a");
+        await trigger.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
     private static async Task<DysonToolCallResult> CancelledWait(DysonWorkspaceToolExecutor executor)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
