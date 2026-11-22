@@ -37,6 +37,19 @@ public class DysonA2uiSessionTests
     }
 
     [Fact]
+    public void UpdateUserQuestion_drops_forwarded_surface()
+    {
+        var session = new StubSession();
+        var q = session.AppendDisplayInfoTurn("body", userQuestion: Question()).UserQuestion!;
+        Assert.False(session.TryApplyA2ui(Parse(Create("form", Text("root", "pick"))), q.Id, null).IsError);
+
+        var replaced = session.TryReplaceUserQuestion(q.Id, q with { Choices = ["C", "D"] }, "new body", null);
+
+        Assert.True(replaced.IsSuccess);
+        Assert.Null(session.Turns[0].A2uiSurface);
+    }
+
+    [Fact]
     public void CreateSurface_twice_is_INTEGRITY_ERROR_and_keeps_first_surface()
     {
         var session = new StubSession();

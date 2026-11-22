@@ -69,6 +69,8 @@ public static class DysonA2uiSurfaces
 
         var surface = new DysonA2uiSurface(surfaceId!, boundQuestion, components!, model!, (current?.Revision ?? 0) + 1, null);
         var lastPath = messages[^1].Path;
+        if (Depth(model!) > DysonA2uiProtocol.MaxDataModelDepth)
+            return Error(DysonA2uiError.Validation(surfaceId, lastPath, $"data model nests deeper than {DysonA2uiProtocol.MaxDataModelDepth} levels."));
         if (Encoding.UTF8.GetByteCount(model!.ToJsonString()) > DysonA2uiProtocol.MaxDataModelBytes)
             return Error(DysonA2uiError.Validation(surfaceId, lastPath, $"data model exceeds {DysonA2uiProtocol.MaxDataModelBytes} bytes."));
 
@@ -83,6 +85,13 @@ public static class DysonA2uiSurfaces
     /// </summary>
     public static VoidResult<DysonA2uiError> ValidateTree(DysonA2uiSurface surface) =>
         ValidateTree(surface, id => "/components/" + id);
+
+    private static int Depth(JsonNode? node) => node switch
+    {
+        JsonObject o => 1 + (o.Count == 0 ? 0 : o.Max(p => Depth(p.Value))),
+        JsonArray a => 1 + (a.Count == 0 ? 0 : a.Max(Depth)),
+        _ => 0,
+    };
 
     /// <summary>QuestionSlot question ids in component order.</summary>
     public static IReadOnlyList<Guid> QuestionSlotIds(DysonA2uiSurface surface)

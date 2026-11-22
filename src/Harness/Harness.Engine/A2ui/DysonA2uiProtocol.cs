@@ -28,6 +28,9 @@ public static class DysonA2uiProtocol
     public const int MaxTreeDepth = 16;
     public const int MaxStringLength = 4000;
     public const int MaxDataModelBytes = 32768;
+
+    /// <summary>Nesting cap for the data model; well under System.Text.Json's default 64 so it always serializes and reloads.</summary>
+    public const int MaxDataModelDepth = 32;
     public const int MaxLiveSurfacesPerSession = 20;
     public const int MaxIdentifierLength = 64;
     public const int MaxChecks = 8;

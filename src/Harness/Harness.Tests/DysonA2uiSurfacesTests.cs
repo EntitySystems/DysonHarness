@@ -58,6 +58,20 @@ public class DysonA2uiSurfacesTests
     }
 
     [Fact]
+    public void Deep_updateDataModel_pointer_is_VALIDATION_FAILED_not_a_throw()
+    {
+        var first = Created("""{"id":"root","component":"Text","text":"x"}""");
+        var pointer = string.Concat(Enumerable.Repeat("/a", 70));
+        var update = Parse($$$"""[{"version":"1.0","updateDataModel":{"surfaceId":"s1","path":"{{{pointer}}}","value":1}}]""");
+
+        var result = DysonA2uiSurfaces.Apply(first, null, update);
+
+        Assert.True(result.IsError);
+        Assert.Equal(DysonA2uiProtocol.ValidationFailed, result.Error.Code);
+        Assert.Contains("deeper", result.Error.Message);
+    }
+
+    [Fact]
     public void update_without_surface_and_deleteSurface()
     {
         var update = Parse("""[{"version":"1.0","updateDataModel":{"surfaceId":"s1","value":{}}}]""");

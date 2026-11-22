@@ -5066,6 +5066,8 @@ public abstract class DysonAgentSession
             turn.UserQuestion = card;
             turn.AssistantText = message.Trim();
             turn.RestoreConversationActions(actions ?? []);
+            // A forwarded form was built for the old choices; drop it like TryWithdrawUserQuestion does.
+            turn.A2uiSurface = null;
             updated = turn;
         }
 

@@ -119,6 +119,11 @@ public class DysonA2uiQuestionCardTests
         Assert.Equal("Pick one", failingChecks.Error.Message);
         Assert.Equal("Pick one", DysonA2uiQuestionBridge.CanSubmit(q, surface, "go", new JsonObject()).Error);
 
+        var huge = new JsonObject { ["sel"] = new JsonArray("B"), ["note"] = "n", ["env"] = new string('e', DysonUserQuestion.MaxCustomAnswerLength) };
+        var overLimit = DysonA2uiQuestionBridge.ToAnswer(q, DysonA2uiAction.Resolve(surface, "go", huge, DateTime.UtcNow).Value);
+        Assert.True(overLimit.IsError);
+        Assert.Contains("exceeds", overLimit.Error);
+
         var answered = q with { Answer = new DysonUserQuestionAnswer(["A"], null, DateTime.UtcNow) };
         Assert.Contains("already answered", DysonA2uiQuestionBridge.ToAnswer(answered, DysonA2uiAction.Resolve(surface, "go", model, DateTime.UtcNow).Value).Error);
     }

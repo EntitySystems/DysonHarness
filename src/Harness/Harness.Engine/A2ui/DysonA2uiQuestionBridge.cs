@@ -69,8 +69,10 @@ public static class DysonA2uiQuestionBridge
                 var json = new JsonObject { ["action"] = action.Name, ["context"] = others }
                     .ToJsonString(DysonA2uiProtocol.WireOptions);
                 custom = custom is null ? json : custom.Trim() + "\n" + json;
+                // Reject rather than cut: a cut lands mid-JSON and hands the agent malformed context.
                 if (custom.Length > DysonUserQuestion.MaxCustomAnswerLength)
-                    custom = custom[..DysonUserQuestion.MaxCustomAnswerLength];
+                    return Result<DysonA2uiAnswer, string>.AsError(
+                        $"A2UI: answer plus form context exceeds {DysonUserQuestion.MaxCustomAnswerLength} characters.");
             }
         }
 
