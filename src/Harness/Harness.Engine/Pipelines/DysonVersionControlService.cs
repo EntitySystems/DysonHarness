@@ -28,6 +28,15 @@ public sealed class DysonVersionControlService : IDisposable
     /// <summary>At most this many job fetches per tick, round-robin. ponytail: ceiling = 3 sequential gh calls per tick; upgrade path = GraphQL batching.</summary>
     internal const int MaxJobFetchesPerTick = 3;
 
+    /// <summary>A snapshot younger than this answers <see cref="GetRecentRunsAsync"/> / <see cref="GetJobsAsync"/> with no gh call.</summary>
+    public static readonly TimeSpan ToolSnapshotMaxAge = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// ListPipelineRuns with includeJobs fetches jobs for at most this many runs outside the snapshot per call.
+    /// ponytail: ceiling = 10 gh calls per tool call (4 in flight); upgrade path = GraphQL batching.
+    /// </summary>
+    public const int MaxToolJobFetches = 10;
+
     private readonly DysonVersionControlBinding _binding;
     private readonly IReadOnlyList<IVersionControlProvider> _providers;
     private readonly DysonMessageBus _bus;
@@ -79,6 +88,16 @@ public sealed class DysonVersionControlService : IDisposable
     }
 
     public Guid WorkDirectoryId => _binding.WorkDirectoryId;
+
+    /// <summary>The detected repository, or null until a detection (snapshot tick or a Get* call) found one.</summary>
+    public DysonPipelineTarget? Target
+    {
+        get
+        {
+            lock (_lock)
+                return _target;
+        }
+    }
 
     public string SubjectId => _binding.SubjectId;
 
@@ -159,6 +178,97 @@ public sealed class DysonVersionControlService : IDisposable
 
         _ = DebounceAsync(cts, generation);
     }
+
+    /// <summary>
+    /// The latest 20 runs: the snapshot when it is fresh, else one ListRuns call. Writes no snapshot and takes no turn,
+    /// so it can overlap a tick (read-only race). Detection runs first when the snapshot has none.
+    /// </summary>
+    public async Task<Result<IReadOnlyList<DysonPipelineRun>, DysonPipelineError>> GetRecentRunsAsync(CancellationToken ct)
+    {
+        if (FreshSnapshot() is { } snap)
+            return Result<IReadOnlyList<DysonPipelineRun>, DysonPipelineError>.AsValue(snap.Runs);
+
+        var ready = await ReadyAsync(ct).ConfigureAwait(false);
+        if (ready.IsError)
+            return Result<IReadOnlyList<DysonPipelineRun>, DysonPipelineError>.AsError(ready.Error);
+
+        var fetched = await ready.Value.Provider.ListRunsAsync(ready.Value.Target, null, ct).ConfigureAwait(false);
+        return fetched.IsError
+            ? Result<IReadOnlyList<DysonPipelineRun>, DysonPipelineError>.AsError(fetched.Error)
+            : Result<IReadOnlyList<DysonPipelineRun>, DysonPipelineError>.AsValue(fetched.Value.Items);
+    }
+
+    /// <summary>The jobs of one run: the fresh snapshot's list when it has the run, else one ListJobs call.</summary>
+    public async Task<Result<IReadOnlyList<DysonPipelineJob>, DysonPipelineError>> GetJobsAsync(long runId, CancellationToken ct)
+    {
+        if (FreshSnapshot() is { } snap && snap.Jobs.TryGetValue(runId, out var cached))
+            return Result<IReadOnlyList<DysonPipelineJob>, DysonPipelineError>.AsValue(cached);
+
+        var ready = await ReadyAsync(ct).ConfigureAwait(false);
+        if (ready.IsError)
+            return Result<IReadOnlyList<DysonPipelineJob>, DysonPipelineError>.AsError(ready.Error);
+
+        var fetched = await ready.Value.Provider.ListJobsAsync(ready.Value.Target, runId, null, ct).ConfigureAwait(false);
+        return fetched.IsError
+            ? Result<IReadOnlyList<DysonPipelineJob>, DysonPipelineError>.AsError(fetched.Error)
+            : Result<IReadOnlyList<DysonPipelineJob>, DysonPipelineError>.AsValue(fetched.Value.Items);
+    }
+
+    /// <summary>One run by id (outside the recent 20 too). Always one provider call; a 404 is <see cref="DysonPipelineErrorKind.RepoNotFound"/>.</summary>
+    public async Task<Result<DysonPipelineRun, DysonPipelineError>> GetRunAsync(long runId, CancellationToken ct)
+    {
+        var ready = await ReadyAsync(ct).ConfigureAwait(false);
+        if (ready.IsError)
+            return Result<DysonPipelineRun, DysonPipelineError>.AsError(ready.Error);
+        return await ready.Value.Provider.GetRunAsync(ready.Value.Target, runId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>One job by id; its <see cref="DysonPipelineJob.RunId"/> names the run. Always one provider call.</summary>
+    public async Task<Result<DysonPipelineJob, DysonPipelineError>> GetJobAsync(long jobId, CancellationToken ct)
+    {
+        var ready = await ReadyAsync(ct).ConfigureAwait(false);
+        if (ready.IsError)
+            return Result<DysonPipelineJob, DysonPipelineError>.AsError(ready.Error);
+        return await ready.Value.Provider.GetJobAsync(ready.Value.Target, jobId, ct).ConfigureAwait(false);
+    }
+
+    private DysonPipelineSnapshot? FreshSnapshot()
+    {
+        var snap = Snapshot;
+        return snap is { IsDetected: true, Error: null, FetchedAt: { } at } && _seams.Now() - at <= ToolSnapshotMaxAge
+            ? snap
+            : null;
+    }
+
+    /// <summary>
+    /// Detects (a NotDetected result is retried, as a Watch would) and returns the provider and target.
+    /// A double detection next to a running tick is benign: both write the same values and StopLoop is the loop's own.
+    /// </summary>
+    private async Task<Result<(IVersionControlProvider Provider, DysonPipelineTarget Target), DysonPipelineError>> ReadyAsync(
+        CancellationToken ct)
+    {
+        lock (_lock)
+        {
+            if (_disposed)
+                return NotReady(new DysonPipelineError(DysonPipelineErrorKind.Failed, "Version control service has been disposed."));
+            ForgetNotDetectedLocked();
+        }
+
+        var detected = await EnsureDetectedAsync(ct).ConfigureAwait(false);
+        lock (_lock)
+        {
+            if (detected && _provider is { } provider && _target is { } target)
+                return Result<(IVersionControlProvider, DysonPipelineTarget), DysonPipelineError>.AsValue((provider, target));
+        }
+
+        var error = Snapshot?.Error is { Kind: DysonPipelineErrorKind.NotDetected } known
+            ? known
+            : new DysonPipelineError(DysonPipelineErrorKind.NotDetected, "No GitHub repository detected.");
+        return NotReady(error);
+    }
+
+    private static Result<(IVersionControlProvider, DysonPipelineTarget), DysonPipelineError> NotReady(DysonPipelineError error) =>
+        Result<(IVersionControlProvider, DysonPipelineTarget), DysonPipelineError>.AsError(error);
 
     public void Dispose()
     {

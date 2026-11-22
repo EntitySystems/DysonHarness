@@ -1,13 +1,310 @@
 @namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
 @using System.Text.Json.Nodes
 @using DysonHarness
 
-<p class="a2ui-text a2ui-text--caption">@A2uiProps.Str(Component["component"]): not built</p>
+@* Media + composites. Phase 1: a MediaUrl is validated but NEVER fetched or rendered (no img/video/iframe); a LinkTarget is a
+   <button> that calls View.OpenAsync(func), so no href exists. SVG attributes are our numbers or fixed icon paths. *@
+@{
+    var name = A2uiProps.Str(Component["component"]);
+    var aria = A2uiProps.Aria(View, Component, Scope, _domId, out var description);
+}
+@switch (name)
+{
+    case "Image":
+        <div class="a2ui-media">@Placeholder(ImageSize(), First(S("description"), S("fallback"), S("alt"), S("caption")), S("caption"), aria)</div>
+        break;
+    case "Icon":
+        var iconPath = A2uiIcons.Path(S("name"));
+        var iconLabel = S("label");
+        if (iconPath is not null)
+        {
+            <svg class="a2ui-icon" viewBox="0 0 24 24" role="img" aria-label="@(iconLabel.Length > 0 ? iconLabel : null)" aria-hidden="@(iconLabel.Length > 0 ? null : "true")" @attributes="aria"><path d="@iconPath" /></svg>
+        }
+        else if (iconLabel.Length > 0)
+        {
+            <span class="a2ui-icon-label" @attributes="aria">@iconLabel</span>
+        }
+        break;
+    case "Favicon":
+        var faviconHost = HostOf(S("url"), S("domain"));
+        <span class="a2ui-favicon" aria-hidden="@(faviconHost is null ? "true" : null)" title="@faviconHost" @attributes="aria">@Initial(faviconHost)</span>
+        break;
+    case "Video":
+    case "AudioPlayer":
+    case "VideoEmbed":
+        var mediaKind = name == "AudioPlayer" ? "Audio" : "Video";
+        var mediaUrl = A2uiProps.Str(Component["url"]) ?? "";
+        var mediaHost = DysonA2uiLinks.Host(mediaUrl);
+        <div class="a2ui-linkcard" @attributes="aria">
+            <span class="a2ui-linkcard__kind">@mediaKind</span>
+            <span class="a2ui-linkcard__title">@First(S("title"), S("caption"), mediaHost ?? "")</span>
+            @if (mediaHost is not null)
+            {
+                <span class="a2ui-linkcard__host">@mediaHost</span>
+            }
+            <button type="button" class="btn a2ui-action" disabled="@View.OpenBusy" @onclick="() => View.OpenAsync(mediaUrl)">Open</button>
+        </div>
+        break;
+    case "ImageGallery":
+    case "ImageGrid":
+        var items = Items();
+        var cols = A2uiProps.Int(Component["columns"]) is { } n and >= 1 and <= 6 ? n : 3;
+        <div class="a2ui-gallery a2ui-gallery--@cols.ToString(CultureInfo.InvariantCulture)" @attributes="aria">
+            @foreach (var item in items)
+            {
+                <div class="a2ui-media">@Placeholder("a2ui-frame--small", First(T(item["title"]), T(item["alt"]), T(item["description"]), T(item["caption"])), T(item["caption"]), null)</div>
+            }
+        </div>
+        break;
+    case "CarouselMediaItem":
+        <div class="a2ui-media">@Placeholder("a2ui-frame--medium", First(S("title"), S("alt"), S("description"), S("caption")), S("caption"), aria)</div>
+        break;
+    case "Map":
+        <div class="a2ui-media">@MapBody(aria)</div>
+        break;
+    case "LinkCard":
+        var cardUrl = A2uiProps.Str(Component["url"]) ?? "";
+        var cardHost = DysonA2uiLinks.Host(cardUrl);
+        <div class="a2ui-linkcard a2ui-linkcard--card" @attributes="aria">
+            <span class="a2ui-favicon" aria-hidden="true">@Initial(cardHost ?? S("siteName"))</span>
+            <span class="a2ui-linkcard__body">
+                <span class="a2ui-linkcard__title">@S("title")</span>
+                @if (S("description") is { Length: > 0 } cardDescription)
+                {
+                    <span class="a2ui-linkcard__desc">@cardDescription</span>
+                }
+                <span class="a2ui-linkcard__host">@First(S("siteName"), cardHost ?? "")</span>
+            </span>
+            <button type="button" class="btn a2ui-action" disabled="@View.OpenBusy" @onclick="() => View.OpenAsync(cardUrl)">Open</button>
+        </div>
+        break;
+    case "Citation":
+        var citeUrl = A2uiProps.Str(Component["url"]);
+        var citeLabel = First(S("label"), A2uiProps.Number(View, Component["index"], Scope) is { } idx ? "[" + idx.ToString("0", CultureInfo.InvariantCulture) + "]" : "", "[•]");
+        <span class="a2ui-citation" @attributes="aria">
+            <button type="button" class="a2ui-citation__marker" aria-expanded="@(_open ? "true" : "false")" @onclick="() => _open = !_open">@citeLabel</button>
+            @if (_open)
+            {
+                <span class="a2ui-citation__panel" role="note">
+                    @if (S("title") is { Length: > 0 } citeTitle)
+                    {
+                        <span class="a2ui-citation__title">@citeTitle</span>
+                    }
+                    @if (S("snippet") is { Length: > 0 } citeSnippet)
+                    {
+                        <span class="a2ui-citation__snippet">@citeSnippet</span>
+                    }
+                    @if (S("source") is { Length: > 0 } citeSource)
+                    {
+                        <span class="a2ui-citation__source">@citeSource</span>
+                    }
+                    @if (!string.IsNullOrEmpty(citeUrl))
+                    {
+                        <button type="button" class="btn a2ui-action" disabled="@View.OpenBusy" @onclick="() => View.OpenAsync(citeUrl)">Open</button>
+                    }
+                </span>
+            }
+        </span>
+        break;
+    case "EntityCard":
+        <div class="a2ui-media">@EntityBody(aria)</div>
+        break;
+}
+@if (description is not null)
+{
+    <span id="@($"{_domId}-desc")" class="a2ui-sr-only">@description</span>
+}
 
 @code {
+    private static int s_next;
+    private readonly string _domId = "a2ui-media-" + Interlocked.Increment(ref s_next).ToString(CultureInfo.InvariantCulture);
+    private bool _open;
+    private IReadOnlyList<MapMarker> _markers = [];
+    private DysonA2uiMapPlot _plot = DysonA2uiMapPlot.Empty;
+    private (int Revision, JsonObject? Component, JsonObject? Model, string Scope) _key = (-1, null, null, "");
+
     [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
     [Parameter, EditorRequired] public string? Id { get; set; }
     [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
     [Parameter] public string Scope { get; set; } = "";
     [Parameter] public int Depth { get; set; } = 1;
+
+    private sealed record MapMarker(string Label, double Lat, double Lng, string Category, string Description);
+
+    /// <summary>Marker projection is O(n) over at most 100 markers, cached per (revision, component, model, scope).</summary>
+    protected override void OnParametersSet()
+    {
+        var key = (View.Surface.Revision, Component, View.Model, Scope);
+        if (key == _key)
+            return;
+        _key = key;
+        if (A2uiProps.Str(Component["component"]) != "Map")
+            return;
+        var list = new List<MapMarker>();
+        if (DysonA2uiBinding.ResolveValue(Component["markers"], View.Model, Scope) is JsonArray array)
+        {
+            foreach (var node in array)
+            {
+                if (list.Count >= DysonA2uiProtocol.MaxMapMarkers)
+                    break;
+                if (node is not JsonObject o || A2uiProps.Double(o["lat"]) is not { } lat || A2uiProps.Double(o["lng"]) is not { } lng
+                    || lat is < -90 or > 90 || lng is < -180 or > 180)
+                    continue;
+                list.Add(new MapMarker(A2uiProps.Str(o["label"]) ?? "", lat, lng, A2uiProps.Str(o["category"]) ?? "", A2uiProps.Str(o["description"]) ?? ""));
+            }
+        }
+
+        _markers = list;
+        _plot = DysonA2uiMapPlot.Build(list.Select(m => (m.Lat, m.Lng)).ToList());
+    }
+
+    private string S(string key) => A2uiProps.String(View, Component[key], Scope);
+
+    private string T(JsonNode? node) => A2uiProps.String(View, node, Scope);
+
+    private static string First(params string[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? "";
+
+    private static string Initial(string? text)
+    {
+        var s = text?.Trim() ?? "";
+        if (s.Length == 0)
+            return "?";
+        var len = char.IsHighSurrogate(s[0]) && s.Length > 1 ? 2 : 1;
+        return s[..len].ToUpperInvariant();
+    }
+
+    private static string? HostOf(string url, string domain) =>
+        DysonA2uiLinks.Host(url) ?? (string.IsNullOrWhiteSpace(domain) ? null : domain.Trim().ToLowerInvariant());
+
+    /// <summary>Fixed frame class from the variant enum.</summary>
+    private string ImageSize() => "a2ui-frame--" + (A2uiProps.Str(Component["variant"]) switch
+    {
+        "icon" => "icon",
+        "avatar" => "avatar",
+        "small" => "small",
+        "large" => "large",
+        "header" => "header",
+        _ => "medium",
+    });
+
+    private IReadOnlyList<JsonObject> Items()
+    {
+        var node = DysonA2uiBinding.ResolveValue(Component["images"] ?? Component["items"], View.Model, Scope);
+        return node is JsonArray array ? array.OfType<JsonObject>().Take(50).ToList() : [];
+    }
+
+    private RenderFragment Placeholder(string frameClass, string text, string caption, Dictionary<string, object>? aria) =>
+        @<figure class="a2ui-frame @frameClass" @attributes="aria">
+            <span class="a2ui-frame__text">@text</span>
+            <span class="a2ui-frame__note">image not loaded</span>
+            @if (caption.Length > 0 && caption != text)
+            {
+                <figcaption class="a2ui-frame__caption">@caption</figcaption>
+            }
+        </figure>;
+
+    private RenderFragment MapBody(Dictionary<string, object> aria) =>
+        @<div class="a2ui-map" @attributes="aria">
+            @if (S("title").Length > 0)
+            {
+                <span class="a2ui-map__title">@S("title")</span>
+            }
+            @if (_markers.Count == 0)
+            {
+                <p class="a2ui-map__empty">No places</p>
+            }
+            else
+            {
+                var selected = A2uiProps.String(View, Component["selected"], Scope);
+                if (_plot.Points.Count >= 2)
+                {
+                    <svg class="a2ui-map__plot" viewBox="@_plot.ViewBox" role="img" aria-label="Relative positions of the places">
+                        <rect class="a2ui-map__bg" x="0" y="0" width="@_plot.Width" height="@_plot.Height" rx="6" />
+                        @if (A2uiProps.Bool(Component["route"]) == true)
+                        {
+                            <polyline class="a2ui-map__route" points="@_plot.RoutePoints" />
+                        }
+                        @for (var i = 0; i < _plot.Points.Count; i++)
+                        {
+                            var point = _plot.Points[i];
+                            var marker = _markers[i];
+                            <circle class="a2ui-map__pin @(marker.Label == selected ? "a2ui-map__pin--selected" : "")" cx="@point.X" cy="@point.Y" r="@(marker.Label == selected ? "6" : "4")"><title>@marker.Label</title></circle>
+                        }
+                    </svg>
+                }
+                <ul class="a2ui-map__list">
+                    @foreach (var marker in _markers)
+                    {
+                        var current = marker;
+                        <li>
+                            <button type="button" class="a2ui-map__row @(current.Label == selected ? "a2ui-map__row--selected" : "")" aria-pressed="@(current.Label == selected ? "true" : "false")"
+                                    @onclick="() => View.Write(Component["selected"], Scope, JsonValue.Create(current.Label))">
+                                <span class="a2ui-map__label">@current.Label</span>
+                                @if (current.Category.Length > 0)
+                                {
+                                    <span class="a2ui-map__cat">@current.Category</span>
+                                }
+                                <span class="a2ui-map__coords">@Coord(current.Lat), @Coord(current.Lng)</span>
+                                @if (current.Description.Length > 0)
+                                {
+                                    <span class="a2ui-map__desc">@current.Description</span>
+                                }
+                            </button>
+                        </li>
+                    }
+                </ul>
+            }
+        </div>;
+
+    private static string Coord(double v) => v.ToString("0.####", CultureInfo.InvariantCulture);
+
+    private RenderFragment EntityBody(Dictionary<string, object> aria) =>
+        @<div class="a2ui-entity" @attributes="aria">
+            <span class="a2ui-frame a2ui-frame--small a2ui-entity__image" aria-hidden="true"><span class="a2ui-frame__text">@Initial(S("title"))</span></span>
+            <span class="a2ui-entity__body">
+                <span class="a2ui-entity__title">@S("title")</span>
+                @if (S("subtitle").Length > 0)
+                {
+                    <span class="a2ui-entity__sub">@S("subtitle")</span>
+                }
+                @if (S("badge").Length > 0)
+                {
+                    <span class="a2ui-entity__badge">@S("badge")</span>
+                }
+                @if (A2uiProps.Number(View, Component["rating"], Scope) is { } rating)
+                {
+                    var stars = Math.Round(Math.Clamp(rating, 0, 5) * 2) / 2;
+                    <span class="a2ui-entity__rating" role="img" aria-label="@("Rating " + stars.ToString("0.#", CultureInfo.InvariantCulture) + " of 5")">
+                        @for (var i = 1; i <= 5; i++)
+                        {
+                            var path = A2uiIcons.Path(stars >= i ? "star" : stars >= i - 0.5 ? "star-half" : "star");
+                            <svg class="a2ui-star @(stars >= i - 0.5 ? "a2ui-star--on" : "")" viewBox="0 0 24 24" aria-hidden="true"><path d="@path" /></svg>
+                        }
+                    </span>
+                }
+                @if (S("description").Length > 0)
+                {
+                    <span class="a2ui-entity__desc">@S("description")</span>
+                }
+                @if (S("meta").Length > 0)
+                {
+                    <span class="a2ui-entity__meta">@S("meta")</span>
+                }
+                <span class="a2ui-entity__actions">
+                    @if (A2uiProps.Str(Component["href"]) is { Length: > 0 } href)
+                    {
+                        <button type="button" class="btn a2ui-action" disabled="@View.OpenBusy" @onclick="() => View.OpenAsync(href)">Open</button>
+                    }
+                    @if (Component["actions"] is JsonArray actions)
+                    {
+                        @foreach (var action in actions.OfType<JsonObject>().Take(3))
+                        {
+                            var func = A2uiProps.Str(action["href"]) ?? "";
+                            <button type="button" class="btn a2ui-action" disabled="@View.OpenBusy" @onclick="() => View.OpenAsync(func)">@T(action["label"])</button>
+                        }
+                    }
+                </span>
+            </span>
+        </div>;
 }

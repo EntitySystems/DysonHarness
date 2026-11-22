@@ -557,6 +557,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 EnsureRegistered(session);
             if (session.Config.Focus is null)
                 session.Config.Focus = runtime.Focus;
+            session.Config.Pipelines ??= ResolvePipelinesAsync;
 
             var sessionId = session.PersistenceId;
             if (sessionId == Guid.Empty)
@@ -865,6 +866,18 @@ public sealed class DysonUiHost : IAsyncDisposable
             DysonRuntimeChangeKind.Recovery => DysonHostChangeKind.All,
             _ => DysonHostChangeKind.All,
         };
+
+    /// <summary>ListPipelineRuns hook (<see cref="DysonAgentSessionConfig.Pipelines"/>): the work directory's service, created on demand. Starts no polling.</summary>
+    private async Task<Result<DysonVersionControlService, string>> ResolvePipelinesAsync(
+        Guid workDirectoryId, CancellationToken cancellationToken)
+    {
+        if (_vcs is null)
+            return Result<DysonVersionControlService, string>.AsError("Pipelines are not available in this host");
+        var wd = await _workDirectories.GetAsync(workDirectoryId, cancellationToken).ConfigureAwait(false);
+        return wd.IsError
+            ? Result<DysonVersionControlService, string>.AsError(wd.Error)
+            : _vcs.GetOrCreate(wd.Value);
+    }
 
     private bool TryGetAttachedRuntime(out DysonSessionRuntime runtime)
     {
@@ -5913,6 +5926,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,
         };
+        config.Pipelines = ResolvePipelinesAsync;
         if (TryGetAttachedRuntime(out var runtimeFocus))
         {
             config.Focus = runtimeFocus.Focus;

@@ -1,0 +1,583 @@
+/* Data display group. Tokens from app.css only; enum props (tone, trend, status, size) map to these fixed classes. */
+.a2ui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.a2ui-icon {
+  flex: none;
+  width: 1.1em;
+  height: 1.1em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.a2ui-title {
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+/* Tone: one custom property, read by Stat, Progress, RadialProgress and TagList. */
+.a2ui-tone--positive { --a2ui-tone: var(--success); }
+.a2ui-tone--negative { --a2ui-tone: var(--danger); }
+.a2ui-tone--warning { --a2ui-tone: var(--warning); }
+.a2ui-tone--info { --a2ui-tone: var(--info); }
+.a2ui-tone--accent { --a2ui-tone: var(--accent); }
+.a2ui-tone--discovery { --a2ui-tone: var(--accent-purple); }
+.a2ui-tone--secondary { --a2ui-tone: var(--text-muted); }
+
+/* ListItem */
+.a2ui-li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.a2ui-li__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.a2ui-li__main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.a2ui-li__label {
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-li__desc,
+.a2ui-li__value {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-li__value {
+  flex: none;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.a2ui-li__children {
+  padding-left: var(--sp-4);
+}
+
+/* Stat / StatGroup */
+.a2ui-stats {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.a2ui-stats__strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.a2ui-stat {
+  display: flex;
+  flex: 1 1 8rem;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.a2ui-stat__label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.a2ui-stat__value {
+  font-size: calc(var(--fs-xl) * 1.35);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  color: var(--a2ui-tone, var(--text));
+  overflow-wrap: anywhere;
+}
+
+.a2ui-stat__delta {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.a2ui-trend--up { color: var(--success); }
+.a2ui-trend--down { color: var(--danger); }
+
+.a2ui-stat__caption {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+/* KeyValueList */
+.a2ui-kv {
+  display: grid;
+  gap: var(--sp-2) var(--sp-4);
+  margin: 0;
+}
+
+.a2ui-kv--1 { grid-template-columns: minmax(0, 1fr); }
+.a2ui-kv--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.a2ui-kv--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.a2ui-kv__item {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-sm);
+}
+
+.a2ui-kv__item dt {
+  color: var(--text-muted);
+}
+
+.a2ui-kv__item dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.a2ui-kv__hint {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+/* Timeline */
+.a2ui-timeline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.a2ui-timeline__item {
+  --a2ui-dot: var(--text-dim);
+  position: relative;
+  display: flex;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.a2ui-timeline__item:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 18px;
+  bottom: calc(var(--sp-3) * -1);
+  left: 8px;
+  width: 1px;
+  background: var(--border);
+}
+
+.a2ui-timeline__dot {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  margin-top: 1px;
+  border: 2px solid var(--a2ui-dot);
+  border-radius: var(--radius-full);
+  background: var(--bg-1);
+  color: var(--a2ui-dot);
+  font-size: 9px;
+}
+
+.a2ui-status--done { --a2ui-dot: var(--success); }
+.a2ui-status--done .a2ui-timeline__dot { background: var(--a2ui-dot); color: var(--bg-1); }
+.a2ui-status--active { --a2ui-dot: var(--accent); }
+.a2ui-status--error { --a2ui-dot: var(--danger); }
+.a2ui-status--warning { --a2ui-dot: var(--warning); }
+.a2ui-status--pending { --a2ui-dot: var(--text-dim); }
+
+.a2ui-timeline__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.a2ui-timeline__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.a2ui-timeline__title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-timeline__time,
+.a2ui-timeline__desc {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Progress */
+.a2ui-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.a2ui-progress__head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.a2ui-progress__pct,
+.a2ui-progress__caption {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.a2ui-progress__bar {
+  width: 100%;
+  height: 8px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  accent-color: var(--a2ui-tone, var(--accent));
+  overflow: hidden;
+  appearance: none;
+}
+
+.a2ui-progress__bar::-webkit-progress-bar {
+  background: var(--surface-sunken);
+}
+
+.a2ui-progress__bar::-webkit-progress-value {
+  border-radius: var(--radius-full);
+  background: var(--a2ui-tone, var(--accent));
+}
+
+.a2ui-progress__bar::-moz-progress-bar {
+  border-radius: var(--radius-full);
+  background: var(--a2ui-tone, var(--accent));
+}
+
+/* RadialProgress: the dasharray is computed by DysonA2uiTable.RingDash; the ring starts at 12 o'clock. */
+.a2ui-radial {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.a2ui-radial__ring {
+  position: relative;
+  width: 84px;
+  height: 84px;
+}
+
+.a2ui-radial__ring svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.a2ui-radial__track,
+.a2ui-radial__arc {
+  fill: none;
+  stroke-width: 4;
+}
+
+.a2ui-radial__track {
+  stroke: var(--surface-sunken);
+}
+
+.a2ui-radial__arc {
+  stroke: var(--a2ui-tone, var(--accent));
+  stroke-linecap: round;
+}
+
+.a2ui-radial__text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  text-align: center;
+  overflow: hidden;
+}
+
+.a2ui-radial__label {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* Rating: outline stars with a filled copy on top; a half star clips the copy. */
+.a2ui-rating {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+}
+
+.a2ui-rating__stars {
+  display: inline-flex;
+}
+
+.a2ui-star {
+  position: relative;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  color: var(--accent-amber);
+}
+
+.a2ui-star svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.a2ui-star__outline {
+  fill: none;
+  opacity: 0.55;
+}
+
+.a2ui-star__fill {
+  fill: currentColor;
+}
+
+.a2ui-star--half .a2ui-star__fill {
+  clip-path: inset(0 50% 0 0);
+}
+
+.a2ui-rating__count,
+.a2ui-rating__label {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* TagList */
+.a2ui-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.a2ui-tag {
+  padding: 1px var(--sp-3);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--a2ui-tone, var(--text-muted)) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--a2ui-tone, var(--text-muted)) 30%, transparent);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+/* Avatar / AvatarGroup: initials only, nothing is fetched. Six palette classes, chosen by a stable name hash. */
+.a2ui-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.a2ui-avatar-row__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.a2ui-avatar-row__name {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.a2ui-avatar-row__sub {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.a2ui-avatar {
+  --a2ui-av: var(--accent);
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--a2ui-av) 28%, var(--bg-1));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--a2ui-av) 55%, transparent);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  user-select: none;
+}
+
+.a2ui-avatar--sm { width: 24px; height: 24px; font-size: 10px; }
+.a2ui-avatar--lg { width: 44px; height: 44px; font-size: var(--fs-md); }
+.a2ui-avatar--c0 { --a2ui-av: var(--accent-blue); }
+.a2ui-avatar--c1 { --a2ui-av: var(--accent-green); }
+.a2ui-avatar--c2 { --a2ui-av: var(--accent-red); }
+.a2ui-avatar--c3 { --a2ui-av: var(--accent-purple); }
+.a2ui-avatar--c4 { --a2ui-av: var(--accent-amber); }
+.a2ui-avatar--c5 { --a2ui-av: var(--text-muted); }
+
+.a2ui-avatar__status {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-full);
+  box-shadow: 0 0 0 2px var(--bg-1);
+}
+
+.a2ui-avatar__status--online { background: var(--success); }
+.a2ui-avatar__status--away { background: var(--warning); }
+.a2ui-avatar__status--offline { background: var(--text-dim); }
+
+.a2ui-avatar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.a2ui-avatar-group__stack {
+  display: inline-flex;
+}
+
+.a2ui-avatar-group__stack .a2ui-avatar:not(:first-child) {
+  margin-left: -8px;
+  box-shadow: 0 0 0 2px var(--bg-1), inset 0 0 0 1px color-mix(in srgb, var(--a2ui-av) 55%, transparent);
+}
+
+.a2ui-avatar--more {
+  --a2ui-av: var(--text-muted);
+}
+
+.a2ui-avatar-group__label {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* Agenda */
+.a2ui-agenda {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.a2ui-agenda__day {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.a2ui-agenda__date {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0;
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.a2ui-agenda__date small {
+  font-size: var(--fs-xs);
+  font-weight: normal;
+  color: var(--text-muted);
+}
+
+.a2ui-agenda__events {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.a2ui-agenda__event {
+  display: flex;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.a2ui-agenda__time {
+  flex: none;
+  width: 5.5em;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-text);
+}
+
+.a2ui-agenda__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.a2ui-agenda__title {
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-agenda__desc,
+.a2ui-agenda__place {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}

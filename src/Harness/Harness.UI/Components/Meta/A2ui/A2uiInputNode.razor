@@ -1,13 +1,389 @@
 @namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
 @using System.Text.Json.Nodes
 @using DysonHarness
 
-<p class="a2ui-text a2ui-text--caption">@A2uiProps.Str(Component["component"]): not built</p>
+@* Input group: Pressable, Form, TextArea, Select, RadioGroup, Radio, SegmentedControl, Slider, DateTimeInput.
+   Render only: every resolve, write and check is DysonA2uiBinding. Text is Blazor-escaped (never MarkupString);
+   no agent string reaches href/src/style/class/event attributes. Numbers and ISO text written to attributes are
+   formatted here (InvariantCulture); option values are never written to the DOM (index-based). *@
+@{
+    var aria = A2uiProps.Aria(View, Component, Scope, _domId, out var description);
+    var c = Component;
+    var off = View.Locked || View.Busy;
+}
+@switch (A2uiProps.Str(c["component"]))
+{
+    case "Pressable":
+        var pressProblems = ButtonProblems(c);
+        var pressChild = A2uiProps.Str(c["child"]);
+        <div class="a2ui-pressable-wrap">
+            <button type="button"
+                    class="a2ui-pressable"
+                    disabled="@(pressProblems.Count > 0 || off)"
+                    @attributes="aria"
+                    @onclick="() => View.ClickAsync(Id ?? string.Empty)">
+                <A2uiNode View="View" Id="@pressChild" Scope="@Scope" Depth="Depth + 1" Inline="true" />
+            </button>
+            @if (View.Dirty && pressProblems.Count > 0)
+            {
+                <div class="a2ui-check-message">@pressProblems[0]</div>
+            }
+        </div>
+        break;
+    case "Form":
+        var formTitle = A2uiProps.String(View, c["title"], Scope);
+        <div role="form" class="@FormClass(c)" aria-label="@(formTitle.Length > 0 ? formTitle : null)" @attributes="aria">
+            @if (formTitle.Length > 0)
+            {
+                <p class="a2ui-form__title">@formTitle</p>
+            }
+            @foreach (var (childId, childScope) in A2uiProps.Children(View, c, Scope))
+            {
+                <A2uiNode View="View" Id="@childId" Scope="@childScope" Depth="Depth + 1" />
+            }
+        </div>
+        break;
+    case "TextArea":
+        var areaPlaceholder = c.ContainsKey("placeholder") ? A2uiProps.String(View, c["placeholder"], Scope) : null;
+        var areaChecks = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+        var areaValue = A2uiProps.String(View, c[ValueKey], Scope);
+        <div class="field a2ui-field" @attributes="aria">
+            <label for="@_domId">@A2uiProps.String(View, c["label"], Scope)</label>
+            <textarea id="@_domId"
+                      class="a2ui-textarea"
+                      rows="@Rows(c)"
+                      placeholder="@areaPlaceholder"
+                      disabled="@off"
+                      value="@areaValue"
+                      @oninput="e => View.Write(c[ValueKey], Scope, JsonValue.Create(e.Value?.ToString() ?? string.Empty))"></textarea>
+            @if (View.Dirty && areaChecks.Count > 0)
+            {
+                <div class="a2ui-check-message">@areaChecks[0]</div>
+            }
+        </div>
+        break;
+    case "Select":
+        var selOptions = Options(c);
+        var selIndex = IndexOf(selOptions, A2uiProps.String(View, c[ValueKey], Scope));
+        var selPlaceholder = c.ContainsKey("placeholder") ? A2uiProps.String(View, c["placeholder"], Scope) : "";
+        var selChecks = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+        <div class="field a2ui-field" @attributes="aria">
+            @if (c.ContainsKey("label"))
+            {
+                <label for="@_domId">@A2uiProps.String(View, c["label"], Scope)</label>
+            }
+            <select id="@_domId"
+                    disabled="@off"
+                    value="@selIndex.ToString(CultureInfo.InvariantCulture)"
+                    @onchange="e => PickIndex(c, selOptions, e)">
+                @if (selIndex < 0 || selPlaceholder.Length > 0)
+                {
+                    <option value="-1" disabled>@selPlaceholder</option>
+                }
+                @for (var i = 0; i < selOptions.Count; i++)
+                {
+                    <option value="@i.ToString(CultureInfo.InvariantCulture)">@OptionText(selOptions[i])</option>
+                }
+            </select>
+            @if (View.Dirty && selChecks.Count > 0)
+            {
+                <div class="a2ui-check-message">@selChecks[0]</div>
+            }
+        </div>
+        break;
+    case "RadioGroup":
+        var rgOptions = Options(c);
+        var rgIndex = IndexOf(rgOptions, A2uiProps.String(View, c[ValueKey], Scope));
+        var rgChecks = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+        <fieldset class="a2ui-picker" @attributes="aria">
+            @if (c.ContainsKey("label"))
+            {
+                <legend class="a2ui-picker__label">@A2uiProps.String(View, c["label"], Scope)</legend>
+            }
+            @for (var i = 0; i < rgOptions.Count; i++)
+            {
+                var rgPick = rgOptions[i].Value;
+                <label class="a2ui-choice">
+                    <input type="radio"
+                           name="@_domId"
+                           checked="@(i == rgIndex)"
+                           disabled="@off"
+                           @onchange="() => View.Write(c[ValueKey], Scope, JsonValue.Create(rgPick))" />
+                    <span class="a2ui-choice__body">
+                        <span>@rgOptions[i].Label</span>
+                        @if (rgOptions[i].Description is { } rgDesc)
+                        {
+                            <span class="a2ui-choice__hint">@rgDesc</span>
+                        }
+                    </span>
+                </label>
+            }
+            @if (View.Dirty && rgChecks.Count > 0)
+            {
+                <div class="a2ui-check-message">@rgChecks[0]</div>
+            }
+        </fieldset>
+        break;
+    case "Radio":
+        var radioOption = A2uiProps.Str(c["option"]) ?? "";
+        var radioChecks = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+        var radioOn = string.Equals(A2uiProps.String(View, c[ValueKey], Scope), radioOption, StringComparison.Ordinal);
+        <div class="a2ui-radio-wrap" @attributes="aria">
+            <label class="a2ui-choice">
+                <input type="radio"
+                       checked="@radioOn"
+                       disabled="@off"
+                       @onchange="() => View.Write(c[ValueKey], Scope, JsonValue.Create(radioOption))" />
+                <span>@A2uiProps.String(View, c["label"], Scope)</span>
+            </label>
+            @if (View.Dirty && radioChecks.Count > 0)
+            {
+                <div class="a2ui-check-message">@radioChecks[0]</div>
+            }
+        </div>
+        break;
+    case "SegmentedControl":
+        var segOptions = Options(c);
+        var segIndex = IndexOf(segOptions, A2uiProps.String(View, c[ValueKey], Scope));
+        var segChecks = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+        <fieldset class="a2ui-picker" @attributes="aria">
+            @if (c.ContainsKey("label"))
+            {
+                <legend class="a2ui-picker__label">@A2uiProps.String(View, c["label"], Scope)</legend>
+            }
+            <div class="a2ui-segmented">
+                @for (var i = 0; i < segOptions.Count; i++)
+                {
+                    var segPick = segOptions[i].Value;
+                    <label class="a2ui-segment">
+                        <input type="radio"
+                               name="@_domId"
+                               checked="@(i == segIndex)"
+                               disabled="@off"
+                               @onchange="() => View.Write(c[ValueKey], Scope, JsonValue.Create(segPick))" />
+                        <span>@segOptions[i].Label</span>
+                    </label>
+                }
+            </div>
+            @if (View.Dirty && segChecks.Count > 0)
+            {
+                <div class="a2ui-check-message">@segChecks[0]</div>
+            }
+        </fieldset>
+        break;
+    case "Slider":
+        SliderRange(c, out var sMin, out var sMax, out var sStep);
+        var sValue = Math.Clamp(DysonA2uiBinding.ResolveNumber(c[ValueKey], View.Model, Scope) ?? sMin, sMin, sMax);
+        var sUnit = c.ContainsKey("unit") ? A2uiProps.String(View, c["unit"], Scope) : "";
+        var sChecks = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+        <div class="a2ui-slider" @attributes="aria">
+            <div class="a2ui-slider__head">
+                @if (c.ContainsKey("label"))
+                {
+                    <label for="@_domId">@A2uiProps.String(View, c["label"], Scope)</label>
+                }
+                <output class="a2ui-slider__value" for="@_domId">@(Num(sValue) + sUnit)</output>
+            </div>
+            <input id="@_domId"
+                   type="range"
+                   min="@Num(sMin)"
+                   max="@Num(sMax)"
+                   step="@Num(sStep)"
+                   value="@Num(sValue)"
+                   disabled="@off"
+                   @oninput="e => Slide(c, e)" />
+            @{ var sMarks = Marks(c); }
+            @if (sMarks.Count > 0)
+            {
+                <div class="a2ui-slider__marks">
+                    @foreach (var mark in sMarks)
+                    {
+                        <span>@mark</span>
+                    }
+                </div>
+            }
+            @if (View.Dirty && sChecks.Count > 0)
+            {
+                <div class="a2ui-check-message">@sChecks[0]</div>
+            }
+        </div>
+        break;
+    case "DateTimeInput":
+        var dtType = DateType(c);
+        var dtMin = c.ContainsKey("min") ? IsoText(A2uiProps.String(View, c["min"], Scope), dtType) : "";
+        var dtMax = c.ContainsKey("max") ? IsoText(A2uiProps.String(View, c["max"], Scope), dtType) : "";
+        var dtChecks = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+        var dtValue = IsoText(A2uiProps.String(View, c[ValueKey], Scope), dtType);
+        <div class="field a2ui-field" @attributes="aria">
+            @if (c.ContainsKey("label"))
+            {
+                <label for="@_domId">@A2uiProps.String(View, c["label"], Scope)</label>
+            }
+            <input id="@_domId"
+                   type="@dtType"
+                   min="@(dtMin.Length > 0 ? dtMin : null)"
+                   max="@(dtMax.Length > 0 ? dtMax : null)"
+                   value="@dtValue"
+                   disabled="@off"
+                   @onchange="e => View.Write(c[ValueKey], Scope, JsonValue.Create(e.Value?.ToString() ?? string.Empty))" />
+            @if (View.Dirty && dtChecks.Count > 0)
+            {
+                <div class="a2ui-check-message">@dtChecks[0]</div>
+            }
+        </div>
+        break;
+}
+@if (description is not null)
+{
+    <span id="@($"{_domId}-desc")" class="sr-only">@description</span>
+}
 
 @code {
+    private const string ValueKey = "value";
+    private static readonly string[] IsoFormats =
+        ["yyyy-MM-dd", "yyyy-MM-ddTHH:mm", "yyyy-MM-ddTHH:mm:ss", "HH:mm", "HH:mm:ss"];
+
+    private readonly string _domId = "a2ui-" + Guid.NewGuid().ToString("N");
+
+    private readonly record struct Opt(string Value, string Label, string? Description);
+
     [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
     [Parameter, EditorRequired] public string? Id { get; set; }
     [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
     [Parameter] public string Scope { get; set; } = "";
     [Parameter] public int Depth { get; set; } = 1;
+
+    private static string Num(double value) => value.ToString("0.######", CultureInfo.InvariantCulture);
+
+    private static string FormClass(JsonObject c)
+    {
+        var gap = A2uiProps.GapClass(c);
+        return gap.Length > 0 ? "a2ui-form " + gap : "a2ui-form";
+    }
+
+    private static string Rows(JsonObject c) =>
+        Math.Clamp(A2uiProps.Int(c["rows"]) ?? 3, 2, 12).ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>Failing checks, then (question-bound Pressable) the answer validation message.</summary>
+    private IReadOnlyList<string> ButtonProblems(JsonObject c)
+    {
+        var failed = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+        if (failed.Count > 0)
+            return failed;
+        if (View.Question is { } question && View.Surface.QuestionId == question.Id && Id is not null)
+        {
+            var can = DysonA2uiQuestionBridge.CanSubmit(question, View.Surface, Id, View.Model);
+            if (can.IsError)
+                return [can.Error];
+        }
+
+        return [];
+    }
+
+    /// <summary>Strings or {value, label?, description?}; literal or bound; at most MaxOptions. Never throws.</summary>
+    private List<Opt> Options(JsonObject c)
+    {
+        var list = new List<Opt>();
+        if (DysonA2uiBinding.ResolveValue(c["options"], View.Model, Scope) is not JsonArray options)
+            return list;
+        foreach (var item in options)
+        {
+            if (list.Count >= DysonA2uiProtocol.MaxOptions)
+                break;
+            if (item is JsonObject o)
+            {
+                var value = DysonA2uiBinding.ResolveString(o["value"], View.Model, Scope);
+                var label = o.ContainsKey("label") ? DysonA2uiBinding.ResolveString(o["label"], View.Model, Scope) : value;
+                var hint = o.ContainsKey("description") ? DysonA2uiBinding.ResolveString(o["description"], View.Model, Scope) : "";
+                list.Add(new Opt(value, label.Length > 0 ? label : value, hint.Length > 0 ? hint : null));
+            }
+            else if (A2uiProps.Str(item) is { } text)
+            {
+                list.Add(new Opt(text, text, null));
+            }
+        }
+
+        return list;
+    }
+
+    private static int IndexOf(List<Opt> options, string value) =>
+        options.FindIndex(o => string.Equals(o.Value, value, StringComparison.Ordinal));
+
+    private static string OptionText(Opt option) =>
+        option.Description is { } d ? option.Label + " \u2014 " + d : option.Label;
+
+    /// <summary>Select writes the option's value by index; the option value is never a DOM attribute.</summary>
+    private void PickIndex(JsonObject c, List<Opt> options, ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var index)
+            && index >= 0 && index < options.Count)
+        {
+            View.Write(c[ValueKey], Scope, JsonValue.Create(options[index].Value));
+        }
+    }
+
+    private void SliderRange(JsonObject c, out double min, out double max, out double step)
+    {
+        min = DysonA2uiBinding.ResolveNumber(c["min"], View.Model, Scope) ?? 0;
+        max = DysonA2uiBinding.ResolveNumber(c["max"], View.Model, Scope) ?? 100;
+        if (max <= min)
+            max = min + 1;
+        step = DysonA2uiBinding.ResolveNumber(c["step"], View.Model, Scope) ?? 1;
+        if (step <= 0)
+            step = 1;
+    }
+
+    private void Slide(JsonObject c, ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var d) && double.IsFinite(d))
+            View.Write(c[ValueKey], Scope, JsonValue.Create(d));
+    }
+
+    /// <summary>Mark captions: {value, label?}; the label, else the formatted value. Bound or literal, at most 12.</summary>
+    private List<string> Marks(JsonObject c)
+    {
+        var marks = new List<string>();
+        if (DysonA2uiBinding.ResolveValue(c["marks"], View.Model, Scope) is not JsonArray array)
+            return marks;
+        foreach (var item in array)
+        {
+            if (marks.Count >= 12)
+                break;
+            if (item is not JsonObject o)
+                continue;
+            var label = o.ContainsKey("label") ? DysonA2uiBinding.ResolveString(o["label"], View.Model, Scope) : "";
+            if (label.Length == 0 && DysonA2uiBinding.ResolveNumber(o["value"], View.Model, Scope) is { } v)
+                label = Num(v);
+            if (label.Length > 0)
+                marks.Add(label);
+        }
+
+        return marks;
+    }
+
+    /// <summary>enableDate (default on) and enableTime pick the native input type: a fixed set, never agent text.</summary>
+    private string DateType(JsonObject c)
+    {
+        var date = !c.ContainsKey("enableDate") || DysonA2uiBinding.ResolveBool(c["enableDate"], View.Model, Scope);
+        var time = c.ContainsKey("enableTime") && DysonA2uiBinding.ResolveBool(c["enableTime"], View.Model, Scope);
+        return date && time ? "datetime-local" : time && !date ? "time" : "date";
+    }
+
+    /// <summary>Re-formats an ISO string for the native input type; "" when it does not parse.</summary>
+    private static string IsoText(string iso, string type)
+    {
+        if (iso.Length == 0
+            || !DateTime.TryParseExact(iso, IsoFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        {
+            return "";
+        }
+
+        return type switch
+        {
+            "time" => parsed.ToString("HH:mm", CultureInfo.InvariantCulture),
+            "datetime-local" => parsed.ToString("yyyy-MM-dd'T'HH:mm", CultureInfo.InvariantCulture),
+            _ => parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+        };
+    }
 }

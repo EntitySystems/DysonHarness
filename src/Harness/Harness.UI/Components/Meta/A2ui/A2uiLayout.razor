@@ -1,13 +1,290 @@
 @namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
 @using System.Text.Json.Nodes
 @using DysonHarness
 
-<p class="a2ui-text a2ui-text--caption">@A2uiProps.Str(Component["component"]): not built</p>
+@* Layout group: Box, Grid, GridItem, Flow, FlowItem, Carousel, CarouselItem, Spacer, Tabs, Section, Accordion.
+   Render only: every resolve and expansion is DysonA2uiBinding. Text is Blazor-escaped (never MarkupString).
+   No agent string reaches href/src/style/class/event attributes: enums map to fixed classes, and the few numbers
+   that reach style/custom properties are validated ints that this file clamps and formats invariant. *@
+@{
+    var aria = A2uiProps.Aria(View, Component, Scope, _domId, out var description);
+}
+@switch (A2uiProps.Str(Component["component"]))
+{
+    case "Box":
+        <div class="@BoxClass()" @attributes="aria">@Kids(Component, true)</div>
+        break;
+    case "Grid":
+    case "Flow":
+        @* the host is the container the narrow-width query measures (a grid cannot query itself) *@
+        <div class="a2ui-grid-host">
+            <div class="@GridClass()" style="@GridStyle()" @attributes="aria">@Kids(Component)</div>
+        </div>
+        break;
+    case "GridItem":
+    case "FlowItem":
+        <div class="a2ui-stack a2ui-griditem" style="@ItemStyle()" @attributes="aria">@Body(Component)</div>
+        break;
+    case "CarouselItem":
+        <div class="a2ui-stack" @attributes="aria">@Body(Component)</div>
+        break;
+    case "Spacer":
+        <div class="a2ui-spacer" style="@SpacerStyle()" aria-hidden="true"></div>
+        break;
+    case "Carousel":
+        var slides = A2uiProps.Children(View, Component, Scope);
+        var visible = Math.Clamp(A2uiProps.Int(Component["visibleItems"]) ?? 1, 1, 6);
+        var lastStart = Math.Max(0, slides.Count - visible);
+        var first = Current(ActiveIndexKey, lastStart);
+        <div class="a2ui-carousel" role="group" aria-roledescription="carousel" @attributes="aria">
+            <div class="a2ui-carousel__track @A2uiProps.GapClass(Component)"
+                 style="--a2ui-visible: @visible.ToString(CultureInfo.InvariantCulture)">
+                @for (var s = first; s < Math.Min(first + visible, slides.Count); s++)
+                {
+                    <div class="a2ui-carousel__slot">
+                        <A2uiNode View="View" Id="@slides[s].ComponentId" Scope="@slides[s].Scope" Depth="Depth + 1" />
+                    </div>
+                }
+            </div>
+            @if (slides.Count > visible)
+            {
+                <div class="a2ui-carousel__nav">
+                    <button type="button" class="btn btn-ghost a2ui-carousel__btn" aria-label="Previous"
+                            disabled="@(first <= 0)"
+                            @onclick="() => SetIndex(ActiveIndexKey, first - 1)">&lsaquo;</button>
+                    <span class="a2ui-carousel__status" aria-live="polite">@(first + 1)&ndash;@(Math.Min(first + visible, slides.Count)) of @slides.Count</span>
+                    <button type="button" class="btn btn-ghost a2ui-carousel__btn" aria-label="Next"
+                            disabled="@(first >= lastStart)"
+                            @onclick="() => SetIndex(ActiveIndexKey, first + 1)">&rsaquo;</button>
+                </div>
+            }
+        </div>
+        break;
+    case "Tabs":
+        var tabs = ListOf("tabs", DysonA2uiProtocol.MaxTabs);
+        var selectedTab = Current(SelectedIndexKey, tabs.Count - 1);
+        <div class="a2ui-tabs" @attributes="aria">
+            <div class="a2ui-tabs__list" role="tablist">
+                @for (var t = 0; t < tabs.Count; t++)
+                {
+                    var tabIndex = t;
+                    <button type="button"
+                            role="tab"
+                            id="@($"{_domId}-tab-{t}")"
+                            class="a2ui-tab @(t == selectedTab ? "a2ui-tab--active" : null)"
+                            aria-selected="@(t == selectedTab ? "true" : "false")"
+                            aria-controls="@($"{_domId}-panel")"
+                            @onclick="() => SetIndex(SelectedIndexKey, tabIndex)">@A2uiProps.String(View, tabs[t]["title"], Scope)</button>
+                }
+            </div>
+            @if (tabs.Count > 0)
+            {
+                <div class="a2ui-tabs__panel" role="tabpanel" id="@($"{_domId}-panel")" aria-labelledby="@($"{_domId}-tab-{selectedTab}")">
+                    <A2uiNode View="View" Id="@A2uiProps.Str(tabs[selectedTab]["child"])" Scope="@Scope" Depth="Depth + 1" />
+                </div>
+            }
+        </div>
+        break;
+    case "Section":
+        var eyebrow = Component.ContainsKey("eyebrow") ? A2uiProps.String(View, Component["eyebrow"], Scope) : "";
+        var sectionText = Component.ContainsKey("description") ? A2uiProps.String(View, Component["description"], Scope) : "";
+        <section class="a2ui-section" aria-labelledby="@($"{_domId}-title")" @attributes="aria">
+            <header class="a2ui-section__head">
+                @if (eyebrow.Length > 0)
+                {
+                    <div class="a2ui-section__eyebrow">@eyebrow</div>
+                }
+                <h3 id="@($"{_domId}-title")" class="a2ui-section__title">@A2uiProps.String(View, Component["title"], Scope)</h3>
+                @if (sectionText.Length > 0)
+                {
+                    <p class="a2ui-section__desc">@sectionText</p>
+                }
+            </header>
+            <div class="a2ui-section__body @A2uiProps.GapClass(Component)">@Kids(Component)</div>
+        </section>
+        break;
+    case "Accordion":
+        var accordionItems = ListOf("items", AccordionMaxItems);
+        var multiple = DysonA2uiBinding.ResolveBool(Component["multiple"], View.Model, Scope);
+        <div class="a2ui-accordion" @attributes="aria">
+            @foreach (var item in accordionItems)
+            {
+                @* multiple:false -> one shared generated name = native exclusive accordion *@
+                <details class="a2ui-accordion__item" name="@(multiple ? null : _domId)">
+                    <summary class="a2ui-accordion__summary">@A2uiProps.String(View, item["title"], Scope)</summary>
+                    <div class="a2ui-accordion__body">
+                        @if (item.ContainsKey("text"))
+                        {
+                            <p class="a2ui-accordion__text">@A2uiProps.String(View, item["text"], Scope)</p>
+                        }
+                        @if (A2uiProps.Str(item["child"]) is { } accordionChild)
+                        {
+                            <A2uiNode View="View" Id="@accordionChild" Scope="@Scope" Depth="Depth + 1" />
+                        }
+                    </div>
+                </details>
+            }
+        </div>
+        break;
+}
+@if (description is not null)
+{
+    <span id="@($"{_domId}-desc")" class="a2ui-sr-only">@description</span>
+}
 
 @code {
+    private const string ActiveIndexKey = "activeIndex";
+    private const string SelectedIndexKey = "selectedIndex";
+    private const int AccordionMaxItems = 50;
+
+    private readonly string _domId = "a2ui-" + Guid.NewGuid().ToString("N");
+    private readonly Dictionary<string, int> _local = new(StringComparer.Ordinal);
+    private int _revision = -1;
+
     [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
     [Parameter, EditorRequired] public string? Id { get; set; }
     [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+
+    /// <summary>Absolute pointer of the current template item; "" at the surface root.</summary>
     [Parameter] public string Scope { get; set; } = "";
     [Parameter] public int Depth { get; set; } = 1;
+
+    protected override void OnParametersSet()
+    {
+        // An agent update (new revision) wins over local tab/carousel state.
+        if (View.Surface.Revision != _revision)
+        {
+            _revision = View.Surface.Revision;
+            _local.Clear();
+        }
+    }
+
+    /// <summary>Children of <paramref name="c"/> (list or template). Box children may carry a weight.</summary>
+    private RenderFragment Kids(JsonObject c, bool weighted = false) => @<text>
+        @foreach (var (childId, childScope) in A2uiProps.Children(View, c, Scope))
+        {
+            if (weighted && A2uiProps.Weight(View, childId) is { } weight)
+            {
+                <div class="a2ui-weighted" style="flex: @weight 1 0">
+                    <A2uiNode View="View" Id="@childId" Scope="@childScope" Depth="Depth + 1" />
+                </div>
+            }
+            else
+            {
+                <A2uiNode View="View" Id="@childId" Scope="@childScope" Depth="Depth + 1" />
+            }
+        }
+    </text>;
+
+    /// <summary>Item body: <c>children</c> when present, else the single <c>child</c>.</summary>
+    private RenderFragment Body(JsonObject c) => @<text>
+        @if (c["children"] is not null)
+        {
+            @Kids(c)
+        }
+        else if (A2uiProps.Str(c["child"]) is { } only)
+        {
+            <A2uiNode View="View" Id="@only" Scope="@Scope" Depth="Depth + 1" />
+        }
+    </text>;
+
+    /// <summary>Literal or bound list of objects under <paramref name="key"/>; wrong-typed items skipped, capped.</summary>
+    private List<JsonObject> ListOf(string key, int max)
+    {
+        var list = new List<JsonObject>();
+        var source = Component[key] as JsonArray
+                     ?? DysonA2uiBinding.ResolveValue(Component[key], View.Model, Scope) as JsonArray;
+        if (source is null)
+            return list;
+        foreach (var item in source)
+        {
+            if (item is JsonObject o && list.Count < max)
+                list.Add(o);
+        }
+
+        return list;
+    }
+
+    /// <summary>Local state first (it already mirrors the write-back), else the literal / bound prop; clamped 0..max.</summary>
+    private int Current(string key, int max)
+    {
+        var limit = Math.Max(0, max);
+        if (_local.TryGetValue(key, out var local))
+            return Math.Clamp(local, 0, limit);
+        var fromProp = A2uiProps.Number(View, Component[key], Scope);
+        return fromProp is { } d ? (int)Math.Clamp(Math.Floor(d), 0, limit) : 0;
+    }
+
+    private void SetIndex(string key, int index)
+    {
+        index = Math.Max(0, index);
+        _local[key] = index;
+        View.Write(Component[key], Scope, JsonValue.Create(index));
+    }
+
+    private string BoxClass()
+    {
+        var row = A2uiProps.Str(Component["direction"]) == "row";
+        var wrap = DysonA2uiBinding.ResolveBool(Component["wrap"], View.Model, Scope);
+        return Join(row ? "a2ui-box a2ui-box--row" : "a2ui-box a2ui-box--col", wrap ? "a2ui-box--wrap" : "",
+            JustifyClass(), AlignClass(), A2uiProps.GapClass(Component), A2uiProps.PadClass(Component));
+    }
+
+    private string GridClass()
+    {
+        var flow = A2uiProps.Str(Component["component"]) == "Flow";
+        var fixedColumns = !flow && A2uiProps.Int(Component["columns"]) is not null;
+        return Join("a2ui-grid", flow ? "a2ui-grid--flow" : "", fixedColumns ? "a2ui-grid--cols" : "a2ui-grid--auto",
+            A2uiProps.GapClass(Component), A2uiProps.PadClass(Component));
+    }
+
+    /// <summary>Only numbers we clamp and format invariant reach the style, as custom properties the CSS consumes.</summary>
+    private string GridStyle()
+    {
+        var flow = A2uiProps.Str(Component["component"]) == "Flow";
+        if (!flow && A2uiProps.Int(Component["columns"]) is { } columns)
+            return "--a2ui-cols: " + Math.Clamp(columns, 1, DysonA2uiProtocol.MaxGridColumns).ToString(CultureInfo.InvariantCulture);
+        var min = Math.Clamp(A2uiProps.Int(Component["minChildWidth"]) ?? 160, 40, 600);
+        return "--a2ui-min: " + min.ToString(CultureInfo.InvariantCulture) + "px";
+    }
+
+    private string? ItemStyle()
+    {
+        var parts = new List<string>(2);
+        if (A2uiProps.Int(Component["span"]) is { } span)
+            parts.Add("--a2ui-span: " + Math.Clamp(span, 1, 12).ToString(CultureInfo.InvariantCulture));
+        if (A2uiProps.Int(Component["rowSpan"]) is { } rowSpan)
+            parts.Add("--a2ui-rowspan: " + Math.Clamp(rowSpan, 1, 12).ToString(CultureInfo.InvariantCulture));
+        return parts.Count == 0 ? null : string.Join("; ", parts);
+    }
+
+    private string? SpacerStyle() =>
+        A2uiProps.Int(Component["size"]) is { } size
+            ? "--a2ui-space: " + (Math.Clamp(size, 1, 12) * 4).ToString(CultureInfo.InvariantCulture) + "px"
+            : null;
+
+    private string JustifyClass() => A2uiProps.Str(Component["justify"]) switch
+    {
+        "start" => "a2ui-justify--start",
+        "center" => "a2ui-justify--center",
+        "end" => "a2ui-justify--end",
+        "spaceAround" => "a2ui-justify--around",
+        "spaceBetween" => "a2ui-justify--between",
+        "spaceEvenly" => "a2ui-justify--evenly",
+        "stretch" => "a2ui-justify--stretch",
+        _ => "",
+    };
+
+    private string AlignClass() => A2uiProps.Str(Component["align"]) switch
+    {
+        "start" => "a2ui-align--start",
+        "center" => "a2ui-align--center",
+        "end" => "a2ui-align--end",
+        "stretch" => "a2ui-align--stretch",
+        _ => "",
+    };
+
+    private static string Join(params string[] classes) =>
+        string.Join(' ', classes.Where(c => c.Length > 0));
 }

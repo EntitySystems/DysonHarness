@@ -1,0 +1,431 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
+@using System.Text.Json.Nodes
+@using DysonHarness
+
+@* Table family: Table, TableSection, TableRow, TableCell, DataTable, ComparisonTable. Render only.
+   Sort/filter/page is DysonA2uiTable (O(n), synchronous). Bound rows are validated at render: wrong-typed rows and
+   cells are skipped, counts capped, nothing throws. Text is Blazor-escaped; align/format enums map to fixed classes. *@
+@switch (_name)
+{
+    case "Table":
+        <div class="a2ui-table-wrap" @attributes="_aria">
+            <div class="a2ui-table-scroll">
+                <table class="a2ui-table">
+                    @if (Txt("caption") is { Length: > 0 } caption)
+                    {
+                        <caption class="a2ui-sr-only">@caption</caption>
+                    }
+                    @if (Component["children"] is not null)
+                    {
+                        var kids = A2uiProps.Children(View, Component, Scope);
+                        <CascadingValue Name="A2uiTableHeader" Value="false">
+                            @foreach (var (kidId, kidScope) in kids)
+                            {
+                                <A2uiNode View="View" Id="@kidId" Scope="@kidScope" Depth="Depth + 1" />
+                            }
+                        </CascadingValue>
+                        if (kids.Count == 0)
+                        {
+                            <tbody><tr><td class="a2ui-table__empty">@EmptyLabel()</td></tr></tbody>
+                        }
+                    }
+                    else
+                    {
+                        var tableCols = TableColumns();
+                        var tableRows = MatrixRows();
+                        if (tableCols.Count > 0)
+                        {
+                            <thead>
+                                <tr>
+                                    @foreach (var col in tableCols)
+                                    {
+                                        <th scope="col" class="@col.Align">
+                                            @if (col.ComponentId is { } headId)
+                                            {
+                                                <A2uiNode View="View" Id="@headId" Scope="@Scope" Depth="Depth + 1" />
+                                            }
+                                            else
+                                            {
+                                                @col.Label
+                                            }
+                                        </th>
+                                    }
+                                </tr>
+                            </thead>
+                        }
+                        <tbody>
+                            @if (tableRows.Count == 0)
+                            {
+                                <tr><td class="a2ui-table__empty" colspan="@Span(tableCols.Count)">@EmptyLabel()</td></tr>
+                            }
+                            @foreach (var row in tableRows)
+                            {
+                                <tr>
+                                    @for (var c = 0; c < Math.Min(row.Count, DysonA2uiProtocol.MaxTableColumns); c++)
+                                    {
+                                        var cell = row[c];
+                                        <td class="@(c < tableCols.Count ? tableCols[c].Align : "")">
+                                            @if (CellComponent(cell) is { } cellId)
+                                            {
+                                                <A2uiNode View="View" Id="@cellId" Scope="@Scope" Depth="Depth + 1" />
+                                            }
+                                            else
+                                            {
+                                                @CellText(cell)
+                                            }
+                                        </td>
+                                    }
+                                </tr>
+                            }
+                        </tbody>
+                    }
+                </table>
+            </div>
+            @if (_description is not null)
+            {
+                <span id="@($"{_domId}-desc")" class="a2ui-sr-only">@_description</span>
+            }
+        </div>
+        break;
+    case "TableSection":
+        var sectionHeader = DysonA2uiBinding.ResolveBool(Component["header"], View.Model, Scope);
+        <CascadingValue Name="A2uiTableHeader" Value="sectionHeader">
+            @if (sectionHeader)
+            {
+                <thead>
+                    @foreach (var (secId, secScope) in A2uiProps.Children(View, Component, Scope))
+                    {
+                        <A2uiNode View="View" Id="@secId" Scope="@secScope" Depth="Depth + 1" />
+                    }
+                </thead>
+            }
+            else
+            {
+                <tbody>
+                    @foreach (var (secId, secScope) in A2uiProps.Children(View, Component, Scope))
+                    {
+                        <A2uiNode View="View" Id="@secId" Scope="@secScope" Depth="Depth + 1" />
+                    }
+                </tbody>
+            }
+        </CascadingValue>
+        break;
+    case "TableRow":
+        var rowHeader = InHeader || DysonA2uiBinding.ResolveBool(Component["header"], View.Model, Scope);
+        <CascadingValue Name="A2uiTableHeader" Value="rowHeader">
+            <tr>
+                @if (Txt("label") is { Length: > 0 } rowLabel)
+                {
+                    <th scope="@(rowHeader ? "col" : "row")">@rowLabel</th>
+                }
+                @foreach (var (rowId, rowScope) in A2uiProps.Children(View, Component, Scope))
+                {
+                    <A2uiNode View="View" Id="@rowId" Scope="@rowScope" Depth="Depth + 1" />
+                }
+            </tr>
+        </CascadingValue>
+        break;
+    case "TableCell":
+        var colSpan = Span(A2uiProps.Int(Component["colSpan"]));
+        var rowSpan = Span(A2uiProps.Int(Component["rowSpan"]));
+        var cellInner = A2uiProps.Str(Component["child"]);
+        if (InHeader)
+        {
+            <th scope="col" colspan="@colSpan" rowspan="@rowSpan">
+                @if (cellInner is not null)
+                {
+                    <A2uiNode View="View" Id="@cellInner" Scope="@Scope" Depth="Depth + 1" />
+                }
+                else
+                {
+                    @Txt("text")
+                }
+            </th>
+        }
+        else
+        {
+            <td colspan="@colSpan" rowspan="@rowSpan">
+                @if (cellInner is not null)
+                {
+                    <A2uiNode View="View" Id="@cellInner" Scope="@Scope" Depth="Depth + 1" />
+                }
+                else
+                {
+                    @Txt("text")
+                }
+            </td>
+        }
+        break;
+    case "DataTable":
+        var dataCols = DataColumns();
+        var dataRows = DataCells(dataCols);
+        var page = DysonA2uiTable.Query(dataRows, _query, _sort < dataCols.Count ? _sort : -1, _desc, _page, PageSize());
+        <div class="a2ui-table-wrap" @attributes="_aria">
+            @if (Txt("title") is { Length: > 0 } dataTitle)
+            {
+                <div class="a2ui-title">@dataTitle</div>
+            }
+            @if (DysonA2uiBinding.ResolveBool(Component["searchable"], View.Model, Scope))
+            {
+                <input type="search" class="a2ui-table__search" placeholder="Filter rows" aria-label="Filter rows" value="@_query" @oninput="OnSearch" />
+            }
+            <div class="a2ui-table-scroll">
+                <table class="a2ui-table">
+                    <thead>
+                        <tr>
+                            @for (var i = 0; i < dataCols.Count; i++)
+                            {
+                                var index = i;
+                                <th scope="col" class="@dataCols[i].Align" aria-sort="@SortState(index)">
+                                    <button type="button" class="a2ui-th-btn" @onclick="() => ToggleSort(index)">
+                                        <span>@dataCols[i].Label</span>
+                                        <span class="a2ui-th-btn__mark" aria-hidden="true">@SortMark(index)</span>
+                                    </button>
+                                </th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (page.Rows.Count == 0)
+                        {
+                            <tr><td class="a2ui-table__empty" colspan="@Span(dataCols.Count)">@(_query.Length > 0 ? "No matching rows" : EmptyLabel())</td></tr>
+                        }
+                        @foreach (var rowIndex in page.Rows)
+                        {
+                            <tr>
+                                @for (var c = 0; c < dataCols.Count; c++)
+                                {
+                                    <td class="@dataCols[c].Align">@dataRows[rowIndex][c].Text</td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (page.PageCount > 1)
+            {
+                <div class="a2ui-pager">
+                    <button type="button" class="btn a2ui-pager__btn" disabled="@(page.Page == 0)" @onclick="() => _page = page.Page - 1">Previous</button>
+                    <span class="a2ui-pager__text">Page @(page.Page + 1) of @page.PageCount · @page.Matches rows</span>
+                    <button type="button" class="btn a2ui-pager__btn" disabled="@(page.Page >= page.PageCount - 1)" @onclick="() => _page = page.Page + 1">Next</button>
+                </div>
+            }
+            @if (_description is not null)
+            {
+                <span id="@($"{_domId}-desc")" class="a2ui-sr-only">@_description</span>
+            }
+        </div>
+        break;
+    case "ComparisonTable":
+        var options = DysonA2uiBinding.ResolveStringList(Component["options"], View.Model, Scope).Take(8).ToList();
+        var highlight = A2uiProps.Int(Component["highlight"]) is { } h && h >= 0 && h < options.Count ? h : -1;
+        <div class="a2ui-table-wrap" @attributes="_aria">
+            @if (Txt("title") is { Length: > 0 } compareTitle)
+            {
+                <div class="a2ui-title">@compareTitle</div>
+            }
+            <div class="a2ui-table-scroll">
+                <table class="a2ui-table a2ui-table--compare">
+                    <thead>
+                        <tr>
+                            <th scope="col"><span class="a2ui-sr-only">Feature</span></th>
+                            @for (var i = 0; i < options.Count; i++)
+                            {
+                                <th scope="col" class="@(i == highlight ? "a2ui-col--highlight" : "")">@options[i]</th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var feature in CompareRows())
+                        {
+                            var values = DysonA2uiBinding.ResolveValue(feature["values"], View.Model, Scope) as JsonArray;
+                            <tr>
+                                <th scope="row">@Show(feature["feature"])</th>
+                                @for (var i = 0; i < options.Count; i++)
+                                {
+                                    <td class="@(i == highlight ? "a2ui-col--highlight" : "")">
+                                        @{ var value = values is not null && i < values.Count ? values[i] : null; }
+                                        @if (value is JsonValue { } flag && flag.GetValueKind() == System.Text.Json.JsonValueKind.True)
+                                        {
+                                            <span class="a2ui-yes" aria-hidden="true">✓</span>
+                                            <span class="a2ui-sr-only">Yes</span>
+                                        }
+                                        else if (value is JsonValue { } no && no.GetValueKind() == System.Text.Json.JsonValueKind.False)
+                                        {
+                                            <span class="a2ui-no" aria-hidden="true">✕</span>
+                                            <span class="a2ui-sr-only">No</span>
+                                        }
+                                        else
+                                        {
+                                            @DysonA2uiTable.Display(value, null).Text
+                                        }
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (_description is not null)
+            {
+                <span id="@($"{_domId}-desc")" class="a2ui-sr-only">@_description</span>
+            }
+        </div>
+        break;
+}
+
+@code {
+    private sealed record Col(string Label, string Align, string? ComponentId, string Key, string? Format);
+
+    private readonly string _domId = "a2ui-" + Guid.NewGuid().ToString("N");
+    private string? _name;
+    private string? _description;
+    private Dictionary<string, object> _aria = new();
+    private string _query = "";
+    private int _sort = -1;
+    private bool _desc;
+    private int _page;
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public string? Id { get; set; }
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public int Depth { get; set; } = 1;
+
+    /// <summary>True under a header TableSection/TableRow: cells render as th.</summary>
+    [CascadingParameter(Name = "A2uiTableHeader")] public bool InHeader { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        _name = A2uiProps.Str(Component["component"]);
+        _description = null;
+        _aria = _name is "Table" or "DataTable" or "ComparisonTable"
+            ? A2uiProps.Aria(View, Component, Scope, _domId, out _description)
+            : new Dictionary<string, object>();
+    }
+
+    private string Txt(string key) => A2uiProps.String(View, Component[key], Scope);
+
+    private string Show(JsonNode? node) =>
+        DysonA2uiTable.Display(DysonA2uiBinding.ResolveValue(node, View.Model, Scope), null).Text ?? "";
+
+    private string EmptyLabel() => Txt("emptyLabel") is { Length: > 0 } label ? label : "No data";
+
+    /// <summary>colspan/rowspan attribute number: validated int 1..20 or 1; formatted by us.</summary>
+    private static string Span(int? n) => Math.Clamp(n ?? 1, 1, 20).ToString(CultureInfo.InvariantCulture);
+
+    private static string AlignClass(string align) => align switch
+    {
+        "center" => "a2ui-cell--center",
+        "end" or "right" => "a2ui-cell--end",
+        "start" or "left" => "a2ui-cell--start",
+        _ => "",
+    };
+
+    private IEnumerable<JsonNode?> Entries(JsonNode? node, int max) =>
+        DysonA2uiBinding.ResolveValue(node, View.Model, Scope) is JsonArray array ? array.Take(max) : Enumerable.Empty<JsonNode?>();
+
+    /// <summary>Table data mode: columns are strings or {label, align?, componentId?}.</summary>
+    private List<Col> TableColumns()
+    {
+        var list = new List<Col>();
+        foreach (var entry in Entries(Component["columns"], DysonA2uiProtocol.MaxTableColumns))
+        {
+            if (entry is JsonObject o)
+                list.Add(new(Show(o["label"]), AlignClass(Show(o["align"])), A2uiProps.Str(o["componentId"]), "", null));
+            else
+                list.Add(new(DysonA2uiTable.Display(entry, null).Text ?? "", "", null, "", null));
+        }
+
+        return list;
+    }
+
+    /// <summary>Table data mode: array rows only, wrong-typed rows skipped, rows and total cells capped.</summary>
+    private List<List<JsonNode?>> MatrixRows()
+    {
+        var rows = new List<List<JsonNode?>>();
+        var cells = 0;
+        foreach (var entry in Entries(Component["rows"], DysonA2uiProtocol.MaxTableRows))
+        {
+            if (entry is not JsonArray row)
+                continue;
+            var take = row.Take(DysonA2uiProtocol.MaxTableColumns).ToList();
+            if ((cells += take.Count) > DysonA2uiProtocol.MaxTableCells)
+                break;
+            rows.Add(take);
+        }
+
+        return rows;
+    }
+
+    private static string? CellComponent(JsonNode? cell) => cell is JsonObject o ? A2uiProps.Str(o["componentId"]) : null;
+
+    private string CellText(JsonNode? cell) =>
+        DysonA2uiTable.Display(DysonA2uiBinding.ResolveValue(cell, View.Model, Scope), null).Text ?? "";
+
+    private List<Col> DataColumns()
+    {
+        var list = new List<Col>();
+        foreach (var entry in Entries(Component["columns"], DysonA2uiProtocol.MaxTableColumns))
+        {
+            if (entry is not JsonObject o)
+                continue;
+            var format = Show(o["format"]);
+            var align = Show(o["align"]);
+            if (align.Length == 0 && format is "number" or "currency" or "percent" or "compact")
+                align = "end";
+            list.Add(new(Show(o["label"]), AlignClass(align), null, A2uiProps.Str(o["key"]) ?? "", format));
+        }
+
+        return list;
+    }
+
+    /// <summary>Rows as cells per column key; non-object rows skipped, capped at MaxTableRows.</summary>
+    private List<IReadOnlyList<DysonA2uiCell>> DataCells(List<Col> cols)
+    {
+        var rows = new List<IReadOnlyList<DysonA2uiCell>>();
+        foreach (var entry in Entries(Component["rows"], DysonA2uiProtocol.MaxTableRows))
+        {
+            if (entry is not JsonObject row)
+                continue;
+            var cells = new DysonA2uiCell[cols.Count];
+            for (var c = 0; c < cols.Count; c++)
+                cells[c] = DysonA2uiTable.Display(cols[c].Key.Length > 0 ? row[cols[c].Key] : null, cols[c].Format);
+            rows.Add(cells);
+        }
+
+        return rows;
+    }
+
+    private IEnumerable<JsonObject> CompareRows() =>
+        Entries(Component["rows"], 50).OfType<JsonObject>();
+
+    private int PageSize() => A2uiProps.Int(Component["pageSize"]) is { } n ? Math.Clamp(n, 1, 100) : 0;
+
+    private void OnSearch(ChangeEventArgs e)
+    {
+        var text = e.Value?.ToString() ?? "";
+        _query = text.Length > 100 ? text[..100] : text;
+        _page = 0;
+    }
+
+    private void ToggleSort(int column)
+    {
+        if (_sort == column)
+        {
+            _desc = !_desc;
+        }
+        else
+        {
+            _sort = column;
+            _desc = false;
+        }
+
+        _page = 0;
+    }
+
+    private string SortState(int column) => _sort != column ? "none" : _desc ? "descending" : "ascending";
+
+    private string SortMark(int column) => _sort != column ? "" : _desc ? "▼" : "▲";
+}

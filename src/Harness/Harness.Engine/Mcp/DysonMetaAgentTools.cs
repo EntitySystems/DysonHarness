@@ -54,6 +54,7 @@ public static class DysonMetaAgentTools
         "GetOpenRulesConfig",
         "ListMetaAgentDrones",
         "ListNotes",
+        "ListPipelineRuns",
         "ListPlans",
         "ListSecureDataKeys",
         "ListTodos",
@@ -546,6 +547,7 @@ public static class DysonMetaAgentTools
                 "PostConversationMessage actions are only for a plain message with no surface. " +
                 "JSON only: no markdown, HTML, or code fences. " +
                 "Kit: Text, Row, Column, List, Card, Divider, Button, TextField, CheckBox, ChoicePicker; Dyson catalog: ActionButton, QuestionSlot. " +
+                "Call ListPipelineRuns to get run and job ids for PipelineRun. " +
                 "Reuse a surfaceId to update it. " +
                 "The dyson-a2ui skill has the format and examples.",
             InputSchemaJson = """
@@ -869,6 +871,24 @@ public static class DysonMetaAgentTools
                     "reason": { "type": "string", "description": "Why this plan is being deleted." }
                   },
                   "required": ["planId", "reason"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ListPipelineRuns",
+            Description =
+                "Lists the latest 20 GitHub Actions runs for this work directory (id, workflow, title, branch, state, elapsed, htmlUrl). " +
+                "includeJobs adds each run's jobs (id, name, state). Use the ids with RenderA2ui PipelineRun. " +
+                "Errors name the cause: no repository, gh missing, not signed in, rate limited.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "includeJobs": { "type": "boolean", "description": "Also list each run's jobs (id, name, state, elapsed). Default false." }
+                  }
                 }
                 """,
         };
