@@ -67,6 +67,20 @@ public sealed partial class DysonWorkspaceToolExecutor
                 message);
         }
 
+        // LocalVideo paths follow open_file: an escaping path fails here; missing/unsupported files are card text.
+        foreach (var (pointer, path) in DysonA2uiLocalVideo.PathPointers(parsedMessages.Value))
+        {
+            var resolved = await DysonA2uiLocalVideo.ResolveRelativeAsync(path, WorkRoot, cancellationToken).ConfigureAwait(false);
+            if (resolved.IsError)
+            {
+                return A2uiError(
+                    call,
+                    new DysonA2uiError(DysonA2uiProtocol.ValidationFailed, surfaceId, pointer, resolved.Error),
+                    questionId,
+                    message);
+            }
+        }
+
         var applied = _session.TryApplyA2ui(parsedMessages.Value, questionId, message);
         if (applied.IsError)
             return A2uiError(call, applied.Error, questionId, message);

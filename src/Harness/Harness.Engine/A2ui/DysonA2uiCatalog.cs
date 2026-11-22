@@ -121,6 +121,9 @@ public static class DysonA2uiCatalog
             ["CheckBox"] = Kit(true,
                 ("label", new(DysonA2uiPropKind.DynamicString, Required: true)),
                 ("value", new(DysonA2uiPropKind.DynamicBoolean, Required: true))),
+            [DysonA2uiLocalVideo.ComponentName] = Dyson(
+                ("path", new(DysonA2uiPropKind.Label, Required: true)),
+                ("title", new(DysonA2uiPropKind.DynamicString))),
             ["ChoicePicker"] = Kit(true,
                 ("options", new(DysonA2uiPropKind.Options, Required: true)),
                 ("value", new(DysonA2uiPropKind.DynamicStringList, Required: true)),

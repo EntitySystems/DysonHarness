@@ -24,7 +24,7 @@ description: >-
 - Stable UAX#31 `surfaceId` (e.g. `deploy_form`; no `dyson_` prefix).
 - `createSurface {surfaceId, catalogId?, components, dataModel?}` once; exactly one `"id":"root"`, every child id must exist.
 - Then `updateComponents {surfaceId, components}` (same id replaces) / `updateDataModel {surfaceId, path?, value}` (RFC 6901, default `/`; `null` deletes). Re-create is `INTEGRITY_ERROR`; `deleteSurface {surfaceId}` drops it.
-- `ActionButton` / `QuestionSlot` need the Dyson catalog: surface `catalogId` or component `"@catalogId"` = `a2ui://dyson/catalogs/v1/catalog.json`. Otherwise omit `catalogId` (basic). In a later `updateComponents`, put `"@catalogId"` on each Dyson component itself (the surface `catalogId` is not carried over).
+- `ActionButton` / `QuestionSlot` / `LocalVideo` need the Dyson catalog: surface `catalogId` or component `"@catalogId"` = `a2ui://dyson/catalogs/v1/catalog.json`. Otherwise omit `catalogId` (basic). In a later `updateComponents`, put `"@catalogId"` on each Dyson component itself (the surface `catalogId` is not carried over).
 
 ## 4. Kit
 
@@ -41,6 +41,7 @@ description: >-
 | `ChoicePicker` | **`options`** `[{label, value}]`, **`value`** (string list); `label`; `variant` mutuallyExclusive/multipleSelection; `displayStyle` checkbox/chips; `@checks` |
 | `ActionButton` (Dyson) | **`label`**, **`func`** (literals) |
 | `QuestionSlot` (Dyson) | **`questionId`** (literal Guid) |
+| `LocalVideo` (Dyson) | **`path`** (literal, work-relative like `open_file:`); `title` (default: file name) |
 
 `weight` only on direct children of Row/Column; `@accessibility` on any component. Not available: Tabs, Modal, Image, Icon, Video, AudioPlayer, Slider, DateTimeInput, `filterable`, `functionCall`, `sendDataModel`, `metadata`.
 
@@ -81,6 +82,14 @@ The host draws every question card; rebuild it only for a different form (sectio
 ```
 
 `questionId` is the literal id (no `@path`), one embed per question. Unknown, closed or SecureData ids and duplicates (same surface or another) are `VALIDATION_FAILED`. The standalone card hides while embedded.
+
+## 6b2. Local video (LocalVideo)
+
+A card for a video file in the work directory: title, first-frame thumbnail, duration pill. A click opens the file viewer's video player. Formats are the file viewer's (`mp4`, `m4v`, `webm`, `mov`, `mkv`). Not for URLs, YouTube or Vimeo. A rooted or `..` path is `VALIDATION_FAILED`; a missing or unsupported file renders as card text.
+
+```json
+{"id":"demo","component":"LocalVideo","@catalogId":"a2ui://dyson/catalogs/v1/catalog.json","path":"media/demo.mp4","title":"Login flow demo"}
+```
 
 ## 6c. Actions (ActionButton)
 

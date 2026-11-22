@@ -545,7 +545,7 @@ public static class DysonMetaAgentTools
                 "When you use a surface, put the actions in the surface as ActionButton components (func open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_url:{url}); " +
                 "PostConversationMessage actions are only for a plain message with no surface. " +
                 "JSON only: no markdown, HTML, or code fences. " +
-                "Kit: Text, Row, Column, List, Card, Divider, Button, TextField, CheckBox, ChoicePicker; Dyson catalog: ActionButton, QuestionSlot. " +
+                "Kit: Text, Row, Column, List, Card, Divider, Button, TextField, CheckBox, ChoicePicker; Dyson catalog: ActionButton, QuestionSlot, LocalVideo (work-relative video file card). " +
                 "Reuse a surfaceId to update it. " +
                 "The dyson-a2ui skill has the format and examples.",
             InputSchemaJson = """

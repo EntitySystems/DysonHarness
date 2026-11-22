@@ -48,6 +48,9 @@
         case "Divider":
             <hr class="a2ui-divider @(Str(c["axis"]) == "vertical" ? "a2ui-divider--vertical" : null)" @attributes="aria" />
             break;
+        case DysonA2uiLocalVideo.ComponentName:
+            <A2uiLocalVideo View="View" Component="c" Scope="@Scope" Aria="aria" />
+            break;
         case "Button":
             var failed = ButtonProblems(c);
             <div class="a2ui-button-wrap">
