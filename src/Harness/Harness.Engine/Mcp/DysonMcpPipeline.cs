@@ -1716,7 +1716,8 @@ public sealed class DysonMcpPipeline
             Name = "WaitForSeconds",
             Description =
                 "Block until the given number of seconds elapses (1–300). " +
-                "Use for short deliberate delays; prompt cancel aborts the wait.",
+                "Use for short deliberate delays; prompt cancel aborts the wait. " +
+                "In a Meta Agent Drone, a subagent parent event ends the wait early with status interrupted and the event to answer.",
             InputSchemaJson = """
                 {
                   "type": "object",

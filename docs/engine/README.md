@@ -282,7 +282,8 @@ Every successful output is decoded and saved as a PNG beneath `.dyson/image-gen/
 
 - Required integer `seconds` in **1–300** (reject out of range; do not clamp).
 - Blocks the tool call via `Task.Delay` until the wait finishes; prompt cancel aborts with a tool error.
-- Success JSON: `{ status: "ok", waitedSeconds: N }`. Available to root and subagents.
+- Success JSON: `{ status: "ok", waitedSeconds: N }`. Available to root and subagents (not the root Meta Agent catalog).
+- **Meta Agent Drone wake:** the wait also listens to the drone's `InterruptEnqueued`. A child's `TriggerParentEvent` (or one already pending) ends it early with a successful `{ status: "interrupted", reason: "subagentEvent", requestedSeconds, waitedSeconds, events: [{ subagentId, persistenceId, eventId, kind, payload }], instruction }` so the drone answers (`RespondToSubagentEvent`) or forwards (`TriggerParentEvent`) in the same turn. No wake while the drone itself blocks in `TriggerParentEvent`, for an event an in-flight turn already carries (its eventId is in the instruction), or for an event a wait already surfaced (`DysonParentEvent.WokeWait`). An unanswered event still gets the deferred host continuation when the run ends; `DysonUiHost.DrainAutoTurnsAsync` skips continuations for events already closed (`DysonSubagentHostLogic.IsParentEventClosed`). Work / classic Drone waits are unchanged. Covered by `DysonWaitForSecondsWakeTests`.
 
 ### JsonDynamicStructuredLanguageToolchain
 

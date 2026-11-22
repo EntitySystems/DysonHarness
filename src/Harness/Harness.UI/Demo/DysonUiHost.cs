@@ -7674,6 +7674,10 @@ public sealed class DysonUiHost : IAsyncDisposable
 
                 if (interrupt.Kind == DysonAgentInterruptKind.SubagentEvent)
                 {
+                    // Answered in-turn (e.g. after a WaitForSeconds wake) or cancelled: no stale prompt.
+                    if (DysonSubagentHostLogic.IsParentEventClosed(parent, interrupt))
+                        continue;
+
                     var prompt = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
                         interrupt, title, parent.Mode);
                     var turn = DysonSubagentHostLogic.CreateTurn(prompt);
