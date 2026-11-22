@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Harness.Tests;
 
 namespace DysonHarness.Tests;
 

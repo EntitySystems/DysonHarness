@@ -207,7 +207,7 @@
             {
                 <div class="a2ui-pager">
                     <button type="button" class="btn a2ui-pager__btn" disabled="@(page.Page == 0)" @onclick="() => _page = page.Page - 1">Previous</button>
-                    <span class="a2ui-pager__text">Page @(page.Page + 1) of @page.PageCount · @page.Matches rows</span>
+                    <span class="a2ui-pager__text">Page @(page.Page + 1) of @(page.PageCount) · @(page.Matches) rows</span>
                     <button type="button" class="btn a2ui-pager__btn" disabled="@(page.Page >= page.PageCount - 1)" @onclick="() => _page = page.Page + 1">Next</button>
                 </div>
             }

@@ -38,7 +38,7 @@
             <text class="a2ui-chart__text a2ui-chart__text--big a2ui-chart__text--middle" x="100" y="92">@g.CenterText</text>
             @foreach (var label in g.Labels)
             {
-                <text class="a2ui-chart__text @AnchorClass(label.Anchor)" x="@label.X" y="@label.Y">@label.Text</text>
+                <g><text class="a2ui-chart__text @AnchorClass(label.Anchor)" x="@label.X" y="@label.Y">@label.Text</text></g>
             }
         </svg>
         @if (!string.IsNullOrWhiteSpace(g.Caption))
@@ -64,7 +64,7 @@
             }
             @foreach (var label in g.Labels)
             {
-                <text class="a2ui-chart__text @AnchorClass(label.Anchor)" x="@label.X" y="@label.Y">@label.Text</text>
+                <g><text class="a2ui-chart__text @AnchorClass(label.Anchor)" x="@label.X" y="@label.Y">@label.Text</text></g>
             }
             @foreach (var rect in g.Rects)
             {

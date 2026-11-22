@@ -210,7 +210,9 @@ public static class DysonA2uiChart
         double d;
         switch (v.GetValueKind())
         {
-            case JsonValueKind.Number when v.TryGetValue<double>(out d):
+            // In-memory JsonValues (e.g. created from an int) do not convert via TryGetValue<double>; parse the JSON text.
+            case JsonValueKind.Number when v.TryGetValue<double>(out d)
+                || double.TryParse(v.ToJsonString(), NumberStyles.Float, CultureInfo.InvariantCulture, out d):
                 break;
             case JsonValueKind.String when double.TryParse(v.GetValue<string>(), NumberStyles.Float, CultureInfo.InvariantCulture, out d):
                 break;
