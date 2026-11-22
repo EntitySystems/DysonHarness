@@ -232,6 +232,212 @@ public class DysonSyntheticReportTests
         Assert.Equal(DysonAgentInterruptKind.SubagentFailed, failed.Kind);
     }
 
+    /// <summary>
+    /// Phase 0 (plan 367, session ce6833ff): a Stopped child still runs a parent message. That turn
+    /// paused for compaction, the summary queued the after-summary Continuation, and KickOff returned
+    /// on IsTerminal without starting it, so the child sat idle until the next manual message.
+    /// </summary>
+    [Fact]
+    public async Task After_summary_continuation_of_a_parent_message_on_a_stopped_child_starts()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var drone = new StubSession(DysonAgentModes.MetaAgentDrone) { QueueContinuationOnFirstPrompt = true };
+        root.RegisterForTest(drone);
+        Assert.True(drone.TryMarkTerminal(DysonSessionStatus.Stopped, "Stopped by user."));
+
+        Assert.True((await root.TriggerSubagentEventAsync(drone.Id, "go on").ConfigureAwait(false)).IsSuccess);
+        var resumed = await drone.ContinuationStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await drone.WaitForBackgroundRunIdleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(resumed.AfterSummaryResume);
+        Assert.False(drone.HasPendingTurn);
+        Assert.Equal(DysonSessionStatus.Stopped, drone.Status);
+    }
+
+    [Fact]
+    public async Task Stop_during_the_run_wins_over_a_late_after_summary_continuation()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var drone = new StubSession(DysonAgentModes.MetaAgentDrone) { QueueContinuationOnFirstPrompt = true };
+        root.RegisterForTest(drone);
+        drone.BeforeContinuationQueued = () => root.StopSubagentAsync(drone.Id, "stop wins");
+
+        Assert.True((await root.TriggerSubagentEventAsync(drone.Id, "go on").ConfigureAwait(false)).IsSuccess);
+        await drone.ContinuationQueued.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await drone.WaitForBackgroundRunIdleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.False(drone.ContinuationStarted.Task.IsCompleted);
+        Assert.Equal(DysonSessionStatus.Stopped, drone.Status);
+    }
+
+    private static async Task<StubSession> IdleChildWithOpenTodo(StubSession parent, string mode = DysonAgentModes.MetaAgentDrone)
+    {
+        var child = new StubSession(mode);
+        parent.RegisterForTest(child);
+        var todo = await child.CreateTodoAsync("verify-it", "Finish verification", DysonSessionTodoStatus.Ongoing)
+            .ConfigureAwait(false);
+        Assert.True(todo.IsSuccess, todo.IsError ? todo.Error : null);
+        child.AddTurnForTest(Completed(DysonAgentSession.CreateNormalTurn("work")));
+        return child;
+    }
+
+    private static DysonAgentTurn Completed(DysonAgentTurn turn)
+    {
+        turn.CompletedUtc = DateTime.UtcNow;
+        return turn;
+    }
+
+    [Fact]
+    public async Task Idle_child_with_open_todos_gets_one_reflection_before_reminders()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var child = await IdleChildWithOpenTodo(root);
+
+        await child.ApplyChildReportWatchAsync().ConfigureAwait(false);
+        Assert.Equal(0, child.ChildReportRemindersSent);
+        Assert.True(child.TryDequeuePendingTurn(out var reflection));
+        Assert.Equal(DysonAgentTurnKind.TaskEndReflect, reflection.Kind);
+        Assert.StartsWith(DysonTaskEndReflectFlow.ChildInstruction, reflection.Instruction, StringComparison.Ordinal);
+        Assert.Contains("`verify-it`", reflection.Instruction, StringComparison.Ordinal);
+        Assert.Contains("SubmitSubagentReport", reflection.Instruction, StringComparison.Ordinal);
+
+        // The reflection ends idle too: two reminders, then the existing failed report (D2).
+        child.AddTurnForTest(Completed(reflection));
+        for (var i = 1; i <= DysonChildReportWatch.MaxReminders; i++)
+        {
+            await child.ApplyChildReportWatchAsync().ConfigureAwait(false);
+            Assert.Equal(i, child.ChildReportRemindersSent);
+            Assert.True(child.TryDequeuePendingTurn(out var reminder));
+            Assert.Equal(DysonAgentTurnKind.ChildReportReminder, reminder.Kind);
+            child.AddTurnForTest(Completed(reminder));
+        }
+
+        Assert.False(root.TryDequeueInterrupt(out _));
+        await child.ApplyChildReportWatchAsync().ConfigureAwait(false);
+        Assert.Equal(DysonSessionStatus.Failed, child.Status);
+        Assert.Equal(DysonChildReportWatch.IdleWithoutReportReason, child.LastReportSummary);
+        Assert.True(root.TryDequeueInterrupt(out var failed));
+        Assert.Equal(DysonAgentInterruptKind.SubagentFailed, failed.Kind);
+    }
+
+    [Fact]
+    public async Task Idle_after_a_compaction_continuation_gets_the_reflection()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var child = await IdleChildWithOpenTodo(root);
+        child.AddTurnForTest(Completed(DysonCompactionFlow.CreateFreshContinuationTurn(child)));
+
+        await child.ApplyChildReportWatchAsync().ConfigureAwait(false);
+        Assert.True(child.TryDequeuePendingTurn(out var reflection));
+        Assert.Equal(DysonAgentTurnKind.TaskEndReflect, reflection.Kind);
+        Assert.Equal(0, child.ChildReportRemindersSent);
+    }
+
+    [Fact]
+    public async Task Open_todos_with_an_active_worker_or_undelivered_report_hold()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var drone = await IdleChildWithOpenTodo(root);
+        var worker = new StubSession(DysonAgentModes.Drone);
+        drone.RegisterForTest(worker);
+
+        await drone.ApplyChildReportWatchAsync().ConfigureAwait(false);
+        Assert.False(drone.HasPendingTurn);
+
+        Assert.True((await worker.SubmitSubagentReportAsync("done").ConfigureAwait(false)).IsSuccess);
+        Assert.True(drone.HasUndeliveredChildReport);
+        Assert.False(DysonTaskEndReflectFlow.TryCreateForChild(drone, out _));
+        await drone.ApplyChildReportWatchAsync().ConfigureAwait(false);
+        Assert.False(drone.HasPendingTurn);
+        Assert.Equal(0, drone.ChildReportRemindersSent);
+    }
+
+    [Fact]
+    public async Task No_reflection_while_a_summary_runs_a_message_is_held_or_a_parent_event_waits()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var child = await IdleChildWithOpenTodo(root);
+
+        var ask = child.TriggerParentEventAsync("message", "question?");
+        Assert.True(child.HasPendingParentEventWait);
+        Assert.False(DysonTaskEndReflectFlow.TryCreateForChild(child, out _));
+
+        var release = new TaskCompletionSource<VoidResult<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var summary = DysonCompactionFlow.RunAsync(
+            child, endedTurn: null, resume: false, (_, _) => release.Task, CancellationToken.None);
+        Assert.True(child.IsSummarizingForInterrupt);
+
+        // Busy (parent-event wait) and summarizing: the parent message is held, not delivered.
+        Assert.True((await root.TriggerSubagentEventAsync(child.Id, "held").ConfigureAwait(false)).IsSuccess);
+        Assert.Equal(1, child.HeldInterruptCount);
+        Assert.False(DysonTaskEndReflectFlow.TryCreateForChild(child, out _));
+
+        release.SetResult(VoidResult<string>.AsError("test summary failed"));
+        await summary.ConfigureAwait(false);
+        Assert.False(child.IsSummarizingForInterrupt);
+        Assert.Equal(1, child.HeldInterruptCount);
+        Assert.False(DysonTaskEndReflectFlow.TryCreateForChild(child, out _));
+
+        child.ClearPendingTurns();
+        child.CancelPendingParentEventWait("test done");
+        await ask.ConfigureAwait(false);
+        Assert.Equal(0, child.HeldInterruptCount);
+        Assert.False(child.HasPendingParentEventWait);
+        Assert.True(DysonTaskEndReflectFlow.TryCreateForChild(child, out _));
+    }
+
+    [Fact]
+    public async Task Complete_todos_get_the_plain_reminder()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var child = new StubSession(DysonAgentModes.MetaAgentDrone);
+        root.RegisterForTest(child);
+        Assert.True((await child.CreateTodoAsync("done", "Done", DysonSessionTodoStatus.Complete).ConfigureAwait(false)).IsSuccess);
+        child.AddTurnForTest(Completed(DysonAgentSession.CreateNormalTurn("work")));
+
+        await child.ApplyChildReportWatchAsync().ConfigureAwait(false);
+        Assert.Equal(1, child.ChildReportRemindersSent);
+        Assert.True(child.TryDequeuePendingTurn(out var reminder));
+        Assert.Equal(DysonAgentTurnKind.ChildReportReminder, reminder.Kind);
+    }
+
+    [Fact]
+    public async Task Root_and_voice_sidecar_get_no_reflection()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        Assert.True((await root.CreateTodoAsync("open", "Open").ConfigureAwait(false)).IsSuccess);
+        root.AddTurnForTest(Completed(DysonAgentSession.CreateNormalTurn("work")));
+        await root.ApplyChildReportWatchAsync().ConfigureAwait(false);
+        Assert.False(root.HasPendingTurn);
+
+        var sidecar = await IdleChildWithOpenTodo(new StubSession(DysonAgentModes.MetaAgent), DysonAgentModes.VoiceSidecar);
+        Assert.False(DysonTaskEndReflectFlow.TryCreateForChild(sidecar, out _));
+    }
+
+    [Fact]
+    public async Task KickOff_no_report_with_open_todos_reflects_then_reminds_then_fails()
+    {
+        var root = new StubSession(DysonAgentModes.MetaAgent);
+        var drone = new StubSession(DysonAgentModes.MetaAgentDrone)
+        {
+            PromptResult = new VoidResult<string>(DysonChildReportWatch.PromptEndedWithoutReportReason),
+        };
+        root.RegisterForTest(drone);
+        Assert.True((await drone.CreateTodoAsync("open", "Open", DysonSessionTodoStatus.Ongoing).ConfigureAwait(false)).IsSuccess);
+
+        Assert.True((await root.TriggerSubagentEventAsync(drone.Id, "go").ConfigureAwait(false)).IsSuccess);
+        await drone.TerminalForTest.WaitAsync(TimeSpan.FromSeconds(30));
+
+        DysonAgentTurnKind[] kinds;
+        lock (drone.Prompted)
+            kinds = drone.Prompted.Skip(1).Select(t => t.Kind).ToArray();
+        Assert.Equal(
+            [DysonAgentTurnKind.TaskEndReflect, DysonAgentTurnKind.ChildReportReminder, DysonAgentTurnKind.ChildReportReminder],
+            kinds);
+        Assert.Equal(DysonSessionStatus.Failed, drone.Status);
+        Assert.Equal(DysonChildReportWatch.IdleWithoutReportReason, drone.LastReportSummary);
+    }
+
     [Fact]
     public async Task Root_session_watch_is_a_no_op()
     {
@@ -256,6 +462,22 @@ public class DysonSyntheticReportTests
         public void NotifyCompletedForTest(int subagentId) => NotifySubagentCompleted(subagentId, "done");
 
         public VoidResult<string> PromptResult { get; init; } = VoidResult<string>.Success;
+
+        /// <summary>The first prompt acts like a turn paused for compaction: it queues the fresh Continuation.</summary>
+        public bool QueueContinuationOnFirstPrompt { get; init; }
+
+        public Func<Task>? BeforeContinuationQueued { get; set; }
+
+        public readonly TaskCompletionSource ContinuationQueued = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public readonly TaskCompletionSource<DysonAgentTurn> ContinuationStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<DysonAgentTurn> Prompted { get; } = [];
+
+        public void AddTurnForTest(DysonAgentTurn turn) => AddTurn(turn);
+
+        public Task TerminalForTest => WaitForTerminalAsync(CancellationToken.None);
 
         public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
             string agentMode,
@@ -283,10 +505,33 @@ public class DysonSyntheticReportTests
             CancellationToken cancellationToken = default)
             => Task.FromResult(VoidResult<string>.Success);
 
-        public override Task<VoidResult<string>> PromptHarnessTurnAsync(
+        public override async Task<VoidResult<string>> PromptHarnessTurnAsync(
             DysonAgentTurn turn,
             CancellationToken cancellationToken = default)
-            => Task.FromResult(PromptResult);
+        {
+            int count;
+            lock (Prompted)
+            {
+                Prompted.Add(turn);
+                count = Prompted.Count;
+            }
+
+            AddTurn(turn);
+            turn.CompletedUtc = DateTime.UtcNow;
+            if (turn.AfterSummaryResume)
+                ContinuationStarted.TrySetResult(turn);
+
+            if (QueueContinuationOnFirstPrompt && count == 1)
+            {
+                if (BeforeContinuationQueued is not null)
+                    await BeforeContinuationQueued().ConfigureAwait(false);
+                EnqueuePendingTurn(DysonCompactionFlow.CreateFreshContinuationTurn(this));
+                ContinuationQueued.TrySetResult();
+                return VoidResult<string>.Success;
+            }
+
+            return PromptResult;
+        }
 
         public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
             string planRelativePath,

@@ -8269,11 +8269,22 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (sessionId == Guid.Empty || IsUserStopped(sessionId))
             return;
 
+        DysonAgentTurn? childReflection = null;
         while (session.TryDequeuePendingTurn(out var pending))
         {
-            if (!pending.AllowEnqueue)
-                continue;
-            EnqueuePrompt(sessionId, pending);
+            if (pending.AllowEnqueue)
+                EnqueuePrompt(sessionId, pending);
+            else if (session.Parent is not null && pending.Kind == DysonAgentTurnKind.TaskEndReflect)
+                childReflection = pending;
+        }
+
+        // The child-report watch's task-end reflection cannot enter the host FIFO (AllowEnqueue false).
+        // It runs on the child's own background run, as on the KickOff path; host prompts defer behind it.
+        if (childReflection is not null && !session.IsTerminal)
+        {
+            session.EnqueuePendingTurn(childReflection);
+            if (!session.HasActiveBackgroundRun)
+                DysonAgentSession.StartNextPendingTurn(session);
         }
 
         var last = session.Turns.Count > 0 ? session.Turns[^1] : null;

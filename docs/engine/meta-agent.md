@@ -267,6 +267,7 @@ Not Meta-Agent-only. A child that goes terminal without `SubmitSubagentReport` w
 | ------ | ------ |
 | not a child / already `Completed`, `Failed` or `Blocked` / pending or in-flight work | `None` |
 | `Active`, unreported, a descendant `Active` or a child report undelivered | `Wait` — hold; no reminder, no synthesis, reminder count unchanged |
+| `Active`, idle, unreported, `Remind` would fire, open todos, last turn a completed trigger kind (not a reflection) | `Remind` arm queues one `TaskEndReflect` (`DysonTaskEndReflectFlow.ChildInstruction`: continue, subagent, or report) instead; `remindersSent` unchanged |
 | `Active`, idle, unreported, `remindersSent < 2` | `Remind` — enqueue `ChildReportReminder` (kind 19) on the **child** |
 | `Active`, idle, unreported, reminders spent | `Synthesize` — child becomes `Failed` |
 | `Stopped` / `Interrupted` / `Failed` without a report | `Synthesize` immediately |

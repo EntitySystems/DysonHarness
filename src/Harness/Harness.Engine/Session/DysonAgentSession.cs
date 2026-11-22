@@ -3368,8 +3368,10 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// After a child turn completes with nothing queued: remind (max 2) or synthesize a failed report.
-    /// No-op for roots, already-reported children, or sessions with pending work.
+    /// After a child turn completes with nothing queued: one task-end reflection when todos are open,
+    /// then remind (max 2), then synthesize a failed report. Every host path (KickOff, runtime, UI host)
+    /// calls this, so the reflection covers them all. No-op for roots, already-reported children, or
+    /// sessions with pending work.
     /// </summary>
     public async Task ApplyChildReportWatchAsync(CancellationToken cancellationToken = default)
     {
@@ -3390,6 +3392,12 @@ public abstract class DysonAgentSession
             case DysonChildReportAction.Wait:
                 // A worker report (or parent event) wakes this session; the reminder count is left alone.
                 AppendLog("child report watch: holding — descendant active or child report undelivered");
+                break;
+            case DysonChildReportAction.Remind
+                when DysonTaskEndReflectFlow.TryCreateForChild(this, out var reflection) && reflection is not null:
+                // Open todos: the model chooses (continue, subagent, report). Not counted as a reminder.
+                EnqueuePendingTurn(reflection);
+                AppendLog("child report watch: open todos, task-end reflection queued");
                 break;
             case DysonChildReportAction.Remind:
                 EnqueuePendingTurn(DysonChildReportWatch.CreateReminderTurn());
@@ -4019,20 +4027,9 @@ public abstract class DysonAgentSession
                 if (TryDrainPendingTurn(child))
                     return;
 
-                // A child with unfinished todos gets one harness reflection before its
-                // ordinary missing-SubmitSubagentReport watch. If that reflection itself
-                // does not report, the watch still reminds then synthesizes.
-                if (DysonTaskEndReflectFlow.TryCreateForChild(child, out var reflection)
-                    && reflection is not null)
-                {
-                    child.EnqueuePendingTurn(reflection);
-                    if (TryDrainPendingTurn(child))
-                        return;
-                }
-
-                // A no-report finish while workers run falls through to the watch, which holds.
-                if (result.IsError
-                    && !(DysonChildReportWatch.IsHarnessNoReportError(result.Error) && child.IsAwaitingDescendants))
+                // A no-report finish falls through to the watch (hold, reflect, remind, then synthesize),
+                // as on the runtime and UI-host paths. Provider and exception errors synthesize now.
+                if (result.IsError && !DysonChildReportWatch.IsHarnessNoReportError(result.Error))
                 {
                     await child.SubmitSyntheticReportAsync(
                             ResolveKickOffFailureSummary(child, result),
@@ -4075,11 +4072,24 @@ public abstract class DysonAgentSession
                 // Same lock as the late requeue's empty-run check: a message this task requeued while its
                 // own run was still attached is started here instead of sitting on an idle session.
                 // Any other cancel leaves the queue alone (Stop/interrupt owns follow-up).
+                // A Stopped child still runs a parent message; when that turn paused for compaction, its
+                // after-summary Continuation starts here (the drain above skips terminal sessions). A Stop
+                // during this run cancelled runCts and cleared the queue, so it still wins.
                 lock (child._injectInterruptGate)
                 {
                     child.DetachBackgroundRun(runCts);
-                    if ((requeuedHere || !promptStarted) && !child.HasActiveBackgroundRun && child.HasPendingTurn && !child.IsTerminal)
+                    var resumeStopped = promptStarted
+                        && !runCts.IsCancellationRequested
+                        && child.Status == DysonSessionStatus.Stopped
+                        && child._pendingTurns.TryPeek(out var head)
+                        && head.AfterSummaryResume;
+                    if ((requeuedHere || !promptStarted || resumeStopped)
+                        && !child.HasActiveBackgroundRun
+                        && child.HasPendingTurn
+                        && (resumeStopped || !child.IsTerminal))
+                    {
                         StartNextPendingTurn(child);
+                    }
                 }
 
                 runCts.Dispose();

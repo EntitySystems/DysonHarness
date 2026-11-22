@@ -558,7 +558,8 @@ public class DysonTaskLifecycleTests
         if (!DysonTaskEndReflectFlow.TryCreateForChild(child, out var reflection)
             || reflection is null
             || reflection.Kind != reflect
-            || !reflection.Instruction!.Contains("Finish verification", StringComparison.Ordinal)
+            || !reflection.Instruction!.StartsWith(DysonTaskEndReflectFlow.ChildInstruction, StringComparison.Ordinal)
+            || !reflection.Instruction.Contains("Finish verification", StringComparison.Ordinal)
             || !reflection.Instruction.Contains("Ongoing", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
