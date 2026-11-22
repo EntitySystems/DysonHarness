@@ -13,6 +13,9 @@ public static class DysonA2uiProtocol
     /// <summary>The kit plus QuestionSlot and ActionButton. An identifier only; never fetched.</summary>
     public const string DysonCatalogId = "a2ui://dyson/catalogs/v1/catalog.json";
 
+    /// <summary>CopilotKit playground catalog id; accepted as an alias of <see cref="DysonCatalogId"/>.</summary>
+    public const string PlaygroundCatalogId = "https://copilotkit.ai/a2ui/catalogs/playground/v1";
+
     /// <summary>Host-derived surfaces only. Agent surfaceIds with this prefix are rejected.</summary>
     public const string ReservedSurfacePrefix = "dyson_";
 
@@ -35,6 +38,23 @@ public static class DysonA2uiProtocol
     public const int MaxIdentifierLength = 64;
     public const int MaxChecks = 8;
     public const int MaxOptions = 50;
+
+    public const int MaxChartSeries = 8;
+    public const int MaxChartPointsPerSeries = 500;
+    public const int MaxChartPoints = 2000;
+    public const int MaxPieSlices = 24;
+    public const int MaxTableColumns = 20;
+    public const int MaxTableRows = 200;
+    public const int MaxTableCells = 2000;
+
+    /// <summary>Timeline, KeyValueList, TagList, Accordion, AvatarGroup items.</summary>
+    public const int MaxListItems = 100;
+    public const int MaxTabs = 12;
+    public const int MaxGridColumns = 12;
+    public const int MaxMapMarkers = 100;
+    public const int MaxMediaUrlLength = 2048;
+    public const int MaxCosmeticStringLength = 64;
+    public const int MaxPipelineJobIds = 30;
 
     /// <summary>Compact wire JSON for the model; not HTML, so relaxed escaping keeps it readable.</summary>
     internal static readonly JsonSerializerOptions WireOptions = new()

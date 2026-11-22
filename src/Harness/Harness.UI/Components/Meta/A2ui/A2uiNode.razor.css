@@ -16,6 +16,35 @@
   flex-direction: column;
 }
 
+/* gap / padding int 0..12 in 4px steps: the only way those props reach the DOM. */
+.a2ui-gap--0 { gap: 0; }
+.a2ui-gap--1 { gap: 4px; }
+.a2ui-gap--2 { gap: 8px; }
+.a2ui-gap--3 { gap: 12px; }
+.a2ui-gap--4 { gap: 16px; }
+.a2ui-gap--5 { gap: 20px; }
+.a2ui-gap--6 { gap: 24px; }
+.a2ui-gap--7 { gap: 28px; }
+.a2ui-gap--8 { gap: 32px; }
+.a2ui-gap--9 { gap: 36px; }
+.a2ui-gap--10 { gap: 40px; }
+.a2ui-gap--11 { gap: 44px; }
+.a2ui-gap--12 { gap: 48px; }
+
+.a2ui-pad--0 { padding: 0; }
+.a2ui-pad--1 { padding: 4px; }
+.a2ui-pad--2 { padding: 8px; }
+.a2ui-pad--3 { padding: 12px; }
+.a2ui-pad--4 { padding: 16px; }
+.a2ui-pad--5 { padding: 20px; }
+.a2ui-pad--6 { padding: 24px; }
+.a2ui-pad--7 { padding: 28px; }
+.a2ui-pad--8 { padding: 32px; }
+.a2ui-pad--9 { padding: 36px; }
+.a2ui-pad--10 { padding: 40px; }
+.a2ui-pad--11 { padding: 44px; }
+.a2ui-pad--12 { padding: 48px; }
+
 .a2ui-justify--start { justify-content: flex-start; }
 .a2ui-justify--center { justify-content: center; }
 .a2ui-justify--end { justify-content: flex-end; }
@@ -80,6 +109,20 @@
   font-size: var(--fs-xs);
   color: var(--text-muted);
 }
+
+/* h1..h4: headings, largest first. */
+.a2ui-text--h1,
+.a2ui-text--h2,
+.a2ui-text--h3,
+.a2ui-text--h4 {
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.a2ui-text--h1 { font-size: calc(var(--fs-xl) * 1.5); }
+.a2ui-text--h2 { font-size: calc(var(--fs-xl) * 1.25); }
+.a2ui-text--h3 { font-size: var(--fs-xl); }
+.a2ui-text--h4 { font-size: var(--fs-lg); }
 
 .a2ui-button-wrap {
   display: flex;

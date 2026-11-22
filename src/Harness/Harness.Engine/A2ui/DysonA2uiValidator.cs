@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -38,8 +39,18 @@ public static partial class DysonA2uiValidator
     public static bool IsIdentifier(string? value) =>
         value is { Length: > 0 and <= DysonA2uiProtocol.MaxIdentifierLength } && IdentifierRegex().IsMatch(value);
 
-    /// <summary>ActionButton <c>func</c> values with their pointer, for the executor's async resolver check.</summary>
-    public static IReadOnlyList<(string Pointer, string Func)> ActionButtonFuncPointers(IReadOnlyList<DysonA2uiMessage> messages)
+    /// <summary>ActionButton <c>func</c> values with their pointer.</summary>
+    public static IReadOnlyList<(string Pointer, string Func)> ActionButtonFuncPointers(IReadOnlyList<DysonA2uiMessage> messages) =>
+        LinkPointers(messages, actionButtonsOnly: true);
+
+    /// <summary>
+    /// Every link func with its pointer, for the executor's async resolver check: ActionButton.func and every
+    /// LinkTarget prop (nested ones included). After validation each LinkTarget holds a built-in func key.
+    /// </summary>
+    public static IReadOnlyList<(string Pointer, string Func)> LinkFuncPointers(IReadOnlyList<DysonA2uiMessage> messages) =>
+        LinkPointers(messages, actionButtonsOnly: false);
+
+    private static List<(string Pointer, string Func)> LinkPointers(IReadOnlyList<DysonA2uiMessage> messages, bool actionButtonsOnly)
     {
         var list = new List<(string, string)>();
         foreach (var message in messages)
@@ -48,8 +59,17 @@ public static partial class DysonA2uiValidator
                 continue;
             for (var k = 0; k < components.Count; k++)
             {
-                if (components[k] is JsonObject c && AsString(c["component"]) == "ActionButton" && AsString(c["func"]) is { } func)
-                    list.Add(($"{message.Path}/components/{k}/func", func));
+                if (components[k] is not JsonObject c)
+                    continue;
+                if (actionButtonsOnly)
+                {
+                    if (AsString(c["component"]) == "ActionButton" && AsString(c["func"]) is { } func)
+                        list.Add(($"{message.Path}/components/{k}/func", func));
+                }
+                else
+                {
+                    list.AddRange(DysonA2uiLinks.Collect(c, $"{message.Path}/components/{k}"));
+                }
             }
         }
 
@@ -162,6 +182,7 @@ public static partial class DysonA2uiValidator
         Bool,
         List,
         Any,
+        Number,
     }
 
     private static readonly HashSet<string> ComponentEnvelopeKeys = new(StringComparer.Ordinal) { "id", "component", "@catalogId" };
@@ -200,8 +221,8 @@ public static partial class DysonA2uiValidator
             {
                 var catalogId = AsString(body["catalogId"]);
                 if (!DysonA2uiCatalog.IsSupportedCatalogId(catalogId))
-                    return Err(path + "/catalogId", "catalogId must be omitted, the basic catalog id or the Dyson catalog id.");
-                _dysonSurface = catalogId == DysonA2uiProtocol.DysonCatalogId;
+                    return Err(path + "/catalogId", "catalogId must be omitted, the basic catalog id, the Dyson catalog id or the CopilotKit playground catalog id.");
+                _dysonSurface = DysonA2uiCatalog.IsDysonCatalogId(catalogId);
             }
 
             if (body.ContainsKey("sendDataModel") && !IsFalse(body["sendDataModel"]))
@@ -269,17 +290,34 @@ public static partial class DysonA2uiValidator
             {
                 componentCatalog = AsString(c["@catalogId"]);
                 if (!DysonA2uiCatalog.IsSupportedCatalogId(componentCatalog))
-                    return Err(path + "/@catalogId", "@catalogId must be the basic catalog id or the Dyson catalog id.");
+                    return Err(path + "/@catalogId", "@catalogId must be the basic catalog id, the Dyson catalog id or the CopilotKit playground catalog id.");
             }
 
-            var dyson = componentCatalog == DysonA2uiProtocol.DysonCatalogId || (componentCatalog is null && _dysonSurface);
+            var dyson = DysonA2uiCatalog.IsDysonCatalogId(componentCatalog) || (componentCatalog is null && _dysonSurface);
+            if (DysonA2uiCatalog.RejectedComponents.TryGetValue(name, out var rejected))
+                return Err(path + "/component", rejected);
             if (!DysonA2uiCatalog.Components.TryGetValue(name, out var spec))
-                return Err(path + "/component", $"unknown component '{name}': not in the Dyson kit (Text, Row, Column, List, Card, Divider, Button, TextField, CheckBox, ChoicePicker; Dyson catalog: ActionButton, QuestionSlot).");
+                return Err(path + "/component", $"unknown component '{name}'; see the dyson-a2ui skill. Groups: {DysonA2uiCatalog.UnknownComponentGroups}.");
             if (spec.DysonCatalog && !dyson)
                 return Err(path + "/component", $"unknown component '{name}' in the basic catalog; add \"@catalogId\":\"{DysonA2uiProtocol.DysonCatalogId}\".");
 
+            // Upstream inputs use "checks"; ours is "@checks" (renamed in place, like @catalogId stamping).
+            if (c.ContainsKey("checks") && !c.ContainsKey("@checks") && spec.Props.ContainsKey("@checks"))
+            {
+                var checks = c["checks"];
+                c.Remove("checks");
+                c["@checks"] = checks;
+            }
+
             if (Object(c, path, spec.Props, name, ComponentEnvelopeKeys) is { } e)
                 return e;
+            if (name == "Card" && c.ContainsKey("child") == c.ContainsKey("children"))
+                return Err(path, "Card needs exactly one of child or children.");
+            var isPie = name == "PieChart" || (name == "Chart" && AsString(c["chartType"]) is "pie" or "donut");
+            if (isPie && c["data"] is JsonArray slices && slices.Count > DysonA2uiProtocol.MaxPieSlices)
+                return Err($"{path}/data/{DysonA2uiProtocol.MaxPieSlices}", $"a pie chart has at most {DysonA2uiProtocol.MaxPieSlices} slices.");
+            if (name == "PipelineRun" && c.ContainsKey("runId") == c.ContainsKey("jobIds"))
+                return Err(path, "PipelineRun needs exactly one of runId or jobIds.");
 
             // ponytail: the surface catalogId is not stored, so Dyson components are stamped with
             // @catalogId here; a later updateComponents call must carry @catalogId itself.
@@ -297,6 +335,7 @@ public static partial class DysonA2uiValidator
         {
             if (node is not JsonObject o)
                 return Err(path, $"{what} must be an object.");
+            List<(string Key, string Func)>? links = null;
             foreach (var (k, v) in o)
             {
                 if (ignore?.Contains(k) == true)
@@ -305,11 +344,20 @@ public static partial class DysonA2uiValidator
                 {
                     return Err($"{path}/{k}", k == "@metadata"
                         ? "@metadata is not in the Dyson kit."
-                        : $"unknown property '{k}' on {what}.");
+                        : $"unknown property '{k}' on {what}; accepted: {DysonA2uiCatalog.AcceptedProps(props)}.");
                 }
 
                 if (Value(spec, v, $"{path}/{k}") is { } e)
                     return e;
+                if (spec.Kind == DysonA2uiPropKind.LinkTarget && DysonA2uiLinks.TryLinkFunc(AsString(v)) is { IsSuccess: true } link)
+                    (links ??= []).Add((k, link.Value));
+            }
+
+            // Normalise http(s) links to open_url:<url> in place (after the walk: the object cannot change while enumerated).
+            if (links is not null)
+            {
+                foreach (var (key, func) in links)
+                    o[key] = func;
             }
 
             foreach (var (k, spec) in props)
@@ -341,7 +389,9 @@ public static partial class DysonA2uiValidator
                                 return e;
                         }
 
-                        return null;
+                        return spec.MaxItems is { } maxStrings && list.Count > maxStrings
+                            ? Err(path, $"at most {maxStrings} items.")
+                            : null;
                     }
 
                     return Dyn(node, path, Want.List);
@@ -431,9 +481,165 @@ public static partial class DysonA2uiValidator
                         : Err(path, "QuestionSlot.questionId must be the literal question id (Guid) from PostUserQuestion.");
                 case DysonA2uiPropKind.DeferredFlag:
                     return IsFalse(node) ? null : Err(path, "filterable:true is not in the Dyson kit.");
+                case DysonA2uiPropKind.DynamicNumber:
+                    return IsNumber(node) ? null : Dyn(node, path, Want.Number);
+                case DysonA2uiPropKind.BoundedInt:
+                    if (node is JsonValue bi && bi.GetValueKind() == JsonValueKind.Number && bi.TryGetValue<long>(out var bl)
+                        && bl >= (spec.Min ?? long.MinValue) && bl <= (spec.Max ?? long.MaxValue))
+                    {
+                        return null;
+                    }
+
+                    return Err(path, $"expected an integer from {spec.Min?.ToString(CultureInfo.InvariantCulture)} to {spec.Max?.ToString(CultureInfo.InvariantCulture)}.");
+                case DysonA2uiPropKind.BoundedNumber:
+                    if (!IsNumber(node))
+                        return Dyn(node, path, Want.Number);
+                    var bd = node!.GetValue<double>();
+                    return double.IsFinite(bd) && bd >= (spec.Min ?? double.MinValue) && bd <= (spec.Max ?? double.MaxValue)
+                        ? null
+                        : Err(path, $"expected a number from {spec.Min?.ToString(CultureInfo.InvariantCulture)} to {spec.Max?.ToString(CultureInfo.InvariantCulture)}.");
+                case DysonA2uiPropKind.ObjectList:
+                case DysonA2uiPropKind.StringOrObjectList:
+                    return ObjectListValue(spec, node, path);
+                case DysonA2uiPropKind.CellMatrix:
+                    return CellMatrixValue(spec, node, path);
+                case DysonA2uiPropKind.IdRef:
+                    return IsIdentifier(s) ? null : Err(path, "expected a component id.");
+                case DysonA2uiPropKind.Cosmetic:
+                    return IsCosmetic(node) ? null : Err(path, $"cosmetic values are not rendered; use a short string (max {DysonA2uiProtocol.MaxCosmeticStringLength}), number or boolean.");
+                case DysonA2uiPropKind.LinkTarget:
+                    if (s is null)
+                        return Err(path, "a link must be a literal string (no bindings).");
+                    return DysonA2uiLinks.TryLinkFunc(s) is { IsError: true } bad ? Err(path, bad.Error) : null;
+                case DysonA2uiPropKind.MediaUrl:
+                    return s is not null && DysonA2uiLinks.IsMediaUrl(s) ? null : Err(path, DysonA2uiLinks.MediaUrlMessage);
+                case DysonA2uiPropKind.ChartData:
+                    return ChartDataValue(node, path);
+                case DysonA2uiPropKind.Rejected:
+                    return Err(path, spec.Values?[0] ?? "this property is not supported.");
+                case DysonA2uiPropKind.PositiveLong:
+                    return IsPositiveLong(node, out _) ? null : Err(path, "expected a literal integer >= 1.");
+                case DysonA2uiPropKind.PositiveLongList:
+                    return PositiveLongListValue(spec, node, path);
+                case DysonA2uiPropKind.IsoDateTime:
+                    return s is not null && DateTime.TryParseExact(s, IsoFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out _)
+                        ? null
+                        : Err(path, "expected a literal ISO 8601 date or time (yyyy-MM-dd, yyyy-MM-ddTHH:mm, HH:mm).");
                 default:
                     return Err(path, "unsupported property.");
             }
+        }
+
+        private static readonly string[] IsoFormats =
+            ["yyyy-MM-dd", "yyyy-MM-ddTHH:mm", "yyyy-MM-ddTHH:mm:ss", "HH:mm", "HH:mm:ss"];
+
+        private DysonA2uiError? ObjectListValue(DysonA2uiPropSpec spec, JsonNode? node, string path)
+        {
+            if (node is not JsonArray list)
+                return IsDynamicObject(node) ? Dyn(node, path, Want.List) : Err(path, "expected an array or {\"@path\"}.");
+            if (spec.MaxItems is { } max && list.Count > max)
+                return Err($"{path}/{max}", $"at most {max} items.");
+            if (spec.Min is { } min && list.Count < min)
+                return Err(path, $"needs at least {min.ToString(CultureInfo.InvariantCulture)} item(s).");
+            for (var i = 0; i < list.Count; i++)
+            {
+                var itemPath = $"{path}/{i}";
+                if (spec.Kind == DysonA2uiPropKind.StringOrObjectList && AsString(list[i]) is { } text)
+                {
+                    if (Str(text, itemPath) is { } se)
+                        return se;
+                    continue;
+                }
+
+                if (list[i] is not JsonObject)
+                    return Err(itemPath, spec.Kind == DysonA2uiPropKind.StringOrObjectList ? "expected a string or an object." : "expected an object.");
+                if (spec.Item is not null)
+                {
+                    if (Object(list[i], itemPath, spec.Item, "item") is { } e)
+                        return e;
+                }
+                else if (Literal(list[i], itemPath) is { } le)
+                {
+                    return le;
+                }
+            }
+
+            return null;
+        }
+
+        private DysonA2uiError? CellMatrixValue(DysonA2uiPropSpec spec, JsonNode? node, string path)
+        {
+            if (node is not JsonArray rows)
+                return IsDynamicObject(node) ? Dyn(node, path, Want.List) : Err(path, "expected an array of rows or {\"@path\"}.");
+            if (spec.MaxItems is { } max && rows.Count > max)
+                return Err($"{path}/{max}", $"at most {max} rows.");
+            var cells = 0;
+            for (var r = 0; r < rows.Count; r++)
+            {
+                if (rows[r] is not JsonArray row)
+                    return Err($"{path}/{r}", "a row must be an array of cells.");
+                if (row.Count > DysonA2uiProtocol.MaxTableColumns)
+                    return Err($"{path}/{r}/{DysonA2uiProtocol.MaxTableColumns}", $"at most {DysonA2uiProtocol.MaxTableColumns} columns.");
+                for (var c = 0; c < row.Count; c++)
+                {
+                    var cellPath = $"{path}/{r}/{c}";
+                    if (++cells > DysonA2uiProtocol.MaxTableCells)
+                        return Err(cellPath, $"at most {DysonA2uiProtocol.MaxTableCells} cells.");
+                    var cell = row[c];
+                    if (cell is JsonObject co)
+                    {
+                        if (Object(co, cellPath, DysonA2uiCatalog.CellProps, "cell") is { } e)
+                            return e;
+                    }
+                    else if (AsString(cell) is { } text)
+                    {
+                        if (Str(text, cellPath) is { } se)
+                            return se;
+                    }
+                    else if (!IsNumber(cell) && !IsBool(cell))
+                    {
+                        return Err(cellPath, "a cell is a string, number, boolean or {componentId}.");
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private DysonA2uiError? ChartDataValue(JsonNode? node, string path)
+        {
+            if (node is not JsonArray data)
+                return IsDynamicObject(node) ? Dyn(node, path, Want.List) : Err(path, "data must be an array of objects or {\"@path\"}.");
+            for (var i = 0; i < data.Count; i++)
+            {
+                if (data[i] is not JsonObject)
+                    return Err($"{path}/{i}", "each data point must be an object.");
+                if (Literal(data[i], $"{path}/{i}") is { } le)
+                    return le;
+            }
+
+            return DysonA2uiChart.CapViolation(data) is { } at
+                ? Err($"{path}/{at}", $"too many chart points (at most {DysonA2uiProtocol.MaxChartPointsPerSeries} per series, {DysonA2uiProtocol.MaxChartPoints} in total).")
+                : null;
+        }
+
+        private DysonA2uiError? PositiveLongListValue(DysonA2uiPropSpec spec, JsonNode? node, string path)
+        {
+            if (node is not JsonArray list)
+                return Err(path, "expected a literal array of integers >= 1.");
+            var max = spec.MaxItems ?? DysonA2uiProtocol.MaxPipelineJobIds;
+            if (list.Count is 0 || list.Count > max)
+                return Err(path, $"expected 1 to {max} integers.");
+            var seen = new HashSet<long>();
+            for (var i = 0; i < list.Count; i++)
+            {
+                if (!IsPositiveLong(list[i], out var id))
+                    return Err($"{path}/{i}", "expected an integer >= 1.");
+                if (!seen.Add(id))
+                    return Err($"{path}/{i}", "duplicate id.");
+            }
+
+            return null;
         }
 
         /// <summary><c>{"@path": string}</c> or <c>{"@call": kitFunction, "args": {...}}</c>.</summary>
@@ -444,7 +650,8 @@ public static partial class DysonA2uiValidator
                 return Err(path, want switch
                 {
                     Want.Bool => "expected a boolean, {\"@path\"} or a kit function call.",
-                    Want.List => "expected an array of strings or {\"@path\"}.",
+                    Want.List => "expected an array or {\"@path\"}.",
+                    Want.Number => "expected a number or {\"@path\"}.",
                     _ => "expected a string, {\"@path\"} or {\"@call\"}.",
                 });
             }
@@ -468,7 +675,7 @@ public static partial class DysonA2uiValidator
             var name = AsString(o["@call"]) ?? "";
             if (!DysonA2uiCatalog.KitFunctions.TryGetValue(name, out var fn))
                 return Err(path + "/@call", $"function '{name}' is not in the Dyson kit (formatString, required, length, email, not).");
-            if (want == Want.List || (want == Want.String && !fn.ReturnsString) || (want == Want.Bool && fn.ReturnsString))
+            if (want is Want.List or Want.Number || (want == Want.String && !fn.ReturnsString) || (want == Want.Bool && fn.ReturnsString))
                 return Err(path + "/@call", $"function '{name}' does not return the type this property needs.");
 
             if (Object(o["args"], path + "/args", fn.Args, name + " args") is { } e)
@@ -522,6 +729,18 @@ public static partial class DysonA2uiValidator
         node?.GetValueKind() is JsonValueKind.True or JsonValueKind.False;
 
     private static bool IsFalse(JsonNode? node) => node?.GetValueKind() == JsonValueKind.False;
+
+    private static bool IsNumber(JsonNode? node) => node?.GetValueKind() == JsonValueKind.Number;
+
+    private static bool IsPositiveLong(JsonNode? node, out long value)
+    {
+        value = 0;
+        return node is JsonValue v && v.GetValueKind() == JsonValueKind.Number && v.TryGetValue<long>(out value) && value >= 1;
+    }
+
+    private static bool IsCosmetic(JsonNode? node) =>
+        IsNumber(node) || IsBool(node)
+        || (AsString(node) is { } s && s.Length <= DysonA2uiProtocol.MaxCosmeticStringLength && !s.Contains('\0'));
 
     private static bool IsDynamicObject(JsonNode? node) =>
         node is JsonObject o && (o.ContainsKey("@path") || o.ContainsKey("@call"));

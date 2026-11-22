@@ -46,10 +46,10 @@ public static class DysonA2uiAction
         ArgumentNullException.ThrowIfNull(localModel);
         var path = "/components/" + sourceComponentId;
         if (!surface.Components.TryGetValue(sourceComponentId ?? "", out var button)
-            || DysonA2uiSurfaces.Name(button) != "Button"
+            || DysonA2uiSurfaces.Name(button) is not ("Button" or "Pressable")
             || button["action"]?["event"] is not JsonObject evt)
         {
-            return Fail(surface, path, "no Button with that id on this surface.");
+            return Fail(surface, path, "no Button or Pressable with that id on this surface.");
         }
 
         // ponytail: actions resolve at the surface root scope; Buttons inside templates would need the item scope.

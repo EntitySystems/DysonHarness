@@ -134,22 +134,34 @@ public static class DysonA2uiSurfaces
             return VoidResult<DysonA2uiError>.AsError(DysonA2uiError.Validation(surface.SurfaceId, pointerFor("root"), "the surface needs exactly one component with id \"root\"."));
 
         var weighted = new HashSet<string>(StringComparer.Ordinal);
-        var actionButtons = 0;
+        var links = 0;
+        var parents = new Dictionary<string, List<(string ParentId, string Suffix)>>(StringComparer.Ordinal);
         foreach (var (id, component) in components)
         {
             var name = Name(component);
-            if (name == "ActionButton" && ++actionButtons > DysonWorkspaceToolExecutor.MaxConversationActions)
-                return Fail(id, "", $"a surface holds at most {DysonWorkspaceToolExecutor.MaxConversationActions} ActionButtons.");
-            if (name == "Button" && surface.QuestionId is null)
-                return Fail(id, "/action", "Button.action needs questionId; PostUserQuestion first.");
+            // ActionButton funcs + every LinkTarget (a template counts once) + 1 per PipelineRun.
+            links += DysonA2uiLinks.Collect(component, "").Count() + (name == "PipelineRun" ? 1 : 0);
+            if (links > DysonWorkspaceToolExecutor.MaxConversationActions)
+                return Fail(id, "", $"a surface holds at most {DysonWorkspaceToolExecutor.MaxConversationActions} links (ActionButton, Link, LinkCard, PipelineRun...).");
+            if (name is "Button" or "Pressable" && surface.QuestionId is null)
+                return Fail(id, "/action", $"{name}.action needs questionId; PostUserQuestion first.");
 
             foreach (var (childId, suffix) in Children(component))
             {
                 if (!components.ContainsKey(childId))
                     return Fail(id, suffix, $"child '{childId}' does not exist.");
-                if (name is "Row" or "Column")
+                if (name is "Row" or "Column" or "Box" or "GridItem")
                     weighted.Add(childId);
+                if (!parents.TryGetValue(childId, out var list))
+                    parents[childId] = list = [];
+                list.Add((id, suffix));
             }
+        }
+
+        foreach (var (id, component) in components)
+        {
+            if (Structure(id, component, components, parents) is { } violation)
+                return Fail(violation.Id, violation.Suffix, violation.Message);
         }
 
         foreach (var (id, component) in components)
@@ -191,9 +203,53 @@ public static class DysonA2uiSurfaces
             : VoidResult<DysonA2uiError>.Success;
     }
 
+    private static readonly Dictionary<string, string[]> AllowedParents = new(StringComparer.Ordinal)
+    {
+        ["PopoverTrigger"] = ["Popover"],
+        ["PopoverContent"] = ["Popover"],
+        ["TableRow"] = ["Table", "TableSection"],
+        ["TableCell"] = ["TableRow"],
+        ["GridItem"] = ["Grid"],
+        ["FlowItem"] = ["Flow"],
+        ["CarouselItem"] = ["Carousel"],
+        ["CarouselMediaItem"] = ["Carousel"],
+    };
+
+    /// <summary>Parent/child shape rules (Popover parts, table, grid, flow and carousel items).</summary>
+    private static (string Id, string Suffix, string Message)? Structure(
+        string id,
+        JsonObject component,
+        IReadOnlyDictionary<string, JsonObject> components,
+        Dictionary<string, List<(string ParentId, string Suffix)>> parents)
+    {
+        var name = Name(component);
+        if (name == "Popover")
+        {
+            var kids = component["children"] as JsonArray;
+            var ok = kids is { Count: 2 }
+                && DysonA2uiValidator.AsString(kids[0]) is { } first && components.TryGetValue(first, out var a) && Name(a) == "PopoverTrigger"
+                && DysonA2uiValidator.AsString(kids[1]) is { } second && components.TryGetValue(second, out var b) && Name(b) == "PopoverContent";
+            if (!ok)
+                return (id, "/children", "Popover children must be exactly [PopoverTrigger, PopoverContent].");
+        }
+
+        if (name is null || !AllowedParents.TryGetValue(name, out var allowed))
+            return null;
+        parents.TryGetValue(id, out var list);
+        foreach (var (parentId, suffix) in list ?? [])
+        {
+            if (Array.IndexOf(allowed, Name(components[parentId])) < 0)
+                return (parentId, suffix, $"{name} is only allowed under {string.Join(" or ", allowed)}.");
+        }
+
+        return list is null && id == "root" ? (id, "", $"{name} is only allowed under {string.Join(" or ", allowed)}.") : null;
+    }
+
     /// <summary>Referenced child ids with the pointer suffix of the reference.</summary>
     internal static IEnumerable<(string Id, string Suffix)> Children(JsonObject component)
     {
+        foreach (var reference in ComponentRefs(component))
+            yield return reference;
         if (DysonA2uiValidator.AsString(component["child"]) is { } child)
             yield return (child, "/child");
         switch (component["children"])
@@ -209,6 +265,73 @@ public static class DysonA2uiSurfaces
             case JsonObject template when DysonA2uiValidator.AsString(template["componentId"]) is { } templateId:
                 yield return (templateId, "/children/componentId");
                 break;
+        }
+    }
+
+    /// <summary>Ids held outside child/children: tabs, accordion items, Modal parts, table cells and columns.</summary>
+    private static IEnumerable<(string Id, string Suffix)> ComponentRefs(JsonObject component)
+    {
+        switch (Name(component))
+        {
+            case "Tabs":
+                foreach (var r in ItemChildren(component["tabs"], "tabs"))
+                    yield return r;
+                break;
+            case "Accordion":
+                foreach (var r in ItemChildren(component["items"], "items"))
+                    yield return r;
+                break;
+            case "Modal":
+                if (DysonA2uiValidator.AsString(component["trigger"]) is { } trigger)
+                    yield return (trigger, "/trigger");
+                if (DysonA2uiValidator.AsString(component["content"]) is { } content)
+                    yield return (content, "/content");
+                break;
+            case "Table":
+                if (component["cellComponents"] is JsonArray cells)
+                {
+                    for (var i = 0; i < cells.Count; i++)
+                    {
+                        if (DysonA2uiValidator.AsString(cells[i]) is { } cell)
+                            yield return (cell, $"/cellComponents/{i}");
+                    }
+                }
+
+                if (component["columns"] is JsonArray columns)
+                {
+                    for (var i = 0; i < columns.Count; i++)
+                    {
+                        if (columns[i] is JsonObject col && DysonA2uiValidator.AsString(col["componentId"]) is { } header)
+                            yield return (header, $"/columns/{i}/componentId");
+                    }
+                }
+
+                if (component["rows"] is JsonArray rows)
+                {
+                    for (var r = 0; r < rows.Count; r++)
+                    {
+                        if (rows[r] is not JsonArray row)
+                            continue;
+                        for (var c = 0; c < row.Count; c++)
+                        {
+                            if (row[c] is JsonObject cell && DysonA2uiValidator.AsString(cell["componentId"]) is { } cellId)
+                                yield return (cellId, $"/rows/{r}/{c}/componentId");
+                        }
+                    }
+                }
+
+                break;
+        }
+    }
+
+    private static IEnumerable<(string Id, string Suffix)> ItemChildren(JsonNode? items, string key)
+    {
+        if (items is not JsonArray list)
+            yield break;
+        for (var i = 0; i < list.Count; i++)
+        {
+            if (list[i] is JsonObject item && DysonA2uiValidator.AsString(item["child"]) is { } id)
+                yield return (id, $"/{key}/{i}/child");
         }
     }
 

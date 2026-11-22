@@ -1,0 +1,13 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Text.Json.Nodes
+@using DysonHarness
+
+<p class="a2ui-text a2ui-text--caption">@A2uiProps.Str(Component["component"]): not built</p>
+
+@code {
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public string? Id { get; set; }
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public int Depth { get; set; } = 1;
+}

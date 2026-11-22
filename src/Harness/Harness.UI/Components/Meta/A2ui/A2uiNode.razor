@@ -1,5 +1,4 @@
 @namespace Harness.UI.Components.Meta.A2ui
-@using System.Globalization
 @using System.Text.Json.Nodes
 @using DysonHarness
 
@@ -7,7 +6,7 @@
    Text is Blazor-escaped (never MarkupString); no agent string reaches href/src/style/class/event attributes. *@
 @if (Depth <= DysonA2uiProtocol.MaxTreeDepth && View.Component(Id) is { } c)
 {
-    var aria = Aria(c);
+    var aria = A2uiProps.Aria(View, c, Scope, _domId, out _description);
     switch (Str(c["component"]))
     {
         case "Text":
@@ -25,9 +24,9 @@
         case "Column":
         case "List":
             <div class="@LayoutClass(c)" @attributes="aria">
-                @foreach (var (childId, childScope) in Children(c))
+                @foreach (var (childId, childScope) in A2uiProps.Children(View, c, Scope))
                 {
-                    if (Weight(childId) is { } weight)
+                    if (A2uiProps.Weight(View, childId) is { } weight)
                     {
                         <div class="a2ui-weighted" style="flex: @weight 1 0">
                             <A2uiNode View="View" Id="@childId" Scope="@childScope" Depth="Depth + 1" />
@@ -42,7 +41,17 @@
             break;
         case "Card":
             <div class="a2ui-card" @attributes="aria">
-                <A2uiNode View="View" Id="@Str(c["child"])" Scope="@Scope" Depth="Depth + 1" />
+                @if (c["children"] is not null)
+                {
+                    foreach (var (childId, childScope) in A2uiProps.Children(View, c, Scope))
+                    {
+                        <A2uiNode View="View" Id="@childId" Scope="@childScope" Depth="Depth + 1" />
+                    }
+                }
+                else
+                {
+                    <A2uiNode View="View" Id="@Str(c["child"])" Scope="@Scope" Depth="Depth + 1" />
+                }
             </div>
             break;
         case "Divider":
@@ -165,6 +174,111 @@
                     @attributes="aria"
                     @onclick="() => View.OpenAsync(func)">@Str(c["label"])</button>
             break;
+        case "Box":
+        case "Grid":
+        case "GridItem":
+        case "Flow":
+        case "FlowItem":
+        case "Carousel":
+        case "CarouselItem":
+        case "Spacer":
+        case "Tabs":
+        case "Section":
+        case "Accordion":
+            _description = null; // group components build their own aria
+            <A2uiLayout View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "Title":
+        case "Heading":
+        case "Caption":
+        case "Label":
+        case "Bold":
+        case "Italic":
+        case "Underline":
+        case "Strikethrough":
+        case "Badge":
+        case "Blockquote":
+        case "Quote":
+        case "Code":
+        case "CodeBlock":
+        case "Kbd":
+        case "Markdown":
+        case "Math":
+        case "ShimmerText":
+        case "Link":
+        case "Tooltip":
+        case "PulseIndicator":
+        case "FlashcardFlip":
+        case "Popover":
+        case "PopoverTrigger":
+        case "PopoverContent":
+        case "Modal":
+            _description = null;
+            <A2uiTextNode View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "Pressable":
+        case "Form":
+        case "TextArea":
+        case "Select":
+        case "RadioGroup":
+        case "Radio":
+        case "SegmentedControl":
+        case "Slider":
+        case "DateTimeInput":
+            _description = null;
+            <A2uiInputNode View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "ListItem":
+        case "Table":
+        case "TableSection":
+        case "TableRow":
+        case "TableCell":
+        case "DataTable":
+        case "ComparisonTable":
+        case "Stat":
+        case "StatGroup":
+        case "KeyValueList":
+        case "Timeline":
+        case "Progress":
+        case "RadialProgress":
+        case "Rating":
+        case "TagList":
+        case "Avatar":
+        case "AvatarGroup":
+        case "Agenda":
+            _description = null;
+            <A2uiDataNode View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "Chart":
+        case "BarChart":
+        case "LineChart":
+        case "AreaChart":
+        case "PieChart":
+        case "Sparkline":
+        case "Gauge":
+            _description = null;
+            <A2uiChart View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "Image":
+        case "Icon":
+        case "Favicon":
+        case "Video":
+        case "AudioPlayer":
+        case "ImageGallery":
+        case "ImageGrid":
+        case "CarouselMediaItem":
+        case "VideoEmbed":
+        case "Map":
+        case "LinkCard":
+        case "Citation":
+        case "EntityCard":
+            _description = null;
+            <A2uiMediaNode View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "PipelineRun":
+            _description = null;
+            <A2uiPipelineRun View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
     }
     if (_description is not null)
     {
@@ -187,21 +301,7 @@
     /// <summary>Inside a Button: Text renders as a span.</summary>
     [Parameter] public bool Inline { get; set; }
 
-    private static string? Str(JsonNode? node) =>
-        node is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
-
-    private IReadOnlyList<(string ComponentId, string Scope)> Children(JsonObject c) =>
-        c["children"] is { } children ? DysonA2uiBinding.ExpandChildren(children, View.Model, Scope) : [];
-
-    /// <summary>Validated number on a direct Row/Column child, formatted invariant. Never an agent string.</summary>
-    private string? Weight(string childId)
-    {
-        if (View.Component(childId)?["weight"] is not JsonValue v || !v.TryGetValue<double>(out var weight))
-            return null;
-        if (double.IsNaN(weight) || weight <= 0)
-            return null;
-        return Math.Min(weight, 1000).ToString("0.###", CultureInfo.InvariantCulture);
-    }
+    private static string? Str(JsonNode? node) => A2uiProps.Str(node);
 
     private List<(string Label, string Value)> Options(JsonObject c)
     {
@@ -256,37 +356,12 @@
         return [];
     }
 
-    private Dictionary<string, object> Aria(JsonObject c)
-    {
-        _description = null;
-        var attributes = new Dictionary<string, object>(StringComparer.Ordinal);
-        if (c["@accessibility"] is not JsonObject a)
-            return attributes;
-
-        if (a.ContainsKey("label"))
-            attributes["aria-label"] = DysonA2uiBinding.ResolveString(a["label"], View.Model, Scope);
-        if (a.ContainsKey("description"))
-        {
-            _description = DysonA2uiBinding.ResolveString(a["description"], View.Model, Scope);
-            attributes["aria-describedby"] = $"{_domId}-desc";
-        }
-
-        var live = Str(a["live"]) switch
-        {
-            "polite" => "polite",
-            "assertive" => "assertive",
-            "off" => "off",
-            _ => null,
-        };
-        if (live is not null)
-            attributes["aria-live"] = live;
-        if (a.ContainsKey("hidden") && DysonA2uiBinding.ResolveBool(a["hidden"], View.Model, Scope))
-            attributes["aria-hidden"] = "true";
-        return attributes;
-    }
-
     private static string? TextClass(JsonObject c) => Str(c["variant"]) switch
     {
+        "h1" => "a2ui-text--h1",
+        "h2" => "a2ui-text--h2",
+        "h3" => "a2ui-text--h3",
+        "h4" => "a2ui-text--h4",
         "h5" => "a2ui-text--title",
         "caption" => "a2ui-text--caption",
         _ => null,
@@ -335,6 +410,8 @@
             "stretch" => " a2ui-align--stretch",
             _ => "",
         };
-        return layout + justify + align;
+        var gap = A2uiProps.GapClass(c);
+        var pad = A2uiProps.PadClass(c);
+        return layout + justify + align + (gap.Length > 0 ? " " + gap : "") + (pad.Length > 0 ? " " + pad : "");
     }
 }

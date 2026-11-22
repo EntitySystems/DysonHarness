@@ -23,6 +23,25 @@ public static class DysonA2uiBinding
         };
     }
 
+    /// <summary>Number literal or bound number; numeric strings parse with the invariant culture. Null when absent or not finite.</summary>
+    public static double? ResolveNumber(JsonNode? dyn, JsonNode model, string scope)
+    {
+        if (ResolveValue(dyn, model, scope) is not JsonValue v)
+            return null;
+        double d;
+        switch (v.GetValueKind())
+        {
+            case JsonValueKind.Number when v.TryGetValue<double>(out d):
+                break;
+            case JsonValueKind.String when double.TryParse(v.GetValue<string>(), NumberStyles.Float, CultureInfo.InvariantCulture, out d):
+                break;
+            default:
+                return null;
+        }
+
+        return double.IsFinite(d) ? d : null;
+    }
+
     public static bool ResolveBool(JsonNode? dyn, JsonNode model, string scope) =>
         ResolveValue(dyn, model, scope)?.GetValueKind() == JsonValueKind.True;
 

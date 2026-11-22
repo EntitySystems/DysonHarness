@@ -50,7 +50,7 @@ public class DysonA2uiValidatorTests
             { """[{"version":"0.9","createSurface":{"surfaceId":"s"}}]""", "/messages/0/version" },
             { """[{"version":"1.0","createSurface":{"surfaceId":"s"},"deleteSurface":{"surfaceId":"s"}}]""", "/messages/0" },
             { """[{"version":"1.0","callRendererFunction":{"surfaceId":"s"}}]""", "/messages/0/callRendererFunction" },
-            { Create("""{"id":"root","component":"Image","url":"https://x"}"""), "/messages/0/createSurface/components/0/component" },
+            { Create("""{"id":"root","component":"Svg","url":"https://x"}"""), "/messages/0/createSurface/components/0/component" },
             { Create("""{"id":"root","component":"Text","text":"x","html":"<b>"}"""), "/messages/0/createSurface/components/0/html" },
             {
                 Create("""{"id":"root","component":"Button","child":"t","action":{"functionCall":{"@call":"openUrl","args":{"url":"https://x"}}}}"""),
@@ -66,7 +66,7 @@ public class DysonA2uiValidatorTests
             { Create(text, ""","sendDataModel":true"""), "/messages/0/createSurface/sendDataModel" },
             { Create(text, ""","theme":{}"""), "/messages/0/createSurface/theme" },
             { Create("""{"id":"root","component":"ChoicePicker","options":[{"label":"a","value":"a"}],"value":[],"filterable":true}"""), "/messages/0/createSurface/components/0/filterable" },
-            { Create("""{"id":"root","component":"Text","text":"x","variant":"h1"}"""), "/messages/0/createSurface/components/0/variant" },
+            { Create("""{"id":"root","component":"Text","text":"x","variant":"h6"}"""), "/messages/0/createSurface/components/0/variant" },
             { Create($$"""{"id":"root","component":"Text","text":"{{new string('x', DysonA2uiProtocol.MaxStringLength + 1)}}"}"""), "/messages/0/createSurface/components/0/text" },
             {
                 """[{"version":"1.0","createSurface":{"surfaceId":"a"}},{"version":"1.0","deleteSurface":{"surfaceId":"b"}}]""",
@@ -117,7 +117,7 @@ public class DysonA2uiValidatorTests
         var qid = Guid.NewGuid();
         string[] cases =
         [
-            Create("""{"id":"root","component":"Image","url":"https://x/a.png"}"""),
+            Create("""{"id":"root","component":"Image","url":"data:image/png;base64,AAAA"}"""),
             Create("""{"id":"root","component":"Icon","svgPath":"M0 0"}"""),
             Create("""{"id":"root","component":"Text","text":"x","onclick":"alert(1)"}"""),
             Create("""{"id":"root","component":"Text","text":"x","style":"color:red"}"""),

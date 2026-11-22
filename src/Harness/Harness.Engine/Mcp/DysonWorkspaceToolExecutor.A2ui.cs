@@ -49,7 +49,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             return A2uiError(call, parsedMessages.Error, questionId, message);
 
         var surfaceId = parsedMessages.Value[0].SurfaceId;
-        foreach (var (pointer, func) in DysonA2uiValidator.ActionButtonFuncPointers(parsedMessages.Value))
+        foreach (var (pointer, func) in DysonA2uiValidator.LinkFuncPointers(parsedMessages.Value))
         {
             var resolved = await DysonBuiltInConversationActions
                 .TryResolveAsync(func, WorkRoot, cancellationToken)
@@ -59,7 +59,7 @@ public sealed partial class DysonWorkspaceToolExecutor
 
             var reason = resolved is { } failed
                 ? failed.Error
-                : "ActionButton.func must be open_plan:{planId}, open_scratch:{id}, open_file:{path} or open_url:{url}";
+                : "links must be open_plan:{planId}, open_scratch:{id}, open_file:{path} or an http(s) URL";
             return A2uiError(
                 call,
                 new DysonA2uiError(DysonA2uiProtocol.ValidationFailed, surfaceId, pointer, reason),
