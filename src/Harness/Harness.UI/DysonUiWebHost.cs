@@ -193,7 +193,6 @@ public static class DysonUiWebHost
         builder.Services.AddScoped<DysonUiAgentSessionRuntimeConfigBuilder>();
         // In-memory work-directory owner. One per scope, including the retained subject scope. Not Windows-only. Not a singleton.
         builder.Services.AddScoped<DysonWorkDirectoryFocus>();
-        builder.Services.AddScoped<DysonSessionRuntime>();
         builder.Services.AddScoped<DysonUiHost>();
 #if DYSON_PREVIEW
         builder.Services.AddScoped<IDysonDemoHooks, DysonUiDemoHooks>();
@@ -253,6 +252,19 @@ public static class DysonUiWebHost
         // Not a singleton and not a static.
         builder.Services.AddScoped<DysonVoiceMode>();
 #endif
+        // After the bus and (on Windows) DysonVoiceMode, so the runtime gets both.
+        builder.Services.AddSingleton(sp => new DysonSlugDefaultMaxTargetContextChanged((slugId, tokens) =>
+            sp.GetRequiredService<DysonMessageBus>().Publish(
+                DysonBusScopes.Wildcard,
+                new DysonSlugDefaultMaxTargetContextChangedEvent(slugId, tokens))));
+        builder.Services.AddScoped<DysonSessionRuntime>(sp => new DysonSessionRuntime(
+            sp.GetRequiredService<IDysonSubjectContext>(),
+            sp.GetRequiredService<IDysonSessionRepository>(),
+            sp.GetRequiredService<IDysonAgentSessionRuntimeFactory>(),
+            sp.GetService<DysonSessionEventPublisher>(),
+            sp.GetService<DysonWorkDirectoryFocus>(),
+            sp.GetService<DysonVoiceMode>(),
+            sp.GetService<DysonMessageBus>()));
 
         if (hostingMode == DysonHostingMode.Cloud)
             builder.Services.AddScoped<CircuitHandler, DysonCloudSubjectCircuitHandler>();

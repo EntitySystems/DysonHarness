@@ -39,6 +39,24 @@
                                Busy="ContextStepBusy"
                                OnSetEffort="OnSetEffort"
                                OnModesChanged="OnModesChanged" />
+            <div class="models-panel__context" title="Default max target context (blank = harness 200K)">
+                <span class="models-panel__effort-label">context</span>
+                <button type="button"
+                        class="composer-context-limit__step"
+                        aria-label="Decrease default context by 10K"
+                        disabled="@ContextStepBusy"
+                        @onclick="() => OnStepContext.InvokeAsync(-DysonMaxTargetContextTokens.Step)">−</button>
+                <span class="composer-context-limit__value">
+                    @(Slug.DefaultMaxTargetContextTokens is int manualDefault
+                        ? DysonMaxTargetContextTokens.FormatCompact(manualDefault)
+                        : DysonMaxTargetContextTokens.FormatCompact(DysonMaxTargetContextTokens.HarnessDefault))
+                </span>
+                <button type="button"
+                        class="composer-context-limit__step"
+                        aria-label="Increase default context by 10K"
+                        disabled="@ContextStepBusy"
+                        @onclick="() => OnStepContext.InvokeAsync(DysonMaxTargetContextTokens.Step)">+</button>
+            </div>
             @if (!Slug.IsDefault && (!CanToggleEnabled || Slug.IsEnabled))
             {
                 <button type="button" class="btn btn--xs" @onclick="OnSetDefault">Default</button>

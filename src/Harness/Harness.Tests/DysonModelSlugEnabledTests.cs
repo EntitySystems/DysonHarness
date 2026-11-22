@@ -690,11 +690,58 @@ public class DysonModelSlugEnabledTests
         if (add.IsError)
             throw new InvalidOperationException(add.Error);
 
+        var manualSet = store.SetSlugDefaultMaxTargetContextTokensAsync(add.Value, 100_000)
+            .GetAwaiter().GetResult();
+        if (manualSet.IsError)
+            throw new InvalidOperationException(manualSet.Error);
+
+        listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+        var manualRow = listed.Value.Single(p => p.Id == create.Value).Slugs.Single();
+        if (manualRow.DefaultMaxTargetContextTokens != 100_000)
+            throw new InvalidOperationException(
+                "SetSlugDefaultMaxTargetContextTokensAsync must persist for a manual OpenAI-compatible slug.");
+
+        var manualClear = store.SetSlugDefaultMaxTargetContextTokensAsync(add.Value, null)
+            .GetAwaiter().GetResult();
+        if (manualClear.IsError)
+            throw new InvalidOperationException(manualClear.Error);
+
+        listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+        if (listed.Value.Single(p => p.Id == create.Value).Slugs.Single().DefaultMaxTargetContextTokens is not null)
+            throw new InvalidOperationException("Null must clear a manual OpenAI-compatible slug default.");
+
+        AssertContextRejected(store, DysonProviderKinds.Demo, "Manual Demo", "demo-a", "Demo A");
+        AssertContextRejected(store, DysonProviderKinds.Anthropic, "Manual Anthropic", "claude", "Claude");
+    }
+
+    private static void AssertContextRejected(
+        IDysonModelRepository store,
+        string kind,
+        string displayName,
+        string slug,
+        string alias)
+    {
+        var create = store.CreateProviderAsync(new DysonModelProviderEntity
+        {
+            DisplayName = displayName,
+            ProviderKind = kind,
+        }).GetAwaiter().GetResult();
+        if (create.IsError)
+            throw new InvalidOperationException(create.Error);
+
+        var add = store.AddSlugAsync(create.Value, slug, alias).GetAwaiter().GetResult();
+        if (add.IsError)
+            throw new InvalidOperationException(add.Error);
+
         var reject = store.SetSlugDefaultMaxTargetContextTokensAsync(add.Value, 100_000)
             .GetAwaiter().GetResult();
         if (!reject.IsError)
             throw new InvalidOperationException(
-                "SetSlugDefaultMaxTargetContextTokensAsync must reject manual provider slugs.");
+                "SetSlugDefaultMaxTargetContextTokensAsync must reject " + kind + " slugs.");
     }
 
     private static void AssertDisabledDefaultFallsBack()
