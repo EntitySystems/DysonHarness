@@ -114,6 +114,28 @@ public class DysonRenderA2uiTests
     }
 
     [Fact]
+    public async Task LocalVideo_escaping_path_fails_but_missing_file_renders()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        var bad = await RenderAsync(executor, Args(VideoSurface("vid", "../x.mp4")));
+        Assert.True(bad.IsError);
+        Assert.Contains("Path escapes work directory", bad.Content, StringComparison.Ordinal);
+        Assert.Contains("/components/0/path", bad.Content, StringComparison.Ordinal);
+        Assert.Empty(Assert.Single(session.Turns).A2uiSurface!.Components);
+
+        // A missing or unsupported file is card text at render time, not a tool error.
+        var missing = await RenderAsync(executor, Args(VideoSurface("vid", "no-such-" + Guid.NewGuid().ToString("N") + ".mp4")));
+        Assert.False(missing.IsError, missing.Content);
+    }
+
+    private static JsonObject VideoSurface(string surfaceId, string path)
+    {
+        var create = Create(surfaceId, new JsonObject { ["id"] = "root", ["component"] = "LocalVideo", ["path"] = path });
+        create["createSurface"]!["catalogId"] = DysonCatalog;
+        return create;
+    }
+
+    [Fact]
     public async Task RenderA2ui_rejects_when_not_meta_agent_and_bad_questionId()
     {
         using var http = new HttpClient();
