@@ -24,26 +24,54 @@ description: >-
 - Stable UAX#31 `surfaceId` (e.g. `deploy_form`; no `dyson_` prefix).
 - `createSurface {surfaceId, catalogId?, components, dataModel?}` once; exactly one `"id":"root"`, every child id must exist.
 - Then `updateComponents {surfaceId, components}` (same id replaces) / `updateDataModel {surfaceId, path?, value}` (RFC 6901, default `/`; `null` deletes). Re-create is `INTEGRITY_ERROR`; `deleteSurface {surfaceId}` drops it.
-- `ActionButton` / `QuestionSlot` / `LocalVideo` need the Dyson catalog: surface `catalogId` or component `"@catalogId"` = `a2ui://dyson/catalogs/v1/catalog.json`. Otherwise omit `catalogId` (basic). In a later `updateComponents`, put `"@catalogId"` on each Dyson component itself (the surface `catalogId` is not carried over).
+- `ActionButton` / `QuestionSlot` / `LocalVideo` / `PipelineRun` need the Dyson catalog: surface `catalogId` or component `"@catalogId"` = `a2ui://dyson/catalogs/v1/catalog.json`. Otherwise omit `catalogId` (basic). In a later `updateComponents`, put `"@catalogId"` on each Dyson component itself (the surface `catalogId` is not carried over). Every other component needs no `@catalogId`.
+- The CopilotKit playground id `https://copilotkit.ai/a2ui/catalogs/playground/v1` is accepted as an alias of the Dyson catalog.
 
 ## 4. Kit
 
-| Component | Props (required **bold**) |
-|---|---|
-| `Text` | **`text`**; `variant` caption/body |
-| `Row`, `Column` | **`children`**; `justify` start/center/end/spaceAround/spaceBetween/spaceEvenly/stretch; `align` start/center/end/stretch |
-| `List` | **`children`**; `direction` vertical/horizontal; `align` |
-| `Card` | **`child`** |
-| `Divider` | `axis` horizontal/vertical |
-| `Button` | **`child`** (a Text id), **`action`**; `variant` default/primary/borderless; `@checks` |
-| `TextField` | **`label`**, **`value`**; `placeholder`; `variant` shortText/longText/number/obscured; `@checks` |
-| `CheckBox` | **`label`**, **`value`** (bool); `@checks` |
-| `ChoicePicker` | **`options`** `[{label, value}]`, **`value`** (string list); `label`; `variant` mutuallyExclusive/multipleSelection; `displayStyle` checkbox/chips; `@checks` |
-| `ActionButton` (Dyson) | **`label`**, **`func`** (literals) |
-| `QuestionSlot` (Dyson) | **`questionId`** (literal Guid) |
-| `LocalVideo` (Dyson) | **`path`** (literal, work-relative like `open_file:`); `title` (default: file name) |
+Required props in **bold**. Full props per component: [reference.md](reference.md) (`LoadSkill("skills/dyson-a2ui", loadIndexOnly:false)`). An unknown-prop error lists the accepted props.
 
-`weight` only on direct children of Row/Column; `@accessibility` on any component. Not available: Tabs, Modal, Image, Icon, Video, AudioPlayer, Slider, DateTimeInput, `filterable`, `functionCall`, `sendDataModel`, `metadata`.
+| Group | Components (required props) |
+|---|---|
+| Layout | `Row`/`Column`/`List` (**children**; justify, align, gap/padding 0..12), `Card` (child or children), `Divider`, `Box` (**children**; direction), `Grid` (**children**; columns 1..12 or minChildWidth), `GridItem`/`FlowItem` (span), `Flow`, `Carousel` (**children**), `CarouselItem`, `Spacer`, `Tabs` (**tabs** [{title, child}]), `Section` (**title**, **children**), `Accordion` (**items** [{title, text?, child?}]) |
+| Text | `Text` (**text**; variant caption/body/h1..h5), `Title`, `Heading` (**text**; level, eyebrow, subtitle), `Caption`, `Label`, `Bold`, `Italic`, `Underline`, `Strikethrough`, `Badge`, `Blockquote`/`Quote`, `Code`/`CodeBlock` (code), `Kbd` (**keys**), `Markdown` (text; links inert, images as alt text), `Math` (TeX source shown), `ShimmerText`, `Link` (**text**, **href**), `Tooltip` (**child**, text) |
+| Inputs | `Button` (**child**, **action**), `TextField`, `TextArea`, `CheckBox`, `ChoicePicker`, `Select`/`RadioGroup`/`SegmentedControl` (**options**, **value**), `Radio` (**label**, **value**, **option**), `Slider` (**value**; min/max/step), `DateTimeInput` (**value**), `Pressable` (**child**, **action**), `Form` (**children**); `checks` = `@checks` |
+| Data | `ListItem` (**label**), `Table` (columns + rows, or TableSection/TableRow/TableCell children), `DataTable` (**columns** [{key, label, format?}], **rows**), `ComparisonTable` (**options**, **rows** [{feature, values}]), `Stat` (**label**, **value**; delta, trend, tone), `StatGroup` (**items**), `KeyValueList`/`Timeline` (**items**), `Progress`/`RadialProgress`/`Rating`/`Gauge` (**value**), `TagList` (**tags**), `Avatar` (**name**), `AvatarGroup` (**people**), `Agenda` (**days**), `Map` (**markers** [{label, lat, lng}]) |
+| Charts | `Chart` (**data**; chartType, xKey, series), `BarChart`, `LineChart`, `AreaChart`, `PieChart`, `Sparkline` (**data**) — section 4b |
+| Media | `Image` (**url**), `Icon` (**name**), `Favicon`, `Video`/`AudioPlayer`/`VideoEmbed` (**url**), `ImageGallery`/`ImageGrid` (images), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
+| Overlay | `Popover` (children = [PopoverTrigger, PopoverContent]), `Modal` (**trigger**, **content**), `FlashcardFlip` (**front**, **back**), `PulseIndicator` |
+| Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest) |
+
+`weight` on direct children of Row/Column/Box/GridItem; `@accessibility` on any component. Parent rules: GridItem under Grid, FlowItem under Flow, CarouselItem under Carousel, TableRow under Table/TableSection, TableCell under TableRow. `Pressable`, like `Button`, needs a question-bound surface.
+
+Rejected: `Svg`, `HtmlView`, Icon `svgPath` (no model markup), `Treemap`, `SankeyChart`, Button/Pressable `href` (use Link), `onVisible`/`onClick`/`onAction`, `functionCall`. Not yet: `FollowUp` (use PostUserQuestion choices), `ScatterChart`, `Heatmap`, `RadarChart`, `CandlestickChart`, `ListItem.action`.
+
+## 4b. Charts
+
+- Inline SVG drawn by Dyson. `chartType` bar/line/area/pie/donut; `BarChart`, `LineChart`, `AreaChart`, `PieChart`, `Sparkline` are the same with a fixed kind; `Gauge {value, min, max}`.
+- Standard shape: `data` = flat objects, `xKey` = category field, `series` = field names or `{key, label}` (default: every numeric field).
+- Playground shape: `data` = `[{x, y, series?}]`; pie: `[{label, value}]`.
+- Options: `stacked`, `layout` horizontal, `showDots`, `format` number/currency/percent/compact, `unit`, `title`, `subtitle`, `height` 120..480.
+- Caps: 8 series, 500 points per series, 2000 in total, 24 slices. Summarise: keep it to about 300 points. Bound data over a cap is truncated with a note.
+
+## 4c. Links and media
+
+- `Link.href`, `LinkCard.url`, `Citation.url`, `EntityCard.href`/`actions[].href`, `Video`/`AudioPlayer`/`VideoEmbed.url`: literal `http(s)` URL (becomes `open_url:`) or `open_plan:`/`open_scratch:`/`open_file:`. They count toward the 8 actions per surface with ActionButtons (a PipelineRun counts 1).
+- Media URLs (`Image.url`, `Avatar.image`, galleries) are validated but never loaded: a placeholder with the alt/caption text, initials for Avatar. Video and audio render as link cards. Nothing in a surface fetches from the network.
+
+Dashboard example:
+
+```json
+{"messages":[{"version":"1.0","createSurface":{"surfaceId":"revenue","components":[
+{"id":"root","component":"Column","gap":4,"children":["head","kpis","trend","channels"]},
+{"id":"head","component":"Heading","text":"Revenue","eyebrow":"Q4","subtitle":"Billing data"},
+{"id":"kpis","component":"Grid","columns":3,"gap":4,"children":["mrr","churn","arpu"]},
+{"id":"mrr","component":"Stat","label":"MRR","value":"$12k","delta":"+4%","trend":"up","tone":"positive"},
+{"id":"churn","component":"Stat","label":"Churn","value":"1.2%","trend":"down","tone":"warning"},
+{"id":"arpu","component":"Stat","label":"ARPU","value":"$48"},
+{"id":"trend","component":"Chart","chartType":"area","xKey":"month","series":["web","ads"],"stacked":true,"format":"currency","data":[{"month":"Oct","web":7,"ads":3},{"month":"Nov","web":8,"ads":4}]},
+{"id":"channels","component":"Table","columns":["Channel",{"label":"Share","align":"end"}],"rows":[["Web","62%"],["Ads","38%"]]}]}}]}
+```
 
 ## 5. Bindings
 
@@ -119,4 +147,4 @@ An invalid call returns `{"version":"1.0","error":{"code":"VALIDATION_FAILED","s
 
 ## 8. Security
 
-No HTML, script, styles or URLs: `Text` is plain text, unknown props (`html`, `url`, `style`, …) are rejected, no `openUrl`. Only `ActionButton` `func` opens things.
+No HTML, script, styles or fetched URLs: text is plain text, unknown props (`html`, `style`, …) are rejected, cosmetic props (`background`, `radius`, `width`, `color`, …) are accepted and ignored, no `openUrl`. Only `ActionButton` `func` and the link props in section 4c open things.
