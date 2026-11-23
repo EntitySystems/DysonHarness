@@ -85,13 +85,18 @@ async function sendModel(iframe, viewer) {
     iframe.contentWindow?.postMessage({ type: 'dyson-model3d-mode', inline: viewer.inline }, '*');
     let buffer = null;
     let error = null;
+    const url = viewer.previewUrl;
     try {
-        const response = await fetch(viewer.previewUrl, { credentials: 'same-origin' });
+        const response = await fetch(url, { credentials: 'same-origin' });
         if (!response.ok)
             throw new Error(`HTTP ${response.status}`);
         buffer = await response.arrayBuffer();
     } catch (e) {
         error = 'Could not read the model file: ' + (e?.message || e);
+        // The preview id may have been swapped under us (re-render); the next attach retries with the new URL.
+        viewer.loadedPath = null;
+        if (viewer.previewUrl !== url && iframe.isConnected)
+            return sendModel(iframe, viewer); // already re-pointed while fetching: retry once with the new URL
     }
     if (viewer.path !== path || !iframe.isConnected)
         return; // a newer path (or an unload) won
@@ -112,6 +117,8 @@ function watch(layer) {
     new MutationObserver(queueSync).observe(list, { childList: true, subtree: true });
     // Entrance and live-row animations translate the slot; re-measure when they settle.
     list.addEventListener('animationend', queueSync);
+    // Inner scrollers (carousel tracks, tables) move the slot without a mutation; scroll does not bubble.
+    list.addEventListener('scroll', queueSync, { capture: true, passive: true });
 }
 
 function queueSync() {
@@ -152,6 +159,21 @@ function place(host) {
     style.left = `${s.left - l.left}px`;
     style.width = `${s.width}px`;
     style.height = `${s.height}px`;
+    // The host is outside the slot's overflow ancestors (tables, carousels, sections): clip to them by hand.
+    let top = s.top, left = s.left, right = s.right, bottom = s.bottom;
+    for (let a = slot.parentElement; a && a !== host.layer.parentElement; a = a.parentElement) {
+        const cs = getComputedStyle(a);
+        if (cs.overflowX === 'visible' && cs.overflowY === 'visible')
+            continue;
+        const r = a.getBoundingClientRect();
+        top = Math.max(top, r.top);
+        left = Math.max(left, r.left);
+        right = Math.min(right, r.right);
+        bottom = Math.min(bottom, r.bottom);
+    }
+    style.clipPath = top > s.top || left > s.left || right < s.right || bottom < s.bottom
+        ? `inset(${top - s.top}px ${s.right - right}px ${s.bottom - bottom}px ${left - s.left}px)`
+        : '';
     slot.toggleAttribute('data-ready', host.viewer.ready);
 }
 
@@ -170,7 +192,6 @@ function enter(host, slot) {
 }
 
 function unload(key, host) {
-    host.iframe.src = 'about:blank';
     viewers.delete(host.iframe);
     host.el.remove();
     hosts.delete(key);
@@ -223,7 +244,7 @@ export function attach(key, slot, previewUrl, format, path, threeUrl, viewerUrl)
     host.slot = slot;
     // Always the newest preview URL: a re-rendered instance registers its own id and the old one is released.
     host.viewer.previewUrl = previewUrl;
-    if (host.viewer.path !== path) {
+    if (host.viewer.path !== path || host.viewer.loadedPath === null) {
         host.viewer.path = path;
         host.viewer.format = format;
         sendModel(host.iframe, host.viewer);

@@ -90,8 +90,21 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_card is null || PreviewUrl is not { } url || _disposed)
+        if (_disposed)
             return;
+        if (_card is null || PreviewUrl is not { } url)
+        {
+            // Path changed to an error: drop the old model's host so it does not sit over the error text.
+            try
+            {
+                if (_module is not null)
+                    await DysonCircuitJs.InvokeVoidAsync(_module, "dispose", Key);
+            }
+            catch (Exception ex) when (DysonCircuitJs.IsBenign(ex))
+            {
+            }
+            return;
+        }
 
         try
         {
