@@ -21,6 +21,7 @@ public static class DysonMetaChatWindow
 
         var count = 0;
         if (turn.Kind == DysonAgentTurnKind.Normal
+            && !DysonInjectedUserComments.IsPipelineText(turn.Instruction)
             && (!string.IsNullOrWhiteSpace(turn.Instruction)
                 || !string.IsNullOrWhiteSpace(turn.HiddenInstruction)
                 || turn.UserImages.Any(i =>
@@ -31,7 +32,9 @@ public static class DysonMetaChatWindow
 
         foreach (var segment in turn.ReasoningLog)
         {
-            if (segment.Kind == DysonReasoningSegmentKind.UserComment && !string.IsNullOrWhiteSpace(segment.Text))
+            if (segment.Kind == DysonReasoningSegmentKind.UserComment
+                && !string.IsNullOrWhiteSpace(segment.Text)
+                && segment.Marker != DysonInjectedUserComments.PipelineMarker)
                 count++;
         }
 

@@ -157,7 +157,8 @@ public static class MetaChatItems
         for (var t = start; t < turns.Count; t++)
         {
             var turn = turns[t];
-            if (turn.Kind == DysonAgentTurnKind.Normal)
+            // Automatic CI/CD batches are the model's context, not a user bubble.
+            if (turn.Kind == DysonAgentTurnKind.Normal && !DysonInjectedUserComments.IsPipelineText(turn.Instruction))
             {
                 var text = turn.Instruction ?? "";
                 var thumbs = ThumbsFrom(turn);
@@ -184,7 +185,7 @@ public static class MetaChatItems
             {
                 if (segment.Kind != DysonReasoningSegmentKind.UserComment)
                     continue;
-                if (string.IsNullOrWhiteSpace(segment.Text))
+                if (string.IsNullOrWhiteSpace(segment.Text) || segment.Marker == DysonInjectedUserComments.PipelineMarker)
                     continue;
 
                 items.Add(new MetaChatItem(
@@ -295,7 +296,8 @@ public static class MetaChatItems
     /// keeps an attachment-only queue row (empty text) visible.
     /// </summary>
     private static bool QueuedRowVisible(QueuedPrompt queuedPrompt) =>
-        !string.IsNullOrWhiteSpace(queuedPrompt.Text) || queuedPrompt.HasAttachments;
+        !DysonInjectedUserComments.IsPipelineText(queuedPrompt.Text)
+        && (!string.IsNullOrWhiteSpace(queuedPrompt.Text) || queuedPrompt.HasAttachments);
 
     private static IReadOnlyList<MetaChatThumb> ThumbsFrom(DysonAgentTurn turn)
     {

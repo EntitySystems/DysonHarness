@@ -38,6 +38,23 @@ public class MetaChatItemsTests
     }
 
     [Fact]
+    public void Build_hides_automatic_pipeline_batches()
+    {
+        var batch = DysonInjectedUserComments.FormatWithMarker(DysonInjectedUserComments.PipelineMarker, "run 1 failed");
+        var idle = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal, Instruction = batch };
+        var running = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal, Instruction = "Ship it" };
+        Assert.True(running.EnqueueUserComment("run 2 failed", DysonInjectedUserComments.PipelineMarker).IsSuccess);
+
+        var items = MetaChatItems.Build(
+            [idle, running],
+            [new QueuedPrompt(Guid.NewGuid(), batch, batch)]);
+
+        Assert.Equal("Ship it", Assert.Single(items).Text);
+        Assert.Equal(0, DysonMetaChatWindow.InteractionCount(idle));
+        Assert.Equal(1, DysonMetaChatWindow.InteractionCount(running));
+    }
+
+    [Fact]
     public void Build_appends_injected_comments_and_queued_pending_bubbles()
     {
         var turn = new DysonAgentTurn

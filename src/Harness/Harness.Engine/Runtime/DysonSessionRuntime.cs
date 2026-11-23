@@ -896,6 +896,7 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
 
             CancelAllPromptTokens();
             DisposeVoiceSidecarSubscriptions();
+            DisposePipelineRelay();
             _slugContextSubscription?.Dispose();
         }
         finally
@@ -1815,5 +1816,7 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
             Kind = kind,
             Version = version,
         });
+        if (kind is DysonRuntimeChangeKind.SessionGraph or DysonRuntimeChangeKind.Busy)
+            SchedulePipelineRelaySync();
     }
 }

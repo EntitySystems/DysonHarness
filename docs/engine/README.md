@@ -172,6 +172,7 @@ Process-local typed pub/sub in `Harness.Engine/Messaging/`. `DysonMessageBus` is
 | `DysonGitRepoChangedEvent` | WorkDirectory key | `WorkDirectoryId`, `RepoRoot` |
 | `DysonPlansChangedEvent` | WorkDirectory key | `WorkDirectoryId`, `PlanId` |
 | `DysonPipelinesChangedEvent` | WorkDirectory key (published by that work directory's `DysonVersionControlService`) | `WorkDirectoryId` (no body; read `Snapshot`) |
+| `DysonPipelineEvent` | WorkDirectory key (same service, after the baseline tick) | one run/job transition; relayed to live root Meta sessions, see [meta-agent](meta-agent.md#pipeline-events-quiet-by-default) |
 | `DysonShellVcsCommandRanEvent` | WorkDirectory key (published by `ShellExecute` after a `gh`/`git` command) | `WorkDirectoryId` |
 | `DysonFileChangedEvent` | root session key (published by the file tools after a `file_changes` append) | `RootSessionId`, `ChangeId` (no diff; read the row) |
 
