@@ -147,7 +147,7 @@ public class DysonA2uiCatalogExtensionTests
     [Fact]
     public void ComponentTable_covers_the_whole_catalog()
     {
-        var dysonOnly = new HashSet<string> { "ActionButton", "QuestionSlot", "PipelineRun", "LocalVideo" };
+        var dysonOnly = new HashSet<string> { "ActionButton", "QuestionSlot", "PipelineRun", "LocalVideo", "SubagentTasks" };
         var have = new HashSet<string> { "Text", "Row", "Column", "List", "Card", "Divider", "Button", "TextField", "CheckBox", "ChoicePicker" };
         foreach (var name in DysonA2uiCatalog.Components.Keys)
         {

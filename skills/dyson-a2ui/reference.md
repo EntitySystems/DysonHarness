@@ -131,5 +131,6 @@ All charts also take title, subtitle, height 120..480, format number/currency/pe
 | QuestionSlot | **questionId** |
 | LocalVideo | **path** (work-relative); title |
 | PipelineRun | exactly one of runId (integer ≥1) or jobIds (1..30 distinct integers); literals only |
+| SubagentTasks | **agentId** (integer ≥1, literal) |
 
 Link targets: literal `http(s)` URL or `open_plan:`/`open_scratch:`/`open_file:`; `mailto:`, `javascript:`, `data:` and relative URLs are rejected. Media URLs: literal `http(s)`, at most 2048 chars, no `data:`.

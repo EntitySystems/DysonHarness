@@ -25,6 +25,9 @@ public sealed record DysonSubagentActivityChangedEvent(
 /// <summary>Child SelectedProvider changed (immediate or pending pick applied). Not deduped.</summary>
 public sealed record DysonSubagentModelChangedEvent(Guid PersistenceId, int RuntimeId) : IDysonMessageBusEvent;
 
+/// <summary>A session's todo list changed (create/update/delete/restore/replace). Carries no rows; read DysonAgentSession.Todos.</summary>
+public sealed record DysonSessionTodosChangedEvent(Guid PersistenceId, int RuntimeId) : IDysonMessageBusEvent;
+
 public sealed record DysonSessionTurnAddedEvent(
     Guid PersistenceId,
     Guid TurnId,
