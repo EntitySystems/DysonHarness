@@ -127,6 +127,91 @@ public class DysonA2uiSubagentTasksTests
     }
 
     [Fact]
+    public void Build_projects_the_open_target_and_the_agents_own_children_in_spawn_order()
+    {
+        var (parent, child) = ParentWithChild();
+        var card = DysonA2uiSubagentTasks.Build(parent, child.Id);
+        Assert.Equal(child.PersistenceId, card.PersistenceId);
+        Assert.Empty(card.ChildIds);
+
+        var first = new DysonPlanToolStubSession(DysonAgentModes.Explore);
+        first.SetPersistenceIdForTest(Guid.NewGuid());
+        var second = new DysonPlanToolStubSession(DysonAgentModes.Drone);
+        second.SetPersistenceIdForTest(Guid.NewGuid());
+        var unpersisted = new DysonPlanToolStubSession(DysonAgentModes.Drone); // hidden, as in the Meta roster
+        child.RegisterForTest(first);
+        child.RegisterForTest(second);
+        child.RegisterForTest(unpersisted);
+
+        Assert.Equal([first.Id, second.Id], DysonA2uiSubagentTasks.Build(parent, child.Id).ChildIds);
+        // The parent-level card lists only direct children, not grandchildren.
+        Assert.Empty(DysonA2uiSubagentTasks.ChildIdsOf(parent).Except([child.Id]));
+        // A child row resolves against its own parent, the same Build.
+        Assert.Equal(first.PersistenceId, DysonA2uiSubagentTasks.Build(child, first.Id).PersistenceId);
+
+        // No session to open for unknown / stopped agents.
+        Assert.Equal(Guid.Empty, DysonA2uiSubagentTasks.Build(parent, child.Id + 99).PersistenceId);
+        Assert.True(child.TryMarkTerminal(DysonSessionStatus.Stopped, "halt"));
+        Assert.Equal(Guid.Empty, DysonA2uiSubagentTasks.Build(parent, child.Id).PersistenceId);
+    }
+
+    [Fact]
+    public void ToggleLabel_names_the_count_and_the_hide_state()
+    {
+        Assert.Equal("Show 1 agent", DysonA2uiSubagentTasks.ToggleLabel(1, false));
+        Assert.Equal("Show 3 agents", DysonA2uiSubagentTasks.ToggleLabel(3, false));
+        Assert.Equal("Hide agents", DysonA2uiSubagentTasks.ToggleLabel(3, true));
+    }
+
+    [Fact]
+    public void Watch_rebuilds_the_card_when_the_agent_spawns_a_child()
+    {
+        using var bus = new DysonMessageBus();
+        using var publisher = new DysonSessionEventPublisher(bus);
+        var (parent, child) = ParentWithChild();
+        var attached = publisher.Attach(parent);
+        Assert.True(attached.IsSuccess);
+        using var token = attached.Value;
+
+        var cards = new List<DysonA2uiSubagentTasksCard>();
+        var watch = DysonA2uiSubagentTasks.Watch(bus, parent, child.Id, cards.Add);
+        Assert.True(watch.IsSuccess);
+        using var _ = watch.Value;
+
+        var grandchild = new DysonPlanToolStubSession(DysonAgentModes.Explore);
+        grandchild.SetPersistenceIdForTest(Guid.NewGuid());
+        child.RegisterForTest(grandchild);
+
+        Assert.NotEmpty(cards);
+        Assert.Equal([grandchild.Id], cards[^1].ChildIds);
+    }
+
+    [Fact]
+    public void Watch_of_an_agent_that_does_not_exist_yet_wakes_when_it_spawns()
+    {
+        using var bus = new DysonMessageBus();
+        using var publisher = new DysonSessionEventPublisher(bus);
+        var parent = new DysonPlanToolStubSession(DysonAgentModes.MetaAgent);
+        parent.SetPersistenceIdForTest(Guid.NewGuid());
+        var attached = publisher.Attach(parent);
+        Assert.True(attached.IsSuccess);
+        using var token = attached.Value;
+
+        var cards = new List<DysonA2uiSubagentTasksCard>();
+        var watch = DysonA2uiSubagentTasks.Watch(bus, parent, 1, cards.Add);
+        Assert.True(watch.IsSuccess);
+        using var _ = watch.Value;
+
+        var child = new DysonPlanToolStubSession(DysonAgentModes.MetaAgentDrone);
+        child.SetPersistenceIdForTest(Guid.NewGuid());
+        parent.RegisterForTest(child);
+
+        var card = Assert.Single(cards);
+        Assert.Null(card.Message);
+        Assert.Equal(child.PersistenceId, card.PersistenceId);
+    }
+
+    [Fact]
     public void Validator_accepts_SubagentTasks_only_in_the_Dyson_catalog()
     {
         Assert.True(Parse(",\"agentId\":3").IsSuccess);

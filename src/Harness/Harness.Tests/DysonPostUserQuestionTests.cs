@@ -81,6 +81,7 @@ public class DysonPostUserQuestionTests
         var meta = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent);
         var description = meta.Tools["RenderA2ui"].Description;
         Assert.Contains("Use it often", description, StringComparison.Ordinal);
+        Assert.Contains("Users prefer to see", description, StringComparison.Ordinal);
         Assert.Contains("Skip it for a single-sentence reply or simple chatting", description, StringComparison.Ordinal);
         Assert.Contains("put the actions in the surface as ActionButton", description, StringComparison.Ordinal);
         Assert.True(description.Length <= 1000, $"RenderA2ui description is {description.Length} chars.");

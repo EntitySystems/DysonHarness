@@ -107,7 +107,8 @@ All charts also take title, subtitle, height 120..480, format number/currency/pe
 | Image | exactly one of **url** (media, placeholder, never loaded) or **path** (work-relative png/jpg/gif/webp/bmp, shown); height 120..800; description, fallback, alt, caption, variant icon/avatar/small/medium/large/header |
 | Icon | **name** (built-in set: check, x, plus, minus, arrow-up/down/left/right, chevron-right, info, warning, error, star, star-half, clock, calendar, user, file, folder, link, external-link, search, settings, git-branch, play, pause); label |
 | Favicon | url or domain (first letter shown) |
-| Video, AudioPlayer | **url** (link target); title, caption (link card) |
+| Video | **url** (link target); title, caption (link card) |
+| AudioPlayer | exactly one of **url** (link target; http(s) plays on click, otherwise a link card) or **path** (work-relative audio, played); title, caption |
 | CarouselMediaItem | url (media); caption, alt, title, description |
 | LinkCard | **url** (link target), **title**; description, image, favicon, siteName |
 | Citation | label, index, title, snippet, source, url (link target) |
@@ -127,12 +128,12 @@ All charts also take title, subtitle, height 120..480, format number/currency/pe
 
 | Component | Props |
 |---|---|
-| ActionButton | **label**, **func** (open_plan/open_scratch/open_file/open_url) |
+| ActionButton | **label**, **func** (open_plan/open_scratch/open_file/open_folder/open_url) |
 | QuestionSlot | **questionId** |
 | LocalVideo | **path** (work-relative); title |
 | Model3D | **path** (work-relative `.glb` / `.fbx`); title; height 160..800 (default 320) |
 | PipelineRun | exactly one of runId (integer ≥1) or jobIds (1..30 distinct integers); literals only |
 | TreeDiagram | **nodes** (nested `{id, title, text?, tags?[{label, color red\|green\|accent}] ≤6, children?}`; ≤100 nodes, depth ≤12, unique ids, literals only); flow vertical\|horizontal; title |
-| SubagentTasks | **agentId** (integer ≥1, literal) |
+| SubagentTasks | **agentId** (integer ≥1, literal; your direct child). Row opens the agent's session; a "Show N agents" button expands its own sub-agents (host-filled, no props) |
 
-Link targets: literal `http(s)` URL or `open_plan:`/`open_scratch:`/`open_file:`; `mailto:`, `javascript:`, `data:` and relative URLs are rejected. Media URLs: literal `http(s)`, at most 2048 chars, no `data:`.
+Link targets: literal `http(s)` URL or `open_plan:`/`open_scratch:`/`open_file:`/`open_folder:`; `mailto:`, `javascript:`, `data:` and relative URLs are rejected. Media URLs: literal `http(s)`, at most 2048 chars, no `data:`.

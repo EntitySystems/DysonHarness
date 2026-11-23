@@ -59,7 +59,7 @@ public sealed partial class DysonWorkspaceToolExecutor
 
             var reason = resolved is { } failed
                 ? failed.Error
-                : "links must be open_plan:{planId}, open_scratch:{id}, open_file:{path} or an http(s) URL";
+                : "links must be open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_folder:{path} or an http(s) URL";
             return A2uiError(
                 call,
                 new DysonA2uiError(DysonA2uiProtocol.ValidationFailed, surfaceId, pointer, reason),
@@ -67,10 +67,11 @@ public sealed partial class DysonWorkspaceToolExecutor
                 message);
         }
 
-        // LocalVideo / Model3D / Image paths follow open_file: an escaping path fails here; missing/unsupported files are card text.
+        // LocalVideo / Model3D / Image / AudioPlayer paths follow open_file: an escaping path fails here; missing/unsupported files are card text.
         foreach (var (pointer, path) in DysonA2uiLocalVideo.PathPointers(parsedMessages.Value)
                      .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiModel3D.ComponentName))
-                     .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiImage.ComponentName)))
+                     .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiImage.ComponentName))
+                     .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiAudio.ComponentName)))
         {
             var resolved = await DysonA2uiLocalVideo.ResolveRelativeAsync(path, WorkRoot, cancellationToken).ConfigureAwait(false);
             if (resolved.IsError)

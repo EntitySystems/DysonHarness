@@ -131,6 +131,9 @@ public class DysonRenderA2uiTests
     [Theory]
     [InlineData("open_url:javascript:alert(1)", "Only http/https URLs are allowed.")]
     [InlineData("open_file:../x", "Path escapes work directory")]
+    [InlineData("open_folder:../x", "Path escapes work directory")]
+    [InlineData("open_folder:src/../..", "Path escapes work directory")]
+    [InlineData("open_folder:", "Folder path is required.")]
     public async Task ActionButton_bad_payload_is_tool_error_and_publishes_no_surface(string func, string reason)
     {
         var (session, executor) = await MetaExecutorAsync();
@@ -187,6 +190,20 @@ public class DysonRenderA2uiTests
         Assert.Empty(Assert.Single(session.Turns).A2uiSurface!.Components);
 
         var missing = await RenderAsync(executor, Args(VideoSurface("img", "gone-" + Guid.NewGuid().ToString("N") + ".png", "Image")));
+        Assert.False(missing.IsError, missing.Content);
+    }
+
+    [Fact]
+    public async Task AudioPlayer_escaping_path_fails_at_the_path_pointer_but_missing_file_renders()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        var bad = await RenderAsync(executor, Args(VideoSurface("aud", "../x.mp3", "AudioPlayer")));
+        Assert.True(bad.IsError);
+        Assert.Contains("\"VALIDATION_FAILED\"", bad.Content, StringComparison.Ordinal);
+        Assert.Contains("/components/0/path", bad.Content, StringComparison.Ordinal);
+        Assert.Empty(Assert.Single(session.Turns).A2uiSurface!.Components);
+
+        var missing = await RenderAsync(executor, Args(VideoSurface("aud", "gone-" + Guid.NewGuid().ToString("N") + ".mp3", "AudioPlayer")));
         Assert.False(missing.IsError, missing.Content);
     }
 

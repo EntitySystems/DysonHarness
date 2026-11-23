@@ -1,0 +1,137 @@
+/* SubagentTasks row. Tokens from app.css only; the spinner is the global .subagent-card__spinner (app.css). */
+.a2ui-subagent-tasks-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.a2ui-subagent-tasks {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+/* Status colors: the same mapping as SubagentCard.razor.css (Blocked keeps the default there too). */
+.a2ui-subagent-tasks[data-status="Completed"] {
+  box-shadow: inset 3px 0 0 var(--success), var(--shadow-1);
+}
+
+.a2ui-subagent-tasks[data-status="Failed"] {
+  box-shadow: inset 3px 0 0 var(--danger), var(--shadow-1);
+}
+
+.a2ui-subagent-tasks[data-status="Stopped"],
+.a2ui-subagent-tasks[data-status="Interrupted"] {
+  box-shadow: inset 3px 0 0 var(--text-dim), var(--shadow-1);
+}
+
+.a2ui-subagent-tasks[data-running] {
+  box-shadow: inset 3px 0 0 var(--accent), var(--shadow-1);
+}
+
+.a2ui-subagent-tasks--note {
+  color: var(--text-muted);
+}
+
+/* The open target: a button (or a plain div when the row has no session) holding the row content. */
+.a2ui-subagent-tasks__open {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.a2ui-subagent-tasks__open {
+  cursor: pointer;
+}
+
+button.a2ui-subagent-tasks__open:hover .a2ui-subagent-tasks__title {
+  text-decoration: underline;
+}
+
+.a2ui-subagent-tasks__toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 1px var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.a2ui-subagent-tasks__toggle:hover {
+  background: var(--bg-hover);
+}
+
+.a2ui-subagent-tasks__chevron {
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--motion-fast) var(--ease);
+}
+
+.a2ui-subagent-tasks__toggle[aria-expanded="true"] .a2ui-subagent-tasks__chevron {
+  transform: rotate(45deg);
+}
+
+/* Indented sub-agent list: a tree guide like the Meta roster's nested rows. */
+.a2ui-subagent-tasks__children {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-left: var(--sp-3);
+  padding-left: var(--sp-2);
+  border-left: 1px solid var(--border-subtle);
+}
+
+.a2ui-subagent-tasks__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: var(--fw-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.a2ui-subagent-tasks__id {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.a2ui-subagent-tasks__pill {
+  flex: none;
+  padding: 1px var(--sp-2);
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: var(--fs-xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .a2ui-subagent-tasks__chevron {
+    transition: none;
+  }
+}

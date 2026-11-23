@@ -18,12 +18,14 @@ public enum DysonBuiltInConversationKind
     OpenScratch,
     OpenFile,
     OpenUrl,
+    OpenFolder,
 }
 
 /// <summary>
 /// One built-in intent. <see cref="PlanId"/> is set for <see cref="DysonBuiltInConversationKind.OpenPlan"/>;
 /// PlanId carries the scratch file id for <see cref="DysonBuiltInConversationKind.OpenScratch"/>.
-/// <see cref="PathOrUrl"/> is the work-relative path or the http(s) URL for OpenFile / OpenUrl.
+/// <see cref="PathOrUrl"/> is the work-relative path or the http(s) URL for OpenFile / OpenUrl; for
+/// OpenFolder it is the work-relative folder ("" = the work root).
 /// </summary>
 public sealed record DysonBuiltInConversationIntent(
     DysonBuiltInConversationKind Kind,
@@ -31,7 +33,7 @@ public sealed record DysonBuiltInConversationIntent(
     string? PathOrUrl);
 
 /// <summary>
-/// Parses <c>open_plan:</c>, <c>open_scratch:</c>, <c>open_file:</c>, and <c>open_url:</c> before the session delegate map.
+/// Parses <c>open_plan:</c>, <c>open_scratch:</c>, <c>open_file:</c>, <c>open_folder:</c>, and <c>open_url:</c> before the session delegate map.
 /// Prefixes are ordinal and case-sensitive.
 /// </summary>
 public static class DysonBuiltInConversationActions
@@ -39,6 +41,7 @@ public static class DysonBuiltInConversationActions
     private const string OpenPlanPrefix = "open_plan:";
     public const string OpenScratchPrefix = "open_scratch:";
     public const string OpenFilePrefix = "open_file:";
+    public const string OpenFolderPrefix = "open_folder:";
     private const string OpenUrlPrefix = "open_url:";
 
     /// <summary>True when the trimmed key starts with a built-in prefix.</summary>
@@ -48,6 +51,7 @@ public static class DysonBuiltInConversationActions
         return trimmed.StartsWith(OpenPlanPrefix, StringComparison.Ordinal)
             || trimmed.StartsWith(OpenScratchPrefix, StringComparison.Ordinal)
             || trimmed.StartsWith(OpenFilePrefix, StringComparison.Ordinal)
+            || trimmed.StartsWith(OpenFolderPrefix, StringComparison.Ordinal)
             || trimmed.StartsWith(OpenUrlPrefix, StringComparison.Ordinal);
     }
 
@@ -70,7 +74,13 @@ public static class DysonBuiltInConversationActions
 
         if (trimmed.StartsWith(OpenFilePrefix, StringComparison.Ordinal))
         {
-            return await ResolveFileAsync(trimmed[OpenFilePrefix.Length..].Trim(), workRoot, cancellationToken)
+            return await ResolveFileAsync(trimmed[OpenFilePrefix.Length..].Trim(), workRoot, folder: false, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (trimmed.StartsWith(OpenFolderPrefix, StringComparison.Ordinal))
+        {
+            return await ResolveFileAsync(trimmed[OpenFolderPrefix.Length..].Trim(), workRoot, folder: true, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -113,10 +123,14 @@ public static class DysonBuiltInConversationActions
     private static async Task<Result<DysonBuiltInConversationIntent, string>> ResolveFileAsync(
         string payload,
         string? workRoot,
+        bool folder,
         CancellationToken cancellationToken)
     {
+        // Same lexical rules for files and folders (no rooted path, no ".."); existence and the real-path check
+        // happen at click time (DysonOpenFolder).
+        var noun = folder ? "Folder" : "File";
         if (payload.Length == 0)
-            return Result<DysonBuiltInConversationIntent, string>.AsError("File path is required.");
+            return Result<DysonBuiltInConversationIntent, string>.AsError($"{noun} path is required.");
 
         if (Path.IsPathRooted(payload) || HasDotDotSegment(payload))
         {
@@ -142,12 +156,12 @@ public static class DysonBuiltInConversationActions
         if (relative.IsError)
             return Result<DysonBuiltInConversationIntent, string>.AsError(relative.Error);
 
-        if (relative.Value.Length == 0)
+        if (relative.Value.Length == 0 && !folder)
             return Result<DysonBuiltInConversationIntent, string>.AsError("File path is required.");
 
         return Result<DysonBuiltInConversationIntent, string>.AsValue(
             new DysonBuiltInConversationIntent(
-                DysonBuiltInConversationKind.OpenFile,
+                folder ? DysonBuiltInConversationKind.OpenFolder : DysonBuiltInConversationKind.OpenFile,
                 0,
                 relative.Value));
     }

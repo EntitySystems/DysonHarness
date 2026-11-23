@@ -353,6 +353,54 @@ public sealed class DysonVersionControlServiceTests
         Assert.Equal(0, provider.RunsCalls);
     }
 
+    [Fact]
+    public async Task Pipeline_events_start_after_the_baseline_and_only_on_change()
+    {
+        var provider = new FakeProvider { Runs = [Run(1, DysonPipelineState.Running)] };
+        await using var h = Harness.Create(provider);
+        var events = new ConcurrentQueue<DysonPipelineEvent>();
+        using var sub = h.Bus.Subscribe<DysonPipelineEvent>(DysonBusScopes.WorkDirectory(h.Service.WorkDirectoryId), events.Enqueue).Value;
+        var baseline = h.Listen();
+        using var lease = h.Service.WatchEvents();
+        await baseline.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Empty(events);
+
+        // Unchanged tick: nothing.
+        await h.Clock.AdvanceOneAsync(TimeSpan.FromSeconds(15));
+        await h.UntilRunsAsync(2);
+        await h.Clock.SettleAsync();
+        Assert.Empty(events);
+
+        provider.Runs = [Run(1, DysonPipelineState.Failed), Run(2, DysonPipelineState.Queued)];
+        var changed = h.Listen();
+        await h.Clock.AdvanceOneAsync(TimeSpan.FromSeconds(15));
+        await changed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await h.UntilAsync(() => events.Count >= 2);
+
+        Assert.Contains(events, e => e.Kind == DysonPipelineEventKind.RunCompleted && e.RunId == 1 && e.IsImportant);
+        Assert.Contains(events, e => e.Kind == DysonPipelineEventKind.RunCreated && e.RunId == 2);
+    }
+
+    [Fact]
+    public async Task Event_lease_fetches_jobs_only_while_a_run_is_active()
+    {
+        var idle = new FakeProvider { Runs = [Run(1, DysonPipelineState.Succeeded)] };
+        await using (var h = Harness.Create(idle))
+        {
+            var tick = h.Listen();
+            using var lease = h.Service.WatchEvents();
+            await tick.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, idle.JobsCalls);
+        }
+
+        var active = new FakeProvider { Runs = [Run(1, DysonPipelineState.Running)] };
+        await using var h2 = Harness.Create(active);
+        var tick2 = h2.Listen();
+        using var lease2 = h2.Service.WatchEvents();
+        await tick2.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, active.JobsCalls);
+    }
+
     private static DysonPipelineRun Run(long id, DysonPipelineState state) => new(
         id, "ci", "title", "main", "abcdef1234567", "push", (int)id, 1, state, state.ToString(),
         T0, T0, T0, $"https://github.com/o/r/actions/runs/{id}");

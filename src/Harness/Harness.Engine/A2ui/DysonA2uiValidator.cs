@@ -320,6 +320,8 @@ public static partial class DysonA2uiValidator
                 return Err(path, "PipelineRun needs exactly one of runId or jobIds.");
             if (name == DysonA2uiImage.ComponentName && c.ContainsKey("url") == c.ContainsKey("path"))
                 return Err(path, "Image needs exactly one of url or path.");
+            if (name == DysonA2uiAudio.ComponentName && c.ContainsKey("url") == c.ContainsKey("path"))
+                return Err(path, "AudioPlayer needs exactly one of url or path.");
             if (name == DysonA2uiTreeDiagram.ComponentName && DysonA2uiTreeDiagram.Check(c["nodes"]) is var (suffix, treeMessage))
                 return Err(path + suffix, treeMessage);
 
@@ -479,7 +481,7 @@ public static partial class DysonA2uiValidator
                 case DysonA2uiPropKind.BuiltInFunc:
                     return s is not null && DysonBuiltInConversationActions.IsReservedPrefix(s)
                         ? Str(s, path)
-                        : Err(path, "ActionButton.func must be open_plan:{planId}, open_scratch:{id}, open_file:{path} or open_url:{url}.");
+                        : Err(path, "ActionButton.func must be open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_folder:{path} or open_url:{url}.");
                 case DysonA2uiPropKind.QuestionId:
                     return s is not null && Guid.TryParseExact(s, "D", out var id) && id != Guid.Empty
                         ? null

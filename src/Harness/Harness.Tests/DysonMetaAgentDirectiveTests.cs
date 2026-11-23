@@ -132,8 +132,14 @@ public class DysonMetaAgentDirectiveTests
             "Meta Agent ForMode");
         MustContain(
             text,
-            "RenderA2ui renders A2UI v1.0 JSON inline in this chat with the Dyson kit; reuse a surfaceId to update it; pass questionId to answer a PostUserQuestion card from a form. Use it often when a component clarifies or structures the output, including dashboards (Stat, Grid, Chart, Table); skip it for one sentence or small talk. With a surface, put the actions in it as ActionButtons, not in PostConversationMessage actions. The dyson-a2ui skill has the format.",
+            "RenderA2ui renders A2UI v1.0 JSON inline in this chat with the Dyson kit; pass questionId to answer a PostUserQuestion card from a form. The dyson-a2ui skill has the format.",
             "Meta Agent ForMode");
+        MustContain(text, "Users prefer seeing to reading. When it makes sense", "Meta Agent ForMode");
+        MustContain(
+            text,
+            "Rule: use RenderA2ui when the reply has 3 or more items, numbers, media, structure, or actions. Use a plain PostConversationMessage for one sentence, small talk, or a quick ack. A surface is itself a posted bubble, so never post the same content both ways.",
+            "Meta Agent ForMode");
+        MustNotContain(text, "Use it often when a component", "Meta Agent ForMode");
         MustContain(text, "visualizationId", "Meta Agent ForMode");
         MustContain(text, "WriteTempFile", "Meta Agent ForMode");
         MustContain(text, "ReadTempFile", "Meta Agent ForMode");

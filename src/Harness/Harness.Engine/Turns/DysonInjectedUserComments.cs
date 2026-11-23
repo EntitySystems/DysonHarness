@@ -20,6 +20,13 @@ public static class DysonInjectedUserComments
     /// <summary>Tag for a Meta message delivered into a voice-sidecar turn.</summary>
     public const string MetaMarker = "[Message from Meta session]";
 
+    /// <summary>Tag for an automatic CI/CD status batch (<see cref="DysonPipelineEventRelay"/>); never the user's words.</summary>
+    public const string PipelineMarker = "[Pipeline status event]";
+
+    /// <summary>True for an automatic pipeline batch (turn instruction or queued text). The Meta chat hides these.</summary>
+    public static bool IsPipelineText(string? text) =>
+        text is not null && text.StartsWith(PipelineMarker, StringComparison.Ordinal);
+
     /// <summary>Non-empty UserComment segments in log order.</summary>
     public static List<DysonReasoningSegment> From(IEnumerable<DysonReasoningSegment> log)
     {
