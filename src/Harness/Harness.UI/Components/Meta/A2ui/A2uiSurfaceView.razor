@@ -2,6 +2,9 @@
 @using System.Text.Json.Nodes
 @using DysonHarness
 @using Harness.UI.Components.Meta
+@implements IAsyncDisposable
+@inject DysonFilePreviewStore Previews
+@inject IJSRuntime Js
 
 @* Renders one validated A2UI surface. Owns the local data model; all binding logic is DysonA2uiBinding (Engine). *@
 <div class="a2ui-surface">
@@ -17,6 +20,10 @@
     {
         <div class="a2ui-error" role="alert">@Error</div>
     }
+    @if (UsesModel3D)
+    {
+        <A2uiModel3DModal Item="_model3d" OnClose="CloseModel3D" />
+    }
 </div>
 
 @code {
@@ -28,6 +35,8 @@
     private (bool Locked, bool Busy, string? Error, bool OpenBusy, DysonUserQuestion? Question, int StateVersion) _last;
     private IReadOnlyDictionary<Guid, DysonUserQuestion?>? _lastEmbedded;
     private readonly A2uiEnter _enter = new();
+    private A2uiModel3DOpen? _model3d;
+    private string? _model3dPreviewId;
 
     [Parameter, EditorRequired] public DysonA2uiSurface Surface { get; set; } = default!;
 
@@ -108,6 +117,50 @@
 
     internal Task OpenAsync(string func) => OpenBusy ? Task.CompletedTask : OnOpen.InvokeAsync(func);
 
+    /// <summary>Set by a Model3D child once its viewer attached: dispose then drops this surface's viewers.</summary>
+    internal bool UsesModel3D { get; set; }
+
+    /// <summary>Opens the large Model3D view. It lives here (stable via <c>@key</c>), after the node tree, so revisions keep it.</summary>
+    internal void OpenModel3D(string nodeId, string title, DysonA2uiModel3DCard card)
+    {
+        Previews.Remove(_model3dPreviewId);
+        _model3dPreviewId = Previews.PutFile(card.AbsolutePath, card.ContentType);
+        _model3d = new A2uiModel3DOpen(nodeId, title, card, DysonFilePreviewStore.UrlFor(_model3dPreviewId));
+        UsesModel3D = true;
+        _render = true;
+        StateHasChanged();
+    }
+
+    private void CloseModel3D()
+    {
+        _model3d = null;
+        Previews.Remove(_model3dPreviewId);
+        _model3dPreviewId = null;
+        _render = true;
+        StateHasChanged();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Previews.Remove(_model3dPreviewId);
+        _model3dPreviewId = null;
+        if (!UsesModel3D)
+            return;
+
+        var module = await DysonCircuitJs.InvokeAsync<IJSObjectReference>(
+            Js, "import", "./" + Assets["Components/Meta/A2ui/A2uiModel3D.razor.js"]);
+        if (module is null)
+            return;
+        await DysonCircuitJs.InvokeVoidAsync(module, "disposeSurface", $"{TurnId:N}/{Surface.SurfaceId}/");
+        try
+        {
+            await module.DisposeAsync();
+        }
+        catch (Exception ex) when (DysonCircuitJs.IsBenign(ex))
+        {
+        }
+    }
+
     protected override void OnParametersSet()
     {
         // An agent update (new revision) wins over local edits.
@@ -120,6 +173,15 @@
             _render = true;
             if (Live)
                 _enter.Schedule(Surface, Environment.TickCount64);
+        }
+
+        // The open model's node is gone (deleteSurface, replaced component): close the large view.
+        if (_model3d is { } open && A2uiProps.Str(Component(open.NodeId)?["component"]) != DysonA2uiModel3D.ComponentName)
+        {
+            _model3d = null;
+            Previews.Remove(_model3dPreviewId);
+            _model3dPreviewId = null;
+            _render = true;
         }
 
         var current = (Locked, Busy, Error, OpenBusy, Question, State?.Version ?? 0);

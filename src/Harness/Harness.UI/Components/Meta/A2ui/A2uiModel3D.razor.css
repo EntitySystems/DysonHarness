@@ -1,0 +1,61 @@
+/* Model3D card. Tokens from app.css only. The viewer iframe is JS-owned (MetaChatFeed layer) and styled inline. */
+.a2ui-model3d {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.a2ui-model3d__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.a2ui-model3d__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.a2ui-model3d__expand {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.a2ui-model3d__slot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+
+.a2ui-model3d__slot[data-ready] .a2ui-model3d__note {
+  visibility: hidden;
+}
+
+.a2ui-model3d__note {
+  padding: var(--sp-3);
+  font-size: var(--fs-xs);
+  text-align: center;
+  overflow-wrap: anywhere;
+}

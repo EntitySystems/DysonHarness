@@ -547,7 +547,7 @@ public static class DysonMetaAgentTools
                 "PostConversationMessage actions are only for a plain message with no surface. " +
                 "JSON only: no markdown, HTML, or code fences. " +
                 "Kit: layout (Row, Column, Grid, Card, Tabs...), text (Text, Heading, Markdown, Link...), inputs (TextField, Select, Slider...), data (Table, DataTable, Stat, Chart...); " +
-                "Dyson catalog: ActionButton, QuestionSlot, LocalVideo, PipelineRun, SubagentTasks. No Svg/HtmlView. " +
+                "Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks. No Svg/HtmlView. " +
                 "ListPipelineRuns gives PipelineRun ids. " +
                 "Reuse a surfaceId to update it. " +
                 "The dyson-a2ui skill has the format and examples.",

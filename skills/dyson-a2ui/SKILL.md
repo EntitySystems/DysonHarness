@@ -24,7 +24,7 @@ description: >-
 - Stable UAX#31 `surfaceId` (e.g. `deploy_form`; no `dyson_` prefix).
 - `createSurface {surfaceId, catalogId?, components, dataModel?}` once; exactly one `"id":"root"`, every child id must exist.
 - Then `updateComponents {surfaceId, components}` (same id replaces) / `updateDataModel {surfaceId, path?, value}` (RFC 6901, default `/`; `null` deletes). Re-create is `INTEGRITY_ERROR`; `deleteSurface {surfaceId}` drops it.
-- `ActionButton` / `QuestionSlot` / `LocalVideo` / `PipelineRun` / `SubagentTasks` are Dyson catalog components. They work with `catalogId` omitted (or set to `a2ui://dyson/catalogs/v1/catalog.json`). Only an explicit basic surface `catalogId` or component `"@catalogId"` rejects them. No component needs `@catalogId`.
+- `ActionButton` / `QuestionSlot` / `LocalVideo` / `Model3D` / `PipelineRun` / `SubagentTasks` are Dyson catalog components. They work with `catalogId` omitted (or set to `a2ui://dyson/catalogs/v1/catalog.json`). Only an explicit basic surface `catalogId` or component `"@catalogId"` rejects them. No component needs `@catalogId`.
 - The CopilotKit playground id `https://copilotkit.ai/a2ui/catalogs/playground/v1` is accepted as an alias of the Dyson catalog.
 
 ## 4. Kit
@@ -40,7 +40,7 @@ Required props in **bold**. Full props per component: [reference.md](reference.m
 | Charts | `Chart` (**data**; chartType, xKey, series), `BarChart`, `LineChart`, `AreaChart`, `PieChart`, `Sparkline` (**data**) — section 4b |
 | Media | `Image` (**url**), `Icon` (**name**), `Favicon`, `Video`/`AudioPlayer`/`VideoEmbed` (**url**), `ImageGallery`/`ImageGrid` (images), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
 | Overlay | `Popover` (children = [PopoverTrigger, PopoverContent]), `Modal` (**trigger**, **content**), `FlashcardFlip` (**front**, **back**), `PulseIndicator` |
-| Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest), `SubagentTasks` (**agentId** integer = a drone/explore/review's agentId; the host fills the title, the X/N todo pill and the running state, live) |
+| Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `Model3D` (**path**; title, height 160..800), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest), `SubagentTasks` (**agentId** integer = a drone/explore/review's agentId; the host fills the title, the X/N todo pill and the running state, live) |
 
 `weight` on direct children of Row/Column/Box/GridItem; `@accessibility` on any component. Parent rules: GridItem under Grid, FlowItem under Flow, CarouselItem under Carousel, TableRow under Table/TableSection, TableCell under TableRow. `Pressable`, like `Button`, needs a question-bound surface.
 
@@ -117,6 +117,14 @@ A card for a video file in the work directory: title, first-frame thumbnail, dur
 
 ```json
 {"id":"demo","component":"LocalVideo","@catalogId":"a2ui://dyson/catalogs/v1/catalog.json","path":"media/demo.mp4","title":"Login flow demo"}
+```
+
+## 6b2b. 3D model (Model3D)
+
+An inline three.js viewer for a `.glb` or `.fbx` file in the work directory: drag to rotate, full width of its parent, `height` 160..800 px (default 320). The expand icon opens a large view with zoom, pan and temperature / intensity light sliders (the inline view keeps its default light). Soft light from every direction, transparent background, no environment. Same path rules as LocalVideo: a rooted or `..` path is `VALIDATION_FAILED`; a missing, unsupported (`.gltf`, `.obj`), over 64 MB or over 2,000,000-triangle model renders as card text. Draco / Meshopt / KTX2-compressed GLBs and FBX external textures are not supported; animations are not played. At most 8 inline viewers per page.
+
+```json
+{"id":"chair","component":"Model3D","@catalogId":"a2ui://dyson/catalogs/v1/catalog.json","path":"models/chair.glb","title":"Chair","height":360}
 ```
 
 ## 6b3. Subagent tasks (SubagentTasks)
