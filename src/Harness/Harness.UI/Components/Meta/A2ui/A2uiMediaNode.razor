@@ -3,8 +3,9 @@
 @using System.Text.Json.Nodes
 @using DysonHarness
 
-@* Media + composites. A remote MediaUrl is validated but NEVER fetched or rendered (no img/video/iframe); Image.path is the one
-   exception (A2uiImage, same-origin local preview route). A LinkTarget is a
+@* Media + composites. A remote MediaUrl is validated but NEVER fetched or rendered (no img/video/iframe); Image.path (A2uiImage) and
+   AudioPlayer.path (A2uiAudio) use the same-origin local preview route. AudioPlayer.url is the one remote load, and only after the
+   user presses play (A2uiAudio; private/loopback/LAN/non-http targets stay a link card). A LinkTarget is a
    <button> that calls View.OpenAsync(func), so no href exists. SVG attributes are our numbers or fixed icon paths. *@
 @{
     var name = A2uiProps.Str(Component["component"]);
@@ -37,6 +38,9 @@
     case "Favicon":
         var faviconHost = HostOf(S("url"), S("domain"));
         <span class="a2ui-favicon" aria-hidden="@(faviconHost is null ? "true" : null)" title="@faviconHost" @attributes="aria">@Initial(faviconHost)</span>
+        break;
+    case "AudioPlayer" when Component["path"] is not null || DysonA2uiAudio.PlayableUrl(A2uiProps.Str(Component["url"])) is not null:
+        <A2uiAudio View="View" Id="@Id" Component="Component" Scope="@Scope" Aria="aria" />
         break;
     case "Video":
     case "AudioPlayer":

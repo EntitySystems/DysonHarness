@@ -193,6 +193,20 @@ public class DysonRenderA2uiTests
         Assert.False(missing.IsError, missing.Content);
     }
 
+    [Fact]
+    public async Task AudioPlayer_escaping_path_fails_at_the_path_pointer_but_missing_file_renders()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        var bad = await RenderAsync(executor, Args(VideoSurface("aud", "../x.mp3", "AudioPlayer")));
+        Assert.True(bad.IsError);
+        Assert.Contains("\"VALIDATION_FAILED\"", bad.Content, StringComparison.Ordinal);
+        Assert.Contains("/components/0/path", bad.Content, StringComparison.Ordinal);
+        Assert.Empty(Assert.Single(session.Turns).A2uiSurface!.Components);
+
+        var missing = await RenderAsync(executor, Args(VideoSurface("aud", "gone-" + Guid.NewGuid().ToString("N") + ".mp3", "AudioPlayer")));
+        Assert.False(missing.IsError, missing.Content);
+    }
+
     private static JsonObject VideoSurface(string surfaceId, string path, string component = "LocalVideo")
     {
         var create = Create(surfaceId, new JsonObject { ["id"] = "root", ["component"] = component, ["path"] = path });

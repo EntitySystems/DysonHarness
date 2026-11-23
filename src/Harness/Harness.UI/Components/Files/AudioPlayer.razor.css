@@ -192,6 +192,55 @@
     transform: scale(1.15);
 }
 
+/* Compact: one full-width 44px bar for A2UI surfaces (Compact parameter; no loop button). */
+.audio-player--compact {
+    flex-wrap: nowrap;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    height: 44px;
+    margin: 0;
+    padding: 4px 10px;
+    box-sizing: border-box;
+    box-shadow: none;
+}
+
+.audio-player--compact .audio-player__play {
+    width: 32px;
+    height: 32px;
+}
+
+.audio-player--compact .audio-player__play .audio-player__icon {
+    width: 16px;
+    height: 16px;
+}
+
+.audio-player--compact .audio-player__timeline {
+    flex: 1 1 auto;
+    gap: 6px;
+}
+
+.audio-player--compact .audio-player__seek {
+    min-width: 40px;
+}
+
+.audio-player--compact .audio-player__volume-range {
+    width: 72px;
+}
+
+/* A shown error banner grows the bar instead of overflowing the fixed height. */
+.audio-player--compact:has(.audio-player__error:not([hidden])) {
+    flex-wrap: wrap;
+    height: auto;
+}
+
+/* Narrow cells (the A2uiAudio figure is the container): drop the volume range, keep mute. */
+@container (max-width: 259px) {
+    .audio-player--compact .audio-player__volume-range {
+        display: none;
+    }
+}
+
 .audio-player__error {
     flex: 1 0 100%;
     font-size: 12px;
