@@ -111,7 +111,7 @@ public class DysonA2uiCatalogExtensionTests
         ["PieChart"] = "\"data\":[{\"label\":\"a\",\"value\":1}]",
         ["Sparkline"] = "\"data\":[{\"x\":\"a\",\"y\":1}]",
         ["Gauge"] = "\"value\":40,\"min\":0,\"max\":100",
-        ["Image"] = "\"url\":\"https://example.com/a.png\",\"description\":\"d\",\"variant\":\"small\"",
+        ["Image"] = "\"url\":\"https://example.com/a.png\",\"description\":\"d\",\"variant\":\"small\",\"height\":240",
         ["Icon"] = "\"name\":\"check\"",
         ["Favicon"] = "\"domain\":\"example.com\"",
         ["Video"] = "\"url\":\"https://example.com/v\"",

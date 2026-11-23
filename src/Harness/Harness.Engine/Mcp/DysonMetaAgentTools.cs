@@ -541,13 +541,13 @@ public static class DysonMetaAgentTools
             Name = "RenderA2ui",
             Description =
                 "Render an interactive UI surface inline in the meta chat from A2UI v1.0 JSON. " +
-                "Use it often: whenever a component (cards, lists, rows, forms, choices, action buttons) would clarify or structure what you show the user. " +
-                "Skip it for a single-sentence reply or simple chatting; use PostConversationMessage for those. " +
+                "Use it often: whenever a component (cards, lists, forms, choices, buttons) would clarify or structure what you show the user. " +
+                "Skip it for a single-sentence reply or simple chatting (use PostConversationMessage). " +
                 "When you use a surface, put the actions in the surface as ActionButton components (func open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_url:{url}); " +
                 "PostConversationMessage actions are only for a plain message with no surface. " +
                 "JSON only: no markdown, HTML, or code fences. " +
                 "Kit: layout (Row, Column, Grid, Card, Tabs...), text (Text, Heading, Markdown, Link...), inputs (TextField, Select, Slider...), data (Table, DataTable, Stat, Chart...); " +
-                "Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram. No Svg/HtmlView. " +
+                "Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram. No Svg/HtmlView. Image.path = work file (shown); url never loaded. " +
                 "Reuse a surfaceId to update it. " +
                 "The dyson-a2ui skill has the format and examples.",
             InputSchemaJson = """

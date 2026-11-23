@@ -38,7 +38,7 @@ Required props in **bold**. Full props per component: [reference.md](reference.m
 | Inputs | `Button` (**child**, **action**), `TextField`, `TextArea`, `CheckBox`, `ChoicePicker`, `Select`/`RadioGroup`/`SegmentedControl` (**options**, **value**), `Radio` (**label**, **value**, **option**), `Slider` (**value**; min/max/step), `DateTimeInput` (**value**), `Pressable` (**child**, **action**), `Form` (**children**); `checks` = `@checks` |
 | Data | `ListItem` (**label**), `Table` (columns + rows, or TableSection/TableRow/TableCell children), `DataTable` (**columns** [{key, label, format?}], **rows**), `ComparisonTable` (**options**, **rows** [{feature, values}]), `Stat` (**label**, **value**; delta, trend, tone), `StatGroup` (**items**), `KeyValueList`/`Timeline` (**items**), `Progress`/`RadialProgress`/`Rating`/`Gauge` (**value**), `TagList` (**tags**), `Avatar` (**name**), `AvatarGroup` (**people**), `Agenda` (**days**), `Map` (**markers** [{label, lat, lng}]) |
 | Charts | `Chart` (**data**; chartType, xKey, series), `BarChart`, `LineChart`, `AreaChart`, `PieChart`, `Sparkline` (**data**) — section 4b |
-| Media | `Image` (**url**), `Icon` (**name**), `Favicon`, `Video`/`AudioPlayer`/`VideoEmbed` (**url**), `ImageGallery`/`ImageGrid` (images), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
+| Media | `Image` (exactly one of **url** / **path**; height 120..800), `Icon` (**name**), `Favicon`, `Video`/`AudioPlayer`/`VideoEmbed` (**url**), `ImageGallery`/`ImageGrid` (images), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
 | Overlay | `Popover` (children = [PopoverTrigger, PopoverContent]), `Modal` (**trigger**, **content**), `FlashcardFlip` (**front**, **back**), `PulseIndicator` |
 | Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `Model3D` (**path**; title, height 160..800), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest), `SubagentTasks` (**agentId** integer = a drone/explore/review's agentId; the host fills the title, the X/N todo pill and the running state, live), `TreeDiagram` (**nodes** nested `{id, title, text?, tags?[{label, color red|green|accent}], children?}`; flow vertical|horizontal; title) |
 
@@ -57,7 +57,7 @@ Rejected: `Svg`, `HtmlView`, Icon `svgPath` (no model markup), `Treemap`, `Sanke
 ## 4c. Links and media
 
 - `Link.href`, `LinkCard.url`, `Citation.url`, `EntityCard.href`/`actions[].href`, `Video`/`AudioPlayer`/`VideoEmbed.url`: literal `http(s)` URL (becomes `open_url:`) or `open_plan:`/`open_scratch:`/`open_file:`. They count toward the 8 actions per surface with ActionButtons (a PipelineRun counts 1).
-- Media URLs (`Image.url`, `Avatar.image`, galleries) are validated but never loaded: a placeholder with the alt/caption text, initials for Avatar. Video and audio render as link cards. Nothing in a surface fetches from the network.
+- Remote media URLs (`Image.url`, `Avatar.image`, galleries) are validated but never loaded: a placeholder with the alt/caption text, initials for Avatar. Video and audio render as link cards. `Image.path` shows a work-directory png/jpg/gif/webp/bmp ≤ 20 MB with an expand-to-modal button (section 6b2c). Nothing in a surface fetches from the network.
 
 Dashboard example:
 
@@ -125,6 +125,14 @@ An inline three.js viewer for a `.glb` or `.fbx` file in the work directory: dra
 
 ```json
 {"id":"chair","component":"Model3D","@catalogId":"a2ui://dyson/catalogs/v1/catalog.json","path":"models/chair.glb","title":"Chair","height":360}
+```
+
+## 6b2c. Local image (Image.path)
+
+`Image` takes exactly one of `url` (remote, placeholder only, never loaded) or `path` (a file in the work directory, shown). Formats: png, jpg/jpeg, gif, webp, bmp, at most 20 MB (no svg, tiff, ico). Width is 100% of the parent; `height` 120..800 px sets the box (default by `variant`: small 120, medium 240, header 200, large 400); the image is fitted, not cropped. An expand icon on the image opens it large in a modal (Esc, × or a click outside closes; the modal can open the file viewer). Alt text is the first of `alt`, `description`, `fallback`, else the file name; `caption` shows under it. Same path rules as LocalVideo: a rooted or `..` path is `VALIDATION_FAILED`; a missing, unsupported or oversized file renders as card text. To show a web image, download it into the work directory first.
+
+```json
+{"id":"shot","component":"Image","path":"docs/img/login.png","alt":"Login screen","caption":"After the fix","height":360}
 ```
 
 ## 6b3. Subagent tasks (SubagentTasks)

@@ -489,7 +489,8 @@ public static class DysonA2uiCatalog
 
     private static void AddMedia(Dictionary<string, DysonA2uiComponentSpec> d)
     {
-        d["Image"] = Kit(false, ("url", MediaReq), ("description", Txt), ("fallback", Txt), ("alt", Txt), ("caption", Txt),
+        // Image: exactly one of url / path (checked by the validator at the component pointer). path is a Dyson extension prop.
+        d["Image"] = Kit(false, ("url", Media), ("path", new DysonA2uiPropSpec(DysonA2uiPropKind.Label)), ("height", Int(120, 800)), ("description", Txt), ("fallback", Txt), ("alt", Txt), ("caption", Txt),
             ("variant", Enm("icon", "avatar", "small", "medium", "large", "header")));
         d["Icon"] = Kit(false, ("name", TxtReq), ("label", Txt),
             ("svgPath", Rej("Icon.svgPath is rejected: model-supplied SVG is not allowed. Use a built-in icon name.")));

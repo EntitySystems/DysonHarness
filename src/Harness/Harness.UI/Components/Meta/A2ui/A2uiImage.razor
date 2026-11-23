@@ -1,0 +1,128 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
+@using System.Text.Json.Nodes
+@using DysonHarness
+@implements IDisposable
+@inject DysonUiHost Host
+@inject DysonFilePreviewStore Previews
+
+@* Image.path: a work-directory png/jpg/gif/webp/bmp shown through the same-origin /__dyson/file-preview route (the only
+   fetch a surface makes; a remote Image.url is never loaded and stays a placeholder in A2uiMediaNode). Card data is
+   DysonA2uiImage (Engine). The expand button asks the surface view for the large modal, which registers its own preview id. *@
+<figure class="a2ui-image" style="--a2ui-image-h:@HeightPx" @attributes="Aria">
+    @if (_card is not null && !_decodeFailed)
+    {
+        <div class="a2ui-image__box">
+            <img src="@_src" alt="@Alt()" loading="lazy" decoding="async" @onerror="OnImgError" />
+            @if (_height >= 120)
+            {
+                <button type="button"
+                        class="a2ui-image__expand"
+                        aria-label="@("Expand image: " + Alt())"
+                        title="Expand"
+                        @onclick="Expand">
+                    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+                        <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" fill="none" stroke="currentColor" stroke-width="1.5" />
+                    </svg>
+                </button>
+            }
+        </div>
+        @if (Caption() is { Length: > 0 } caption)
+        {
+            <figcaption class="a2ui-image__caption">@caption</figcaption>
+        }
+    }
+    else
+    {
+        <div class="a2ui-image__box a2ui-image__box--note">
+            <span class="a2ui-image__text">@Alt()</span>
+            <span class="a2ui-image__note">@(_decodeFailed ? "Image could not be decoded" : _error ?? "Loading image…")</span>
+        </div>
+    }
+</figure>
+
+@code {
+    private DysonA2uiImageCard? _card;
+    private string? _error;
+    private string? _path;
+    private string? _previewId;
+    private string? _src;
+    private int _height = DysonA2uiImage.DefaultHeight(null);
+    private bool _decodeFailed;
+    private bool _disposed;
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public string? Id { get; set; }
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public Dictionary<string, object>? Aria { get; set; }
+
+    // Clamped int formatted invariant: no agent string reaches the style.
+    private string HeightPx => string.Create(CultureInfo.InvariantCulture, $"{_height}px");
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _height = A2uiProps.Int(Component["height"]) is { } h
+            ? Math.Clamp(h, 120, 800)
+            : DysonA2uiImage.DefaultHeight(A2uiProps.Str(Component["variant"]));
+
+        var path = A2uiProps.Str(Component["path"]);
+        if (string.Equals(path, _path, StringComparison.Ordinal))
+            return;
+
+        _path = path;
+        _card = null;
+        _error = null;
+        _decodeFailed = false;
+        ReleasePreview();
+        var loaded = await DysonA2uiImage.LoadCardAsync(path, null, Host.FocusedSessionWorkRootPath);
+        if (_disposed || !string.Equals(path, _path, StringComparison.Ordinal))
+            return;
+
+        if (loaded.IsError)
+        {
+            _error = loaded.Error;
+            return;
+        }
+
+        _card = loaded.Value;
+        _previewId = Previews.PutFile(_card.AbsolutePath, _card.ContentType);
+        _src = DysonFilePreviewStore.UrlFor(_previewId);
+    }
+
+    private void OnImgError() => _decodeFailed = true;
+
+    private void Expand()
+    {
+        if (_card is { } card && Id is not null)
+            View.OpenImage(Id, Alt(), Caption(), card);
+    }
+
+    // First non-blank of alt, description, fallback, then the file name.
+    private string Alt()
+    {
+        foreach (var key in new[] { "alt", "description", "fallback" })
+        {
+            var text = A2uiProps.String(View, Component[key], Scope);
+            if (!string.IsNullOrWhiteSpace(text))
+                return text;
+        }
+
+        return _card?.Title ?? Path.GetFileName(_path ?? "") ?? "Image";
+    }
+
+    private string Caption() => A2uiProps.String(View, Component["caption"], Scope);
+
+    private void ReleasePreview()
+    {
+        Previews.Remove(_previewId);
+        _previewId = null;
+        _src = null;
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        ReleasePreview();
+    }
+}

@@ -1,0 +1,79 @@
+/* Image.path figure. Tokens from app.css only. */
+.a2ui-image {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+.a2ui-image__box {
+  position: relative;
+  width: 100%;
+  height: var(--a2ui-image-h);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.a2ui-image__box img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.a2ui-image__box--note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: var(--sp-2);
+  border: 1px dashed var(--border-strong);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.a2ui-image__text {
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-image__note,
+.a2ui-image__caption {
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-image__expand {
+  position: absolute;
+  top: var(--sp-2);
+  right: var(--sp-2);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.a2ui-image__box:hover .a2ui-image__expand,
+.a2ui-image__box:focus-within .a2ui-image__expand,
+.a2ui-image__expand:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .a2ui-image__expand {
+    opacity: 1;
+  }
+}

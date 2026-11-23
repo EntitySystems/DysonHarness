@@ -3,7 +3,8 @@
 @using System.Text.Json.Nodes
 @using DysonHarness
 
-@* Media + composites. Phase 1: a MediaUrl is validated but NEVER fetched or rendered (no img/video/iframe); a LinkTarget is a
+@* Media + composites. A remote MediaUrl is validated but NEVER fetched or rendered (no img/video/iframe); Image.path is the one
+   exception (A2uiImage, same-origin local preview route). A LinkTarget is a
    <button> that calls View.OpenAsync(func), so no href exists. SVG attributes are our numbers or fixed icon paths. *@
 @{
     var name = A2uiProps.Str(Component["component"]);
@@ -12,7 +13,14 @@
 @switch (name)
 {
     case "Image":
-        <div class="a2ui-media">@Placeholder(ImageSize(), First(S("description"), S("fallback"), S("alt"), S("caption")), S("caption"), aria)</div>
+        @if (Component["path"] is not null)
+        {
+            <A2uiImage View="View" Id="@Id" Component="Component" Scope="@Scope" Aria="aria" />
+        }
+        else
+        {
+            <div class="a2ui-media">@Placeholder(ImageSize(), First(S("description"), S("fallback"), S("alt"), S("caption")), S("caption"), aria)</div>
+        }
         break;
     case "Icon":
         var iconPath = A2uiIcons.Path(S("name"));

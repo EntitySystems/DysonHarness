@@ -67,9 +67,10 @@ public sealed partial class DysonWorkspaceToolExecutor
                 message);
         }
 
-        // LocalVideo / Model3D paths follow open_file: an escaping path fails here; missing/unsupported files are card text.
+        // LocalVideo / Model3D / Image paths follow open_file: an escaping path fails here; missing/unsupported files are card text.
         foreach (var (pointer, path) in DysonA2uiLocalVideo.PathPointers(parsedMessages.Value)
-                     .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiModel3D.ComponentName)))
+                     .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiModel3D.ComponentName))
+                     .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiImage.ComponentName)))
         {
             var resolved = await DysonA2uiLocalVideo.ResolveRelativeAsync(path, WorkRoot, cancellationToken).ConfigureAwait(false);
             if (resolved.IsError)

@@ -104,7 +104,7 @@ All charts also take title, subtitle, height 120..480, format number/currency/pe
 
 | Component | Props |
 |---|---|
-| Image | **url** (media); description, fallback, alt, caption, variant icon/avatar/small/medium/large/header (placeholder, never loaded) |
+| Image | exactly one of **url** (media, placeholder, never loaded) or **path** (work-relative png/jpg/gif/webp/bmp, shown); height 120..800; description, fallback, alt, caption, variant icon/avatar/small/medium/large/header |
 | Icon | **name** (built-in set: check, x, plus, minus, arrow-up/down/left/right, chevron-right, info, warning, error, star, star-half, clock, calendar, user, file, folder, link, external-link, search, settings, git-branch, play, pause); label |
 | Favicon | url or domain (first letter shown) |
 | Video, AudioPlayer | **url** (link target); title, caption (link card) |

@@ -24,6 +24,7 @@
     {
         <A2uiModel3DModal Item="_model3d" OnClose="CloseModel3D" />
     }
+    <A2uiImageModal View="this" Item="_image" OnClose="CloseImage" />
 </div>
 
 @code {
@@ -37,6 +38,8 @@
     private readonly A2uiEnter _enter = new();
     private A2uiModel3DOpen? _model3d;
     private string? _model3dPreviewId;
+    private A2uiImageOpen? _image;
+    private string? _imagePreviewId;
 
     [Parameter, EditorRequired] public DysonA2uiSurface Surface { get; set; } = default!;
 
@@ -123,12 +126,40 @@
     /// <summary>Opens the large Model3D view. It lives here (stable via <c>@key</c>), after the node tree, so revisions keep it.</summary>
     internal void OpenModel3D(string nodeId, string title, DysonA2uiModel3DCard card)
     {
+        ReleaseImage();
         Previews.Remove(_model3dPreviewId);
         _model3dPreviewId = Previews.PutFile(card.AbsolutePath, card.ContentType);
         _model3d = new A2uiModel3DOpen(nodeId, title, card, DysonFilePreviewStore.UrlFor(_model3dPreviewId));
         UsesModel3D = true;
         _render = true;
         StateHasChanged();
+    }
+
+    /// <summary>Opens the large Image view (one expanded item at a time). It registers its own preview id, so an inline rebuild cannot orphan it.</summary>
+    internal void OpenImage(string nodeId, string alt, string caption, DysonA2uiImageCard card)
+    {
+        _model3d = null;
+        Previews.Remove(_model3dPreviewId);
+        _model3dPreviewId = null;
+        Previews.Remove(_imagePreviewId);
+        _imagePreviewId = Previews.PutFile(card.AbsolutePath, card.ContentType);
+        _image = new A2uiImageOpen(nodeId, alt, caption, card, DysonFilePreviewStore.UrlFor(_imagePreviewId));
+        _render = true;
+        StateHasChanged();
+    }
+
+    private void CloseImage()
+    {
+        ReleaseImage();
+        _render = true;
+        StateHasChanged();
+    }
+
+    private void ReleaseImage()
+    {
+        _image = null;
+        Previews.Remove(_imagePreviewId);
+        _imagePreviewId = null;
     }
 
     private void CloseModel3D()
@@ -144,6 +175,8 @@
     {
         Previews.Remove(_model3dPreviewId);
         _model3dPreviewId = null;
+        Previews.Remove(_imagePreviewId);
+        _imagePreviewId = null;
         if (!UsesModel3D)
             return;
 
@@ -181,6 +214,13 @@
             _model3d = null;
             Previews.Remove(_model3dPreviewId);
             _model3dPreviewId = null;
+            _render = true;
+        }
+
+        // The open image's node is gone (deleteSurface, replaced component): close the large view.
+        if (_image is { } openImage && A2uiProps.Str(Component(openImage.NodeId)?["component"]) != DysonA2uiImage.ComponentName)
+        {
+            ReleaseImage();
             _render = true;
         }
 
