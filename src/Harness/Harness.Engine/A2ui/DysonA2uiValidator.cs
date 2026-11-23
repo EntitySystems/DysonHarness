@@ -318,6 +318,8 @@ public static partial class DysonA2uiValidator
                 return Err($"{path}/data/{DysonA2uiProtocol.MaxPieSlices}", $"a pie chart has at most {DysonA2uiProtocol.MaxPieSlices} slices.");
             if (name == "PipelineRun" && c.ContainsKey("runId") == c.ContainsKey("jobIds"))
                 return Err(path, "PipelineRun needs exactly one of runId or jobIds.");
+            if (name == DysonA2uiTreeDiagram.ComponentName && DysonA2uiTreeDiagram.Check(c["nodes"]) is var (suffix, treeMessage))
+                return Err(path + suffix, treeMessage);
 
             // ponytail: the surface catalogId is not stored, so Dyson components are stamped with
             // @catalogId here; omitted means Dyson, so a later updateComponents on an explicit-basic

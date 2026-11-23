@@ -211,7 +211,7 @@ public static class DysonA2uiCatalog
     public const string UnknownComponentGroups =
         "layout (Row, Column, Box, Grid, Tabs, Section, Accordion...), text (Title, Heading, Markdown, Code, Badge, Link...), "
         + "inputs (TextField, Select, Slider, DateTimeInput...), data (Table, DataTable, Stat, Timeline, Progress...), charts (Chart, BarChart...), "
-        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks";
+        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram";
 
     private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> StatItem = Props(
         ("label", TxtReq), ("value", AnyReq), ("delta", Txt), ("trend", Enm("up", "down", "flat")),
@@ -267,6 +267,25 @@ public static class DysonA2uiCatalog
 
     private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> EntityAction = Props(
         ("label", TxtReq), ("href", LinkReq));
+
+    private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> TreeTag = Props(
+        ("label", LitReq), ("color", Enm("red", "green", "accent")));
+
+    /// <summary>TreeDiagram node: <c>children</c> points back at this dictionary, so one spec validates a tree of any depth (capped by the tree rule).</summary>
+    private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> TreeNode = BuildTreeNode();
+
+    private static Dictionary<string, DysonA2uiPropSpec> BuildTreeNode()
+    {
+        var node = new Dictionary<string, DysonA2uiPropSpec>(StringComparer.Ordinal)
+        {
+            ["id"] = new(DysonA2uiPropKind.Identifier, Required: true),
+            ["title"] = LitReq,
+            ["text"] = Lit,
+            ["tags"] = Objects(TreeTag, DysonA2uiTreeDiagram.MaxTags),
+        };
+        node["children"] = Objects(node, DysonA2uiTreeDiagram.MaxNodes);
+        return node;
+    }
 
     public static IReadOnlyDictionary<string, DysonA2uiComponentSpec> Components { get; } = BuildComponents();
 
@@ -336,6 +355,10 @@ public static class DysonA2uiCatalog
                 ("jobIds", new(DysonA2uiPropKind.PositiveLongList, MaxItems: 30))),
             [DysonA2uiSubagentTasks.ComponentName] = Dyson(
                 ("agentId", new(DysonA2uiPropKind.BoundedInt, Required: true, Min: 1, Max: int.MaxValue))),
+            [DysonA2uiTreeDiagram.ComponentName] = Dyson(
+                ("nodes", Objects(TreeNode, DysonA2uiTreeDiagram.MaxNodes, true)),
+                ("flow", Enm("vertical", "horizontal")),
+                ("title", Txt)),
         };
 
         AddLayout(d);

@@ -24,7 +24,7 @@ description: >-
 - Stable UAX#31 `surfaceId` (e.g. `deploy_form`; no `dyson_` prefix).
 - `createSurface {surfaceId, catalogId?, components, dataModel?}` once; exactly one `"id":"root"`, every child id must exist.
 - Then `updateComponents {surfaceId, components}` (same id replaces) / `updateDataModel {surfaceId, path?, value}` (RFC 6901, default `/`; `null` deletes). Re-create is `INTEGRITY_ERROR`; `deleteSurface {surfaceId}` drops it.
-- `ActionButton` / `QuestionSlot` / `LocalVideo` / `Model3D` / `PipelineRun` / `SubagentTasks` are Dyson catalog components. They work with `catalogId` omitted (or set to `a2ui://dyson/catalogs/v1/catalog.json`). Only an explicit basic surface `catalogId` or component `"@catalogId"` rejects them. No component needs `@catalogId`.
+- `ActionButton` / `QuestionSlot` / `LocalVideo` / `Model3D` / `PipelineRun` / `SubagentTasks` / `TreeDiagram` are Dyson catalog components. They work with `catalogId` omitted (or set to `a2ui://dyson/catalogs/v1/catalog.json`). Only an explicit basic surface `catalogId` or component `"@catalogId"` rejects them. No component needs `@catalogId`.
 - The CopilotKit playground id `https://copilotkit.ai/a2ui/catalogs/playground/v1` is accepted as an alias of the Dyson catalog.
 
 ## 4. Kit
@@ -40,7 +40,7 @@ Required props in **bold**. Full props per component: [reference.md](reference.m
 | Charts | `Chart` (**data**; chartType, xKey, series), `BarChart`, `LineChart`, `AreaChart`, `PieChart`, `Sparkline` (**data**) — section 4b |
 | Media | `Image` (**url**), `Icon` (**name**), `Favicon`, `Video`/`AudioPlayer`/`VideoEmbed` (**url**), `ImageGallery`/`ImageGrid` (images), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
 | Overlay | `Popover` (children = [PopoverTrigger, PopoverContent]), `Modal` (**trigger**, **content**), `FlashcardFlip` (**front**, **back**), `PulseIndicator` |
-| Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `Model3D` (**path**; title, height 160..800), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest), `SubagentTasks` (**agentId** integer = a drone/explore/review's agentId; the host fills the title, the X/N todo pill and the running state, live) |
+| Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `Model3D` (**path**; title, height 160..800), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest), `SubagentTasks` (**agentId** integer = a drone/explore/review's agentId; the host fills the title, the X/N todo pill and the running state, live), `TreeDiagram` (**nodes** nested `{id, title, text?, tags?[{label, color red|green|accent}], children?}`; flow vertical|horizontal; title) |
 
 `weight` on direct children of Row/Column/Box/GridItem; `@accessibility` on any component. Parent rules: GridItem under Grid, FlowItem under Flow, CarouselItem under Carousel, TableRow under Table/TableSection, TableCell under TableRow. `Pressable`, like `Button`, needs a question-bound surface.
 
@@ -133,6 +133,18 @@ One live row per agent: title, `#id`, and an `X/N` pill (todos complete / all to
 
 ```json
 {"id":"t1","component":"SubagentTasks","agentId":3}
+```
+
+## 6b4. Tree diagram (TreeDiagram)
+
+Cards linked by lines, drawn by the host. `nodes` is the root array; each node nests its `children`, so a cycle or a missing parent cannot be written. A card shows `title`, up to 6 `tags` as pills (`color` is `red`, `green` or `accent`; omitted = `accent`; no other colors) and optional `text`. `flow` is `vertical` (default, top-down) or `horizontal` (left to right). Several roots lay out as siblings. Caps: 100 nodes, depth 12, 6 tags per card, unique node `id`s (`VALIDATION_FAILED` at the duplicate). Strings are literal only (no `@path`, also not on `nodes`/`children`/`tags`). Cards are a fixed size: long titles ellipsize and text clamps to 2 lines. `"nodes":[]` renders as the card text "Empty tree.". The whole tree enters once; a wide tree scrolls inside its card (use `horizontal` for wide, shallow trees).
+
+```json
+{"id":"arch","component":"TreeDiagram","flow":"vertical","title":"Service map","nodes":[
+ {"id":"api","title":"API gateway","text":"Routes all traffic","tags":[{"label":"live","color":"green"}],"children":[
+  {"id":"auth","title":"Auth","tags":[{"label":"degraded","color":"red"}]},
+  {"id":"orders","title":"Orders","text":"Postgres + queue","tags":[{"label":"new","color":"accent"}],"children":[
+   {"id":"billing","title":"Billing"}]}]}]}
 ```
 
 ## 6c. Actions (ActionButton)

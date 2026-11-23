@@ -132,6 +132,7 @@ All charts also take title, subtitle, height 120..480, format number/currency/pe
 | LocalVideo | **path** (work-relative); title |
 | Model3D | **path** (work-relative `.glb` / `.fbx`); title; height 160..800 (default 320) |
 | PipelineRun | exactly one of runId (integer ≥1) or jobIds (1..30 distinct integers); literals only |
+| TreeDiagram | **nodes** (nested `{id, title, text?, tags?[{label, color red\|green\|accent}] ≤6, children?}`; ≤100 nodes, depth ≤12, unique ids, literals only); flow vertical\|horizontal; title |
 | SubagentTasks | **agentId** (integer ≥1, literal) |
 
 Link targets: literal `http(s)` URL or `open_plan:`/`open_scratch:`/`open_file:`; `mailto:`, `javascript:`, `data:` and relative URLs are rejected. Media URLs: literal `http(s)`, at most 2048 chars, no `data:`.
