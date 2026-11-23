@@ -131,6 +131,9 @@ public class DysonRenderA2uiTests
     [Theory]
     [InlineData("open_url:javascript:alert(1)", "Only http/https URLs are allowed.")]
     [InlineData("open_file:../x", "Path escapes work directory")]
+    [InlineData("open_folder:../x", "Path escapes work directory")]
+    [InlineData("open_folder:src/../..", "Path escapes work directory")]
+    [InlineData("open_folder:", "Folder path is required.")]
     public async Task ActionButton_bad_payload_is_tool_error_and_publishes_no_surface(string func, string reason)
     {
         var (session, executor) = await MetaExecutorAsync();

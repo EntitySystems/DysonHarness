@@ -56,7 +56,7 @@ Rejected: `Svg`, `HtmlView`, Icon `svgPath` (no model markup), `Treemap`, `Sanke
 
 ## 4c. Links and media
 
-- `Link.href`, `LinkCard.url`, `Citation.url`, `EntityCard.href`/`actions[].href`, `Video`/`AudioPlayer`/`VideoEmbed.url`: literal `http(s)` URL (becomes `open_url:`) or `open_plan:`/`open_scratch:`/`open_file:`. They count toward the 8 actions per surface with ActionButtons (a PipelineRun counts 1).
+- `Link.href`, `LinkCard.url`, `Citation.url`, `EntityCard.href`/`actions[].href`, `Video`/`AudioPlayer`/`VideoEmbed.url`: literal `http(s)` URL (becomes `open_url:`) or `open_plan:`/`open_scratch:`/`open_file:`/`open_folder:`. They count toward the 8 actions per surface with ActionButtons (a PipelineRun counts 1).
 - Remote media URLs (`Image.url`, `Avatar.image`, galleries) are validated but never loaded: a placeholder with the alt/caption text, initials for Avatar. Video and audio render as link cards. `Image.path` shows a work-directory png/jpg/gif/webp/bmp ≤ 20 MB with an expand-to-modal button (section 6b2c). Nothing in a surface fetches from the network.
 
 Dashboard example:
@@ -157,7 +157,7 @@ Cards linked by lines, drawn by the host. `nodes` is the root array; each node n
 
 ## 6c. Actions (ActionButton)
 
-- `func`: `open_plan:{planId}`, `open_scratch:{id}`, `open_file:{path}` (work-relative), `open_url:{url}` (http/https); same keys as PostConversationMessage actions. Max 8 per surface; fine on unbound surfaces.
+- `func`: `open_plan:{planId}`, `open_scratch:{id}`, `open_file:{path}` (work-relative), `open_folder:{path}` (work-relative folder; opens it in the OS file manager; a missing path or a file shows an error), `open_url:{url}` (http/https); same keys as PostConversationMessage actions. Max 8 per surface; fine on unbound surfaces.
 - PostConversationMessage `actions` only for a plain message with no surface. Never both: a rendered surface hides the turn's inline pills.
 
 Status card example:

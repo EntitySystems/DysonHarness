@@ -4,7 +4,7 @@ namespace DysonHarness;
 
 /// <summary>
 /// LinkTarget / MediaUrl rules for A2UI props. A validated link prop always holds a built-in func key
-/// (<c>open_url:</c>, <c>open_plan:</c>, <c>open_scratch:</c>, <c>open_file:</c>), so the UI only calls
+/// (<c>open_url:</c>, <c>open_plan:</c>, <c>open_scratch:</c>, <c>open_file:</c>, <c>open_folder:</c>), so the UI only calls
 /// <c>View.OpenAsync(value)</c>. Media URLs are validated and never fetched.
 /// </summary>
 public static class DysonA2uiLinks
@@ -26,7 +26,7 @@ public static class DysonA2uiLinks
             return Result<string, string>.AsValue(s);
         return IsHttpUrl(s)
             ? Result<string, string>.AsValue(OpenUrl + s)
-            : Result<string, string>.AsError("link must be an http(s) URL or open_plan:{id}, open_scratch:{id}, open_file:{path}; mailto:, javascript:, data: and relative URLs are not allowed.");
+            : Result<string, string>.AsError("link must be an http(s) URL or open_plan:{id}, open_scratch:{id}, open_file:{path}, open_folder:{path}; mailto:, javascript:, data: and relative URLs are not allowed.");
     }
 
     /// <summary>Literal http(s) URL of at most <see cref="DysonA2uiProtocol.MaxMediaUrlLength"/> chars. data: is rejected.</summary>

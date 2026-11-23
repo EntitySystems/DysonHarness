@@ -127,7 +127,7 @@ All charts also take title, subtitle, height 120..480, format number/currency/pe
 
 | Component | Props |
 |---|---|
-| ActionButton | **label**, **func** (open_plan/open_scratch/open_file/open_url) |
+| ActionButton | **label**, **func** (open_plan/open_scratch/open_file/open_folder/open_url) |
 | QuestionSlot | **questionId** |
 | LocalVideo | **path** (work-relative); title |
 | Model3D | **path** (work-relative `.glb` / `.fbx`); title; height 160..800 (default 320) |
@@ -135,4 +135,4 @@ All charts also take title, subtitle, height 120..480, format number/currency/pe
 | TreeDiagram | **nodes** (nested `{id, title, text?, tags?[{label, color red\|green\|accent}] ≤6, children?}`; ≤100 nodes, depth ≤12, unique ids, literals only); flow vertical\|horizontal; title |
 | SubagentTasks | **agentId** (integer ≥1, literal) |
 
-Link targets: literal `http(s)` URL or `open_plan:`/`open_scratch:`/`open_file:`; `mailto:`, `javascript:`, `data:` and relative URLs are rejected. Media URLs: literal `http(s)`, at most 2048 chars, no `data:`.
+Link targets: literal `http(s)` URL or `open_plan:`/`open_scratch:`/`open_file:`/`open_folder:`; `mailto:`, `javascript:`, `data:` and relative URLs are rejected. Media URLs: literal `http(s)`, at most 2048 chars, no `data:`.

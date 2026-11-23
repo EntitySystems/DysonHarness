@@ -59,7 +59,7 @@ public sealed partial class DysonWorkspaceToolExecutor
 
             var reason = resolved is { } failed
                 ? failed.Error
-                : "links must be open_plan:{planId}, open_scratch:{id}, open_file:{path} or an http(s) URL";
+                : "links must be open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_folder:{path} or an http(s) URL";
             return A2uiError(
                 call,
                 new DysonA2uiError(DysonA2uiProtocol.ValidationFailed, surfaceId, pointer, reason),

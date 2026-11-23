@@ -130,6 +130,23 @@ public class DysonA2uiSurfacesTests
     }
 
     [Fact]
+    public void OpenFolder_ActionButtons_count_toward_the_cap()
+    {
+        string Buttons(int n) =>
+            $$"""{"id":"root","component":"Row","children":[{{string.Join(",", Enumerable.Range(0, n).Select(i => $"\"b{i}\""))}}]},"""
+            + string.Join(",", Enumerable.Range(0, n).Select(i => $$"""{"id":"b{{i}}","component":"ActionButton","label":"P{{i}}","func":"open_folder:dir{{i}}"}"""));
+        var catalog = $$""","catalogId":"{{DysonA2uiProtocol.DysonCatalogId}}" """;
+
+        var funcs = DysonA2uiSurfaces.ActionButtonFuncs(Created(Buttons(DysonWorkspaceToolExecutor.MaxConversationActions), extra: catalog));
+        Assert.Equal(8, funcs.Count);
+        Assert.Equal(("b7", "open_folder:dir7"), funcs[7]);
+
+        var nine = DysonA2uiSurfaces.Apply(null, null, Parse(DysonA2uiValidatorTests.Create(Buttons(9), catalog, "s1")));
+        Assert.True(nine.IsError);
+        Assert.Equal(DysonA2uiProtocol.ValidationFailed, nine.Error.Code);
+    }
+
+    [Fact]
     public void QuestionSlotIds_in_component_order()
     {
         Guid a = Guid.NewGuid(), b = Guid.NewGuid();

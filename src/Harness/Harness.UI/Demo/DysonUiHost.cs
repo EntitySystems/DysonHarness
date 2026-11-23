@@ -2109,6 +2109,9 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>Selects a file in the OS file manager without launching it. Test seam; used for executables.</summary>
     internal Func<string, Task<VoidResult<string>>> RevealInFileManager { get; set; } = DysonOsLauncher.RevealFileAsync;
 
+    /// <summary>Opens a folder in the OS file manager (<c>open_folder:</c>). Test seam.</summary>
+    internal Func<string, Task<VoidResult<string>>> OpenFolderInFileManager { get; set; } = DysonOsLauncher.OpenFolderAsync;
+
     /// <summary>
     /// "Open in default editor" / "Open in default app" from the viewer. Re-classifies the file at click time
     /// (media/pdf/image/zip routes skip the sniff gate, and the file may have changed since it opened), so an
@@ -3832,6 +3835,15 @@ public sealed class DysonUiHost : IAsyncDisposable
             case DysonBuiltInConversationKind.OpenFile:
                 await OpenFileViewerAsync(intent.PathOrUrl ?? "", cancellationToken).ConfigureAwait(true);
                 return Result<string, string>.AsValue("");
+            case DysonBuiltInConversationKind.OpenFolder:
+            {
+                var opened = await DysonOpenFolder
+                    .OpenAsync(intent.PathOrUrl, SessionWorkDirectoryPath(session), OpenFolderInFileManager, cancellationToken)
+                    .ConfigureAwait(true);
+                return opened.IsError
+                    ? Result<string, string>.AsError(opened.Error)
+                    : Result<string, string>.AsValue("");
+            }
             case DysonBuiltInConversationKind.OpenUrl:
             {
                 var opened = await DysonOsLauncher.OpenUrlAsync(intent.PathOrUrl ?? "")
