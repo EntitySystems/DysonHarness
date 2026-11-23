@@ -75,9 +75,8 @@ public static class DysonA2uiSubagentTasks
     /// <summary>
     /// Calls <paramref name="changed"/> with a rebuilt card whenever the agent's todos or status change, or one of its own
     /// sub-agents spawns or changes (the agent's bus scope carries its own events and its direct children's).
-    /// An unknown agent gets a no-op watch.
-    /// ponytail: an id that does not exist at first render is never re-resolved; upgrade path = also subscribe the
-    /// owner's scope for <see cref="DysonSubagentSpawnedEvent"/>.
+    /// An agent that is not resolved yet (unknown id, or no persistence id) watches only the owner's scope for its
+    /// <see cref="DysonSubagentSpawnedEvent"/> (matched by runtime id), so the row can bind once it exists.
     /// </summary>
     public static Result<IDisposable, string> Watch(
         DysonMessageBus bus,
@@ -87,8 +86,23 @@ public static class DysonA2uiSubagentTasks
     {
         if (bus is null || changed is null)
             return Result<IDisposable, string>.AsError("bus and callback are required");
-        if (owner is null || !owner.TryGetSubagent(agentId, out var child) || child.PersistenceId == Guid.Empty)
+        if (owner is null)
             return Result<IDisposable, string>.AsValue(new Subscriptions([]));
+        if (!owner.TryGetSubagent(agentId, out var child) || child.PersistenceId == Guid.Empty)
+        {
+            if (owner.PersistenceId == Guid.Empty)
+                return Result<IDisposable, string>.AsValue(new Subscriptions([]));
+            var late = bus.Subscribe<DysonSubagentSpawnedEvent>(
+                DysonBusScopes.Session(owner.PersistenceId),
+                e =>
+                {
+                    if (e.RuntimeId == agentId)
+                        changed(Build(owner, agentId));
+                });
+            return late.IsError
+                ? Result<IDisposable, string>.AsError(late.Error)
+                : Result<IDisposable, string>.AsValue(new Subscriptions([late.Value]));
+        }
 
         var scope = DysonBusScopes.Session(child.PersistenceId);
         // Rebuilding on any event in the scope is cheap (in-memory) and also covers the sub-agents' events.

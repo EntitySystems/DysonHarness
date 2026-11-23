@@ -187,6 +187,31 @@ public class DysonA2uiSubagentTasksTests
     }
 
     [Fact]
+    public void Watch_of_an_agent_that_does_not_exist_yet_wakes_when_it_spawns()
+    {
+        using var bus = new DysonMessageBus();
+        using var publisher = new DysonSessionEventPublisher(bus);
+        var parent = new DysonPlanToolStubSession(DysonAgentModes.MetaAgent);
+        parent.SetPersistenceIdForTest(Guid.NewGuid());
+        var attached = publisher.Attach(parent);
+        Assert.True(attached.IsSuccess);
+        using var token = attached.Value;
+
+        var cards = new List<DysonA2uiSubagentTasksCard>();
+        var watch = DysonA2uiSubagentTasks.Watch(bus, parent, 1, cards.Add);
+        Assert.True(watch.IsSuccess);
+        using var _ = watch.Value;
+
+        var child = new DysonPlanToolStubSession(DysonAgentModes.MetaAgentDrone);
+        child.SetPersistenceIdForTest(Guid.NewGuid());
+        parent.RegisterForTest(child);
+
+        var card = Assert.Single(cards);
+        Assert.Null(card.Message);
+        Assert.Equal(child.PersistenceId, card.PersistenceId);
+    }
+
+    [Fact]
     public void Validator_accepts_SubagentTasks_only_in_the_Dyson_catalog()
     {
         Assert.True(Parse(",\"agentId\":3").IsSuccess);

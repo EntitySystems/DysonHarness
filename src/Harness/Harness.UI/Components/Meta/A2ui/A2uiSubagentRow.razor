@@ -34,7 +34,7 @@
                 <button type="button"
                         class="a2ui-subagent-tasks__toggle"
                         aria-expanded="@(_expanded ? "true" : "false")"
-                        aria-controls="@_childrenDomId"
+                        aria-controls="@(_expanded ? _childrenDomId : null)"
                         @onclick="Toggle">
                     <span class="a2ui-subagent-tasks__chevron" aria-hidden="true"></span>
                     @DysonA2uiSubagentTasks.ToggleLabel(card.ChildIds.Count, _expanded)
@@ -62,6 +62,7 @@ else
     private DysonAgentSession? _self;
     private IDisposable? _watch;
     private DysonAgentSession? _boundOwner;
+    private Guid _watchedPersistenceId;
     private int _boundId = -1;
     private bool _expanded;
     private bool _disposed;
@@ -91,21 +92,36 @@ else
 
         _boundOwner = Owner;
         _boundId = AgentId;
+        Refresh();
+        Watch();
+    }
+
+    private void Watch()
+    {
         _watch?.Dispose();
         _watch = null;
-        Refresh();
+        _watchedPersistenceId = _card?.PersistenceId ?? Guid.Empty;
         var owner = Owner;
         var id = AgentId;
         var watch = DysonA2uiSubagentTasks.Watch(Bus, owner, id, _ => InvokeAsync(() =>
         {
             if (_disposed || id != _boundId || !ReferenceEquals(owner, _boundOwner))
                 return;
+            var before = _card;
             Refresh();
-            StateHasChanged();
+            // The agent appeared (or got its persistence id) after the first render: watch it from now on.
+            if (_card?.PersistenceId != _watchedPersistenceId)
+                Watch();
+            if (!Same(before, _card))
+                StateHasChanged();
         }));
         if (watch.IsSuccess)
             _watch = watch.Value;
     }
+
+    // Events in the agent's scope also come from its sub-agents; skip the re-render when nothing this row shows moved.
+    private static bool Same(DysonA2uiSubagentTasksCard? a, DysonA2uiSubagentTasksCard? b) =>
+        a is not null && b is not null && a with { ChildIds = b.ChildIds } == b && a.ChildIds.SequenceEqual(b.ChildIds);
 
     private void Refresh()
     {
