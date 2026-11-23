@@ -1,0 +1,71 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using Microsoft.AspNetCore.Components.Web
+@using Harness.UI.Components.Motion
+
+@* Large Image view (app modal pattern: DysonTransition + confirm-dialog, same shell as A2uiModel3DModal). Owned by
+   A2uiSurfaceView, outside the node tree, so a surface revision does not close or reload it. The image URL is the
+   modal's own preview id (registered by the surface view), independent of the inline figure's token. *@
+<DysonTransition Item="Item" ExitMs="140" RestoreFocus="true" OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="confirm-dialog-backdrop dyson-fade-scale @ctx.StateClass"
+         role="presentation"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+         @onkeydown="args => { if (!ctx.IsExiting) OnKeyDown(args); }">
+        <div class="confirm-dialog a2ui-image-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="@_titleId"
+             @onclick:stopPropagation="true">
+            <div class="confirm-dialog__header">
+                <h3 id="@_titleId">@ctx.Item!.Alt</h3>
+                <button type="button"
+                        class="btn btn-ghost"
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+                        aria-label="Close">×</button>
+            </div>
+            <div class="a2ui-image-modal__stage">
+                <img src="@ctx.Item.PreviewUrl" alt="@ctx.Item.Alt" />
+            </div>
+            <div class="a2ui-image-modal__footer">
+                <span class="a2ui-image-modal__caption">@ctx.Item.Caption</span>
+                <button type="button"
+                        class="btn"
+                        disabled="@View.OpenBusy"
+                        @onclick="() => OpenInViewerAsync(ctx.Item.Card.OpenFunc)">Open in file viewer</button>
+            </div>
+        </div>
+    </div>
+</DysonTransition>
+
+@code {
+    private readonly string _titleId = "a2ui-image-" + Guid.NewGuid().ToString("N");
+    private ElementReference _backdropEl;
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+
+    /// <summary>Open image; null closes (DysonTransition keeps the markup for the exit window).</summary>
+    [Parameter] public A2uiImageOpen? Item { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private async Task OpenInViewerAsync(string func)
+    {
+        await CloseAsync();
+        await View.OpenAsync(func);
+    }
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+
+    private async Task FocusBackdropAsync()
+    {
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
+    }
+}

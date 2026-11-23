@@ -33,7 +33,7 @@ public static class DysonA2uiLinks
     public static bool IsMediaUrl(string? s) =>
         s is { Length: > 0 and <= DysonA2uiProtocol.MaxMediaUrlLength } && IsHttpUrl(s);
 
-    public const string MediaUrlMessage = "media url must be a literal http(s) URL of at most 2048 characters (data: URIs are rejected; media is not loaded in this version).";
+    public const string MediaUrlMessage = "media url must be a literal http(s) URL of at most 2048 characters (data: URIs are rejected; remote media is never loaded; use Image.path for a work-directory image).";
 
     /// <summary>Host of an http(s) URL or <c>open_url:</c> key; null when absent or invalid. Lower-case, no leading www.</summary>
     public static string? Host(string? urlOrFunc)

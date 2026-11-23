@@ -104,7 +104,7 @@ All charts also take title, subtitle, height 120..480, format number/currency/pe
 
 | Component | Props |
 |---|---|
-| Image | **url** (media); description, fallback, alt, caption, variant icon/avatar/small/medium/large/header (placeholder, never loaded) |
+| Image | exactly one of **url** (media, placeholder, never loaded) or **path** (work-relative png/jpg/gif/webp/bmp, shown); height 120..800; description, fallback, alt, caption, variant icon/avatar/small/medium/large/header |
 | Icon | **name** (built-in set: check, x, plus, minus, arrow-up/down/left/right, chevron-right, info, warning, error, star, star-half, clock, calendar, user, file, folder, link, external-link, search, settings, git-branch, play, pause); label |
 | Favicon | url or domain (first letter shown) |
 | Video, AudioPlayer | **url** (link target); title, caption (link card) |
@@ -130,6 +130,9 @@ All charts also take title, subtitle, height 120..480, format number/currency/pe
 | ActionButton | **label**, **func** (open_plan/open_scratch/open_file/open_url) |
 | QuestionSlot | **questionId** |
 | LocalVideo | **path** (work-relative); title |
+| Model3D | **path** (work-relative `.glb` / `.fbx`); title; height 160..800 (default 320) |
 | PipelineRun | exactly one of runId (integer ≥1) or jobIds (1..30 distinct integers); literals only |
+| TreeDiagram | **nodes** (nested `{id, title, text?, tags?[{label, color red\|green\|accent}] ≤6, children?}`; ≤100 nodes, depth ≤12, unique ids, literals only); flow vertical\|horizontal; title |
+| SubagentTasks | **agentId** (integer ≥1, literal) |
 
 Link targets: literal `http(s)` URL or `open_plan:`/`open_scratch:`/`open_file:`; `mailto:`, `javascript:`, `data:` and relative URLs are rejected. Media URLs: literal `http(s)`, at most 2048 chars, no `data:`.

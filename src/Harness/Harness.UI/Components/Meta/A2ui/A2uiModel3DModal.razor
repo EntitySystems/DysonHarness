@@ -1,0 +1,114 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using Microsoft.AspNetCore.Components.Web
+@using Harness.UI.Components.Motion
+@implements IAsyncDisposable
+@inject IJSRuntime Js
+
+@* Large Model3D view (app modal pattern: DysonTransition + confirm-dialog). Owned by A2uiSurfaceView, outside the node
+   tree, so a surface revision does not close or reload it. Lighting sliders post to this iframe only (JS wireModal);
+   closing drops the iframe, so the next open starts at 6500 K / 1.00×. *@
+<DysonTransition Item="Item" ExitMs="140" RestoreFocus="true" OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="confirm-dialog-backdrop dyson-fade-scale @ctx.StateClass"
+         role="presentation"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+         @onkeydown="args => { if (!ctx.IsExiting) OnKeyDown(args); }">
+        <div class="confirm-dialog a2ui-model3d-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="@_titleId"
+             @onclick:stopPropagation="true">
+            <div class="confirm-dialog__header">
+                <h3 id="@_titleId">@ctx.Item!.Title</h3>
+                <button type="button"
+                        class="btn btn-ghost"
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+                        aria-label="Close">×</button>
+            </div>
+            <div class="a2ui-model3d-modal__stage" @ref="_stage"></div>
+            <div class="a2ui-model3d-modal__footer">
+                <label class="a2ui-model3d-modal__slider">
+                    <span>Temperature</span>
+                    <input type="range" min="2000" max="10000" step="100" value="6500" @ref="_temp" />
+                    <span class="mono" @ref="_tempLabel">6500 K</span>
+                </label>
+                <label class="a2ui-model3d-modal__slider">
+                    <span>Intensity</span>
+                    <input type="range" min="0.1" max="3" step="0.05" value="1" @ref="_intensity" />
+                    <span class="mono" @ref="_intensityLabel">1.00×</span>
+                </label>
+            </div>
+        </div>
+    </div>
+</DysonTransition>
+
+@code {
+    private readonly string _titleId = "a2ui-model3d-" + Guid.NewGuid().ToString("N");
+    private ElementReference _backdropEl;
+    private ElementReference _stage;
+    private ElementReference _temp;
+    private ElementReference _intensity;
+    private ElementReference _tempLabel;
+    private ElementReference _intensityLabel;
+    private IJSObjectReference? _module;
+    private A2uiModel3DOpen? _wired;
+
+    /// <summary>Open model; null closes (DysonTransition keeps the markup for the exit window).</summary>
+    [Parameter] public A2uiModel3DOpen? Item { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Item is not { } item || ReferenceEquals(item, _wired))
+            return;
+
+        try
+        {
+            _module ??= await DysonCircuitJs.InvokeAsync<IJSObjectReference>(
+                Js, "import", "./" + Assets["Components/Meta/A2ui/A2uiModel3D.razor.js"]);
+            if (_module is null || !ReferenceEquals(Item, item))
+                return;
+            // DysonTransition renders the markup a frame later: only count it wired once the stage exists.
+            if (string.IsNullOrEmpty(_stage.Id))
+                return;
+            _wired = item;
+            await DysonCircuitJs.InvokeVoidAsync(
+                _module, "wireModal", _stage, _temp, _intensity, _tempLabel, _intensityLabel,
+                item.PreviewUrl, item.Card.Format, item.Card.RelativePath,
+                Assets[A2uiModel3D.ThreeAsset], Assets[A2uiModel3D.ViewerAsset]);
+        }
+        catch (Exception ex) when (DysonCircuitJs.IsBenign(ex))
+        {
+        }
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+
+    private async Task FocusBackdropAsync()
+    {
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        var module = _module;
+        _module = null;
+        try
+        {
+            if (module is not null)
+                await module.DisposeAsync();
+        }
+        catch (Exception ex) when (DysonCircuitJs.IsBenign(ex))
+        {
+        }
+    }
+}

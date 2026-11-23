@@ -6,8 +6,11 @@
    Text is Blazor-escaped (never MarkupString); no agent string reaches href/src/style/class/event attributes. *@
 @if (Depth <= DysonA2uiProtocol.MaxTreeDepth && View.Component(Id) is { } c)
 {
-    var aria = A2uiProps.Aria(View, c, Scope, _domId, out _description);
-    switch (Str(c["component"]))
+    RenderFragment node = @<text>
+    @{
+        var aria = A2uiProps.Aria(View, c, Scope, _domId, out _description);
+    }
+    @switch (Str(c["component"]))
     {
         case "Text":
             var text = DysonA2uiBinding.ResolveString(c["text"], View.Model, Scope);
@@ -59,6 +62,15 @@
             break;
         case DysonA2uiLocalVideo.ComponentName:
             <A2uiLocalVideo View="View" Component="c" Scope="@Scope" Aria="aria" />
+            break;
+        case DysonA2uiModel3D.ComponentName:
+            <A2uiModel3D View="View" Id="@Id" Component="c" Scope="@Scope" Aria="aria" />
+            break;
+        case DysonA2uiSubagentTasks.ComponentName:
+            <A2uiSubagentTasks View="View" Component="c" Aria="aria" />
+            break;
+        case DysonA2uiTreeDiagram.ComponentName:
+            <A2uiTreeDiagram View="View" Component="c" Scope="@Scope" Aria="aria" />
             break;
         case "Button":
             var failed = ButtonProblems(c);
@@ -283,9 +295,20 @@
             <A2uiPipelineRun View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
             break;
     }
-    if (_description is not null)
+    @if (_description is not null)
     {
         <span id="@($"{_domId}-desc")" class="a2ui-sr-only">@_description</span>
+    }
+    </text>;
+    @* Live surface only: display:contents wrapper (no layout box) whose child animates; Inline (Button text) never wraps. *@
+    var enter = Inline ? null : View.EnterStyle(Id);
+    if (enter is null)
+    {
+        @node
+    }
+    else
+    {
+        <div class="a2ui-enter" style="@enter">@node</div>
     }
 }
 

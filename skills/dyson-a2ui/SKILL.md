@@ -24,7 +24,7 @@ description: >-
 - Stable UAX#31 `surfaceId` (e.g. `deploy_form`; no `dyson_` prefix).
 - `createSurface {surfaceId, catalogId?, components, dataModel?}` once; exactly one `"id":"root"`, every child id must exist.
 - Then `updateComponents {surfaceId, components}` (same id replaces) / `updateDataModel {surfaceId, path?, value}` (RFC 6901, default `/`; `null` deletes). Re-create is `INTEGRITY_ERROR`; `deleteSurface {surfaceId}` drops it.
-- `ActionButton` / `QuestionSlot` / `LocalVideo` / `PipelineRun` need the Dyson catalog: surface `catalogId` or component `"@catalogId"` = `a2ui://dyson/catalogs/v1/catalog.json`. Otherwise omit `catalogId` (basic). In a later `updateComponents`, put `"@catalogId"` on each Dyson component itself (the surface `catalogId` is not carried over). Every other component needs no `@catalogId`.
+- `ActionButton` / `QuestionSlot` / `LocalVideo` / `Model3D` / `PipelineRun` / `SubagentTasks` / `TreeDiagram` are Dyson catalog components. They work with `catalogId` omitted (or set to `a2ui://dyson/catalogs/v1/catalog.json`). Only an explicit basic surface `catalogId` or component `"@catalogId"` rejects them. No component needs `@catalogId`.
 - The CopilotKit playground id `https://copilotkit.ai/a2ui/catalogs/playground/v1` is accepted as an alias of the Dyson catalog.
 
 ## 4. Kit
@@ -38,9 +38,9 @@ Required props in **bold**. Full props per component: [reference.md](reference.m
 | Inputs | `Button` (**child**, **action**), `TextField`, `TextArea`, `CheckBox`, `ChoicePicker`, `Select`/`RadioGroup`/`SegmentedControl` (**options**, **value**), `Radio` (**label**, **value**, **option**), `Slider` (**value**; min/max/step), `DateTimeInput` (**value**), `Pressable` (**child**, **action**), `Form` (**children**); `checks` = `@checks` |
 | Data | `ListItem` (**label**), `Table` (columns + rows, or TableSection/TableRow/TableCell children), `DataTable` (**columns** [{key, label, format?}], **rows**), `ComparisonTable` (**options**, **rows** [{feature, values}]), `Stat` (**label**, **value**; delta, trend, tone), `StatGroup` (**items**), `KeyValueList`/`Timeline` (**items**), `Progress`/`RadialProgress`/`Rating`/`Gauge` (**value**), `TagList` (**tags**), `Avatar` (**name**), `AvatarGroup` (**people**), `Agenda` (**days**), `Map` (**markers** [{label, lat, lng}]) |
 | Charts | `Chart` (**data**; chartType, xKey, series), `BarChart`, `LineChart`, `AreaChart`, `PieChart`, `Sparkline` (**data**) — section 4b |
-| Media | `Image` (**url**), `Icon` (**name**), `Favicon`, `Video`/`AudioPlayer`/`VideoEmbed` (**url**), `ImageGallery`/`ImageGrid` (images), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
+| Media | `Image` (exactly one of **url** / **path**; height 120..800), `Icon` (**name**), `Favicon`, `Video`/`AudioPlayer`/`VideoEmbed` (**url**), `ImageGallery`/`ImageGrid` (images), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
 | Overlay | `Popover` (children = [PopoverTrigger, PopoverContent]), `Modal` (**trigger**, **content**), `FlashcardFlip` (**front**, **back**), `PulseIndicator` |
-| Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest) |
+| Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `Model3D` (**path**; title, height 160..800), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest), `SubagentTasks` (**agentId** integer = a drone/explore/review's agentId; the host fills the title, the X/N todo pill and the running state, live), `TreeDiagram` (**nodes** nested `{id, title, text?, tags?[{label, color red|green|accent}], children?}`; flow vertical|horizontal; title) |
 
 `weight` on direct children of Row/Column/Box/GridItem; `@accessibility` on any component. Parent rules: GridItem under Grid, FlowItem under Flow, CarouselItem under Carousel, TableRow under Table/TableSection, TableCell under TableRow. `Pressable`, like `Button`, needs a question-bound surface.
 
@@ -57,7 +57,7 @@ Rejected: `Svg`, `HtmlView`, Icon `svgPath` (no model markup), `Treemap`, `Sanke
 ## 4c. Links and media
 
 - `Link.href`, `LinkCard.url`, `Citation.url`, `EntityCard.href`/`actions[].href`, `Video`/`AudioPlayer`/`VideoEmbed.url`: literal `http(s)` URL (becomes `open_url:`) or `open_plan:`/`open_scratch:`/`open_file:`. They count toward the 8 actions per surface with ActionButtons (a PipelineRun counts 1).
-- Media URLs (`Image.url`, `Avatar.image`, galleries) are validated but never loaded: a placeholder with the alt/caption text, initials for Avatar. Video and audio render as link cards. Nothing in a surface fetches from the network.
+- Remote media URLs (`Image.url`, `Avatar.image`, galleries) are validated but never loaded: a placeholder with the alt/caption text, initials for Avatar. Video and audio render as link cards. `Image.path` shows a work-directory png/jpg/gif/webp/bmp ≤ 20 MB with an expand-to-modal button (section 6b2c). Nothing in a surface fetches from the network.
 
 Dashboard example:
 
@@ -117,6 +117,42 @@ A card for a video file in the work directory: title, first-frame thumbnail, dur
 
 ```json
 {"id":"demo","component":"LocalVideo","@catalogId":"a2ui://dyson/catalogs/v1/catalog.json","path":"media/demo.mp4","title":"Login flow demo"}
+```
+
+## 6b2b. 3D model (Model3D)
+
+An inline three.js viewer for a `.glb` or `.fbx` file in the work directory: drag to rotate, full width of its parent, `height` 160..800 px (default 320). The expand icon opens a large view with zoom, pan and temperature / intensity light sliders (the inline view keeps its default light). Soft light from every direction, transparent background, no environment. Same path rules as LocalVideo: a rooted or `..` path is `VALIDATION_FAILED`; a missing, unsupported (`.gltf`, `.obj`), over 64 MB or over 2,000,000-triangle model renders as card text. Draco / Meshopt / KTX2-compressed GLBs and FBX external textures are not supported; animations are not played. At most 8 inline viewers per page.
+
+```json
+{"id":"chair","component":"Model3D","@catalogId":"a2ui://dyson/catalogs/v1/catalog.json","path":"models/chair.glb","title":"Chair","height":360}
+```
+
+## 6b2c. Local image (Image.path)
+
+`Image` takes exactly one of `url` (remote, placeholder only, never loaded) or `path` (a file in the work directory, shown). Formats: png, jpg/jpeg, gif, webp, bmp, at most 20 MB (no svg, tiff, ico). Width is 100% of the parent; `height` 120..800 px sets the box (default by `variant`: small 120, medium 240, header 200, large 400); the image is fitted, not cropped. An expand icon on the image opens it large in a modal (Esc, × or a click outside closes; the modal can open the file viewer). Alt text is the first of `alt`, `description`, `fallback`, else the file name; `caption` shows under it. Same path rules as LocalVideo: a rooted or `..` path is `VALIDATION_FAILED`; a missing, unsupported or oversized file renders as card text. To show a web image, download it into the work directory first.
+
+```json
+{"id":"shot","component":"Image","path":"docs/img/login.png","alt":"Login screen","caption":"After the fix","height":360}
+```
+
+## 6b3. Subagent tasks (SubagentTasks)
+
+One live row per agent: title, `#id`, and an `X/N` pill (todos complete / all todos of that agent). Pass the `agentId` from `StartAsyncMetaAgentDrone` / `ListMetaAgentDrones` (your direct children only). `0/0` means no todos yet. A running agent shows the roster spinner and status color. An unknown id or a stopped agent renders as card text, not an error.
+
+```json
+{"id":"t1","component":"SubagentTasks","agentId":3}
+```
+
+## 6b4. Tree diagram (TreeDiagram)
+
+Cards linked by lines, drawn by the host. `nodes` is the root array; each node nests its `children`, so a cycle or a missing parent cannot be written. A card shows `title`, up to 6 `tags` as pills (`color` is `red`, `green` or `accent`; omitted = `accent`; no other colors) and optional `text`. `flow` is `vertical` (default, top-down) or `horizontal` (left to right). Several roots lay out as siblings. Caps: 100 nodes, depth 12, 6 tags per card, unique node `id`s (`VALIDATION_FAILED` at the duplicate). Node strings (`id`, `title`, `text`, tag `label`) and the `nodes`/`children`/`tags` arrays are literal only (no `@path`); the component `title` may be bound. Cards are a fixed size: long titles ellipsize and text clamps to 2 lines. `"nodes":[]` renders as the card text "Empty tree.". The whole tree enters once; a wide tree scrolls inside its card (use `horizontal` for wide, shallow trees).
+
+```json
+{"id":"arch","component":"TreeDiagram","flow":"vertical","title":"Service map","nodes":[
+ {"id":"api","title":"API gateway","text":"Routes all traffic","tags":[{"label":"live","color":"green"}],"children":[
+  {"id":"auth","title":"Auth","tags":[{"label":"degraded","color":"red"}]},
+  {"id":"orders","title":"Orders","text":"Postgres + queue","tags":[{"label":"new","color":"accent"}],"children":[
+   {"id":"billing","title":"Billing"}]}]}]}
 ```
 
 ## 6c. Actions (ActionButton)

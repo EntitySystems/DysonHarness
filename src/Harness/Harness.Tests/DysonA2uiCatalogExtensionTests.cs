@@ -111,7 +111,7 @@ public class DysonA2uiCatalogExtensionTests
         ["PieChart"] = "\"data\":[{\"label\":\"a\",\"value\":1}]",
         ["Sparkline"] = "\"data\":[{\"x\":\"a\",\"y\":1}]",
         ["Gauge"] = "\"value\":40,\"min\":0,\"max\":100",
-        ["Image"] = "\"url\":\"https://example.com/a.png\",\"description\":\"d\",\"variant\":\"small\"",
+        ["Image"] = "\"url\":\"https://example.com/a.png\",\"description\":\"d\",\"variant\":\"small\",\"height\":240",
         ["Icon"] = "\"name\":\"check\"",
         ["Favicon"] = "\"domain\":\"example.com\"",
         ["Video"] = "\"url\":\"https://example.com/v\"",
@@ -147,7 +147,7 @@ public class DysonA2uiCatalogExtensionTests
     [Fact]
     public void ComponentTable_covers_the_whole_catalog()
     {
-        var dysonOnly = new HashSet<string> { "ActionButton", "QuestionSlot", "PipelineRun", "LocalVideo" };
+        var dysonOnly = new HashSet<string> { "ActionButton", "QuestionSlot", "PipelineRun", "LocalVideo", "Model3D", "SubagentTasks", "TreeDiagram" };
         var have = new HashSet<string> { "Text", "Row", "Column", "List", "Card", "Divider", "Button", "TextField", "CheckBox", "ChoicePicker" };
         foreach (var name in DysonA2uiCatalog.Components.Keys)
         {
@@ -408,7 +408,7 @@ public class DysonA2uiCatalogExtensionTests
         Assert.True(ParseOne("\"component\":\"PipelineRun\",\"runId\":5", CatalogExtra(Dyson)).IsSuccess);
         Assert.True(ParseOne("\"component\":\"PipelineRun\",\"jobIds\":[1,2,3]", CatalogExtra(DysonA2uiProtocol.PlaygroundCatalogId)).IsSuccess);
         AssertFails(ParseOne("\"component\":\"PipelineRun\",\"jobIds\":[" + string.Join(",", Enumerable.Range(1, 31)) + "]", CatalogExtra(Dyson)), P0 + "/jobIds");
-        AssertFails(ParseOne("\"component\":\"PipelineRun\",\"runId\":5"), P0 + "/component");
+        AssertFails(ParseOne("\"component\":\"PipelineRun\",\"runId\":5", CatalogExtra(DysonA2uiProtocol.BasicCatalogId)), P0 + "/component");
     }
 
     [Fact]

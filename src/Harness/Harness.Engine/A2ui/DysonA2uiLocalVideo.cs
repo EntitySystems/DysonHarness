@@ -22,8 +22,10 @@ public static class DysonA2uiLocalVideo
 {
     public const string ComponentName = "LocalVideo";
 
-    /// <summary>LocalVideo <c>path</c> values with their pointer, for the executor's async path check.</summary>
-    public static IReadOnlyList<(string Pointer, string Path)> PathPointers(IReadOnlyList<DysonA2uiMessage> messages)
+    /// <summary><c>path</c> values of <paramref name="componentName"/> (LocalVideo, Model3D) with their pointer, for the executor's async path check.</summary>
+    public static IReadOnlyList<(string Pointer, string Path)> PathPointers(
+        IReadOnlyList<DysonA2uiMessage> messages,
+        string componentName = ComponentName)
     {
         var list = new List<(string, string)>();
         foreach (var message in messages)
@@ -33,7 +35,7 @@ public static class DysonA2uiLocalVideo
             for (var k = 0; k < components.Count; k++)
             {
                 if (components[k] is JsonObject c
-                    && c["component"] is JsonValue name && name.TryGetValue<string>(out var n) && n == ComponentName
+                    && c["component"] is JsonValue name && name.TryGetValue<string>(out var n) && n == componentName
                     && c["path"] is JsonValue p && p.TryGetValue<string>(out var path))
                 {
                     list.Add(($"{message.Path}/components/{k}/path", path));

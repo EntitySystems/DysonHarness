@@ -211,7 +211,7 @@ public static class DysonA2uiCatalog
     public const string UnknownComponentGroups =
         "layout (Row, Column, Box, Grid, Tabs, Section, Accordion...), text (Title, Heading, Markdown, Code, Badge, Link...), "
         + "inputs (TextField, Select, Slider, DateTimeInput...), data (Table, DataTable, Stat, Timeline, Progress...), charts (Chart, BarChart...), "
-        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, PipelineRun";
+        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram";
 
     private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> StatItem = Props(
         ("label", TxtReq), ("value", AnyReq), ("delta", Txt), ("trend", Enm("up", "down", "flat")),
@@ -268,6 +268,25 @@ public static class DysonA2uiCatalog
     private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> EntityAction = Props(
         ("label", TxtReq), ("href", LinkReq));
 
+    private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> TreeTag = Props(
+        ("label", LitReq), ("color", Enm("red", "green", "accent")));
+
+    /// <summary>TreeDiagram node: <c>children</c> points back at this dictionary, so one spec validates a tree of any depth (capped by the tree rule).</summary>
+    private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> TreeNode = BuildTreeNode();
+
+    private static Dictionary<string, DysonA2uiPropSpec> BuildTreeNode()
+    {
+        var node = new Dictionary<string, DysonA2uiPropSpec>(StringComparer.Ordinal)
+        {
+            ["id"] = new(DysonA2uiPropKind.Identifier, Required: true),
+            ["title"] = LitReq,
+            ["text"] = Lit,
+            ["tags"] = Objects(TreeTag, DysonA2uiTreeDiagram.MaxTags),
+        };
+        node["children"] = Objects(node, DysonA2uiTreeDiagram.MaxNodes);
+        return node;
+    }
+
     public static IReadOnlyDictionary<string, DysonA2uiComponentSpec> Components { get; } = BuildComponents();
 
     private static Dictionary<string, DysonA2uiComponentSpec> BuildComponents()
@@ -314,6 +333,10 @@ public static class DysonA2uiCatalog
             [DysonA2uiLocalVideo.ComponentName] = Dyson(
                 ("path", new(DysonA2uiPropKind.Label, Required: true)),
                 ("title", new(DysonA2uiPropKind.DynamicString))),
+            [DysonA2uiModel3D.ComponentName] = Dyson(
+                ("path", new(DysonA2uiPropKind.Label, Required: true)),
+                ("title", new(DysonA2uiPropKind.DynamicString)),
+                ("height", Int(160, 800))),
             ["ChoicePicker"] = Kit(true,
                 ("options", new(DysonA2uiPropKind.Options, Required: true)),
                 ("value", new(DysonA2uiPropKind.DynamicStringList, Required: true)),
@@ -330,6 +353,12 @@ public static class DysonA2uiCatalog
             ["PipelineRun"] = Dyson(
                 ("runId", new(DysonA2uiPropKind.PositiveLong)),
                 ("jobIds", new(DysonA2uiPropKind.PositiveLongList, MaxItems: 30))),
+            [DysonA2uiSubagentTasks.ComponentName] = Dyson(
+                ("agentId", new(DysonA2uiPropKind.BoundedInt, Required: true, Min: 1, Max: int.MaxValue))),
+            [DysonA2uiTreeDiagram.ComponentName] = Dyson(
+                ("nodes", Objects(TreeNode, DysonA2uiTreeDiagram.MaxNodes, true)),
+                ("flow", Enm("vertical", "horizontal")),
+                ("title", Txt)),
         };
 
         AddLayout(d);
@@ -460,7 +489,8 @@ public static class DysonA2uiCatalog
 
     private static void AddMedia(Dictionary<string, DysonA2uiComponentSpec> d)
     {
-        d["Image"] = Kit(false, ("url", MediaReq), ("description", Txt), ("fallback", Txt), ("alt", Txt), ("caption", Txt),
+        // Image: exactly one of url / path (checked by the validator at the component pointer). path is a Dyson extension prop.
+        d["Image"] = Kit(false, ("url", Media), ("path", new DysonA2uiPropSpec(DysonA2uiPropKind.Label)), ("height", Int(120, 800)), ("description", Txt), ("fallback", Txt), ("alt", Txt), ("caption", Txt),
             ("variant", Enm("icon", "avatar", "small", "medium", "large", "header")));
         d["Icon"] = Kit(false, ("name", TxtReq), ("label", Txt),
             ("svgPath", Rej("Icon.svgPath is rejected: model-supplied SVG is not allowed. Use a built-in icon name.")));

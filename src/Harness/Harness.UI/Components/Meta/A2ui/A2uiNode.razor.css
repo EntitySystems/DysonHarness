@@ -1,4 +1,15 @@
 /* Dyson A2UI kit. Tokens from app.css only; enum props map to these fixed classes. */
+
+/* First-appearance entrance of a live surface (A2uiEnter). The wrapper has no box, so layout is unchanged; the
+   node it holds rises and fades like a feed row (keyframe in app.css), after its own delay. `backwards` only holds
+   the start state while waiting. Reduced motion: the blanket rule in app.css sets animation: none. */
+.a2ui-enter {
+  display: contents;
+}
+
+.a2ui-enter ::deep > * {
+  animation: dyson-msg-in 280ms var(--ease) var(--a2ui-enter-delay, 0ms) backwards;
+}
 .a2ui-row,
 .a2ui-column {
   display: flex;
@@ -72,6 +83,27 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
+}
+
+/* Cards side by side read as one row: stretch to the row / grid-cell height (flex-grow in the column wrappers),
+   and the trailing action sits at the bottom whatever the body length. */
+.a2ui-row > .a2ui-card,
+.a2ui-box--row > .a2ui-card,
+.a2ui-row > .a2ui-weighted:has(> .a2ui-card) {
+  align-self: stretch;
+}
+
+.a2ui-weighted > .a2ui-card,
+.a2ui-stack > .a2ui-card,
+.a2ui-carousel__slot > .a2ui-card,
+.a2ui-card > .a2ui-column {
+  flex: 1 1 auto;
+}
+
+.a2ui-card > :is(.a2ui-button-wrap, .a2ui-action):last-child,
+.a2ui-card > .a2ui-column > :is(.a2ui-button-wrap, .a2ui-action):last-child,
+.a2ui-card > .a2ui-column > .a2ui-row:last-child:has(.a2ui-button-wrap, .a2ui-action) {
+  margin-top: auto;
 }
 
 .a2ui-divider {

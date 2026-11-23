@@ -92,6 +92,24 @@ public class DysonA2uiQuestionCardTests
     }
 
     [Fact]
+    public void ClearSelectionForCustom_clears_single_select_only_for_non_blank_text()
+    {
+        var single = Question();
+        var surface = DysonA2uiQuestionCard.Build(single).Value;
+        var model = new JsonObject { ["selected"] = new JsonArray("A"), ["custom"] = "use blender" };
+
+        var cleared = DysonA2uiQuestionBridge.ClearSelectionForCustom(single, surface, model, "/custom", JsonValue.Create("use blender"));
+        Assert.Empty(cleared["selected"]!.AsArray());
+        Assert.True(DysonA2uiQuestionBridge.CanSubmit(single, surface, "submit", cleared).IsSuccess);
+
+        Assert.Same(model, DysonA2uiQuestionBridge.ClearSelectionForCustom(single, surface, model, "/custom", JsonValue.Create("  ")));
+
+        var multi = Question(multi: true);
+        var multiSurface = DysonA2uiQuestionCard.Build(multi).Value;
+        Assert.Same(model, DysonA2uiQuestionBridge.ClearSelectionForCustom(multi, multiSurface, model, "/custom", JsonValue.Create("x")));
+    }
+
+    [Fact]
     public void ToAnswer_maps_forwarded_form_and_rejects_bad_input()
     {
         var q = Question(multi: true);

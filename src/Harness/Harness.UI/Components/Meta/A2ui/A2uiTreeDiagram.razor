@@ -1,0 +1,80 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
+@using System.Text.Json.Nodes
+@using DysonHarness
+
+@* TreeDiagram. Every number below is DysonA2uiTreeDiagram.Build (Engine) and every class is a fixed word; agent text
+   (title, card title/text, tag label) only appears as escaped element content. Cards are absolutely positioned over an SVG of elbow links. *@
+@{
+    var t = _layout;
+}
+<figure class="a2ui-tree" @attributes="Aria">
+    @if (t.Title is not null)
+    {
+        <figcaption class="a2ui-tree__title">@t.Title</figcaption>
+    }
+    @if (t.Message is not null)
+    {
+        <p class="a2ui-tree__empty">@t.Message</p>
+    }
+    else
+    {
+        <div class="a2ui-tree__scroll">
+            <div class="a2ui-tree__canvas" style="@CanvasStyle(t)">
+                <svg class="a2ui-tree__links" viewBox="@t.ViewBox" aria-hidden="true">
+                    @foreach (var link in t.Links)
+                    {
+                        <path d="@link" />
+                    }
+                </svg>
+                <ul class="a2ui-tree__cards" role="tree">
+                    @foreach (var card in t.Cards)
+                    {
+                        <li class="a2ui-tree__card" role="treeitem" aria-level="@(card.Level + 1)" style="@CardStyle(card)">
+                            <span class="a2ui-tree__card-title" title="@card.Title">@card.Title</span>
+                            @if (card.Tags.Count > 0)
+                            {
+                                <ul class="a2ui-tree__tags">
+                                    @foreach (var tag in card.Tags)
+                                    {
+                                        <li class="a2ui-tree__tag a2ui-tree__tag--@tag.Color">@tag.Label</li>
+                                    }
+                                </ul>
+                            }
+                            @if (card.Text is not null)
+                            {
+                                <span class="a2ui-tree__text">@card.Text</span>
+                            }
+                        </li>
+                    }
+                </ul>
+            </div>
+        </div>
+    }
+</figure>
+
+@code {
+    private DysonA2uiTreeLayout _layout = DysonA2uiTreeDiagram.Build(new JsonObject());
+    private (int Revision, JsonObject? Component, JsonObject? Model, string Scope) _key = (-1, null, null, "");
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public Dictionary<string, object>? Aria { get; set; }
+
+    /// <summary>O(n) over at most 100 nodes and synchronous: recomputed only when the revision, component, local model or scope changes.</summary>
+    protected override void OnParametersSet()
+    {
+        var key = (View.Surface.Revision, Component, View.Model, Scope);
+        if (key == _key)
+            return;
+        _key = key;
+        _layout = DysonA2uiTreeDiagram.Build(Component, View.Model, Scope);
+    }
+
+    private static string CanvasStyle(DysonA2uiTreeLayout t) =>
+        $"width:{t.Width.ToString(CultureInfo.InvariantCulture)}px;height:{t.Height.ToString(CultureInfo.InvariantCulture)}px";
+
+    private static string CardStyle(DysonA2uiTreeCard c) =>
+        $"left:{c.Left}px;top:{c.Top}px;width:{DysonA2uiTreeDiagram.CardWidth}px;height:{DysonA2uiTreeDiagram.CardHeight}px";
+}

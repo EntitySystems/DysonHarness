@@ -187,12 +187,12 @@ public static partial class DysonA2uiValidator
 
     private static readonly HashSet<string> ComponentEnvelopeKeys = new(StringComparer.Ordinal) { "id", "component", "@catalogId" };
 
-    /// <summary>Per-call walk state: the target surface and whether this call created it under the Dyson catalog.</summary>
+    /// <summary>Per-call walk state: the target surface and whether this call created it under the explicit basic catalog.</summary>
     private sealed class Checker
     {
         public string? SurfaceId { get; set; }
 
-        private bool _dysonSurface;
+        private bool _basicSurface;
 
         private DysonA2uiError Err(string path, string message) => DysonA2uiError.Validation(SurfaceId, path, message);
 
@@ -216,13 +216,13 @@ public static partial class DysonA2uiValidator
             if (Keys(body, path, "createSurface", "surfaceId", "catalogId", "sendDataModel", "components", "dataModel") is { } e)
                 return e;
 
-            _dysonSurface = false;
+            _basicSurface = false;
             if (body.ContainsKey("catalogId"))
             {
                 var catalogId = AsString(body["catalogId"]);
                 if (!DysonA2uiCatalog.IsSupportedCatalogId(catalogId))
                     return Err(path + "/catalogId", "catalogId must be omitted, the basic catalog id, the Dyson catalog id or the CopilotKit playground catalog id.");
-                _dysonSurface = DysonA2uiCatalog.IsDysonCatalogId(catalogId);
+                _basicSurface = catalogId == DysonA2uiProtocol.BasicCatalogId;
             }
 
             if (body.ContainsKey("sendDataModel") && !IsFalse(body["sendDataModel"]))
@@ -293,13 +293,13 @@ public static partial class DysonA2uiValidator
                     return Err(path + "/@catalogId", "@catalogId must be the basic catalog id, the Dyson catalog id or the CopilotKit playground catalog id.");
             }
 
-            var dyson = DysonA2uiCatalog.IsDysonCatalogId(componentCatalog) || (componentCatalog is null && _dysonSurface);
+            var dyson = DysonA2uiCatalog.IsDysonCatalogId(componentCatalog) || (componentCatalog is null && !_basicSurface);
             if (DysonA2uiCatalog.RejectedComponents.TryGetValue(name, out var rejected))
                 return Err(path + "/component", rejected);
             if (!DysonA2uiCatalog.Components.TryGetValue(name, out var spec))
                 return Err(path + "/component", $"unknown component '{name}'; see the dyson-a2ui skill. Groups: {DysonA2uiCatalog.UnknownComponentGroups}.");
             if (spec.DysonCatalog && !dyson)
-                return Err(path + "/component", $"unknown component '{name}' in the basic catalog; add \"@catalogId\":\"{DysonA2uiProtocol.DysonCatalogId}\".");
+                return Err(path + "/component", $"'{name}' is a Dyson catalog component; drop the basic catalogId or set \"@catalogId\":\"{DysonA2uiProtocol.DysonCatalogId}\".");
 
             // Upstream inputs use "checks"; ours is "@checks" (renamed in place, like @catalogId stamping).
             if (c.ContainsKey("checks") && !c.ContainsKey("@checks") && spec.Props.ContainsKey("@checks"))
@@ -318,9 +318,14 @@ public static partial class DysonA2uiValidator
                 return Err($"{path}/data/{DysonA2uiProtocol.MaxPieSlices}", $"a pie chart has at most {DysonA2uiProtocol.MaxPieSlices} slices.");
             if (name == "PipelineRun" && c.ContainsKey("runId") == c.ContainsKey("jobIds"))
                 return Err(path, "PipelineRun needs exactly one of runId or jobIds.");
+            if (name == DysonA2uiImage.ComponentName && c.ContainsKey("url") == c.ContainsKey("path"))
+                return Err(path, "Image needs exactly one of url or path.");
+            if (name == DysonA2uiTreeDiagram.ComponentName && DysonA2uiTreeDiagram.Check(c["nodes"]) is var (suffix, treeMessage))
+                return Err(path + suffix, treeMessage);
 
             // ponytail: the surface catalogId is not stored, so Dyson components are stamped with
-            // @catalogId here; a later updateComponents call must carry @catalogId itself.
+            // @catalogId here; omitted means Dyson, so a later updateComponents on an explicit-basic
+            // surface also accepts Dyson components. Upgrade: persist the catalog id on DysonA2uiSurface.
             if (spec.DysonCatalog && componentCatalog is null)
                 c["@catalogId"] = DysonA2uiProtocol.DysonCatalogId;
             return null;

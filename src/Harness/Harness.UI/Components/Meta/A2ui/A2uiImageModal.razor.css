@@ -1,0 +1,41 @@
+/* Large Image view: size modifier on the global confirm-dialog. */
+.a2ui-image-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1200px, 94vw);
+  max-width: none;
+  max-height: min(90vh, 960px);
+}
+
+.a2ui-image-modal__stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  margin: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.a2ui-image-modal__stage img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(min(90vh, 960px) - 140px);
+  object-fit: contain;
+}
+
+.a2ui-image-modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+}
+
+.a2ui-image-modal__caption {
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}

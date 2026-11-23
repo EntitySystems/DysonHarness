@@ -16,6 +16,14 @@
   margin-inline: auto;
   padding: var(--sp-6) var(--sp-5) var(--sp-4);
   min-height: min-content;
+  position: relative;
+}
+
+/* Model3D viewer layer: JS-owned hosts positioned over their slots; scrolls with the list. */
+.meta-chat-feed__model3d-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
 .meta-chat-feed .empty-state {
