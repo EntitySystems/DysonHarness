@@ -83,6 +83,44 @@ public static class DysonA2uiQuestionBridge
         return Result<DysonA2uiAnswer, string>.AsValue(new DysonA2uiAnswer(check.Value.SelectedChoices, check.Value.CustomText));
     }
 
+    /// <summary>
+    /// Single-select question: typing a custom answer (non-blank text written at <paramref name="writtenPointer"/>)
+    /// empties the <c>selected</c> binding of the Button whose action context reads that pointer as <c>custom</c>,
+    /// so the answer is never "both". Returns <paramref name="model"/> unchanged otherwise.
+    /// </summary>
+    public static JsonObject ClearSelectionForCustom(
+        DysonUserQuestion question,
+        DysonA2uiSurface surface,
+        JsonObject model,
+        string writtenPointer,
+        JsonNode? written)
+    {
+        ArgumentNullException.ThrowIfNull(question);
+        ArgumentNullException.ThrowIfNull(surface);
+        ArgumentNullException.ThrowIfNull(model);
+        if (question.MultiSelect
+            || written is not JsonValue v || !v.TryGetValue<string>(out var text) || string.IsNullOrWhiteSpace(text))
+        {
+            return model;
+        }
+
+        foreach (var component in surface.Components.Values)
+        {
+            if (DysonA2uiSurfaces.Name(component) is not ("Button" or "Pressable")
+                || component["action"]?["event"]?["context"] is not JsonObject context
+                || DysonA2uiValidator.AsString((context["custom"] as JsonObject)?["@path"]) != writtenPointer
+                || DysonA2uiValidator.AsString((context["selected"] as JsonObject)?["@path"]) is not { } selectedPath)
+            {
+                continue;
+            }
+
+            var cleared = DysonA2uiBinding.Write(model, selectedPath, new JsonArray());
+            return cleared.IsError ? model : cleared.Value;
+        }
+
+        return model;
+    }
+
     /// <summary><see cref="DysonA2uiAction.Resolve"/> + <see cref="ToAnswer"/>, value discarded. Drives the Button's disabled state.</summary>
     public static VoidResult<string> CanSubmit(
         DysonUserQuestion question,

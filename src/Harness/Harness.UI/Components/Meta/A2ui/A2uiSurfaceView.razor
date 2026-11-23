@@ -92,6 +92,8 @@
             return;
 
         _model = written.Value;
+        if (Question is { } bound && Surface.QuestionId == bound.Id)
+            _model = DysonA2uiQuestionBridge.ClearSelectionForCustom(bound, Surface, _model, pointer, value);
         Dirty = true;
         _render = true;
         StateHasChanged();
