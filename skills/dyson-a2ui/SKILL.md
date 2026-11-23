@@ -147,7 +147,7 @@ An inline three.js viewer for a `.glb` or `.fbx` file in the work directory: dra
 
 ## 6b3. Subagent tasks (SubagentTasks)
 
-One live row per agent: title, `#id`, and an `X/N` pill (todos complete / all todos of that agent). Pass the `agentId` from `StartAsyncMetaAgentDrone` / `ListMetaAgentDrones` (your direct children only). `0/0` means no todos yet. A running agent shows the roster spinner and status color. An unknown id or a stopped agent renders as card text, not an error.
+One live row per agent: title, `#id`, and an `X/N` pill (todos complete / all todos of that agent). Pass the `agentId` from `StartAsyncMetaAgentDrone` / `ListMetaAgentDrones` (your direct children only). `0/0` means no todos yet. A running agent shows the roster spinner and status color. Clicking the row opens that agent's session. When the agent has its own sub-agents (workers, explores, reviews) the row gets a "Show N agents" button that expands a live list of them (same row each, clickable); the host fills it in, so there is no prop for it. An unknown id or a stopped agent renders as card text, not an error.
 
 ```json
 {"id":"t1","component":"SubagentTasks","agentId":3}
