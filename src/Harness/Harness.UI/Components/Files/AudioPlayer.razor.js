@@ -66,11 +66,11 @@ export function init(root) {
             seek.max = String(duration);
         if (!scrubbing)
             seek.value = String(media.currentTime);
-        const current = scrubbing ? Number(seek.value) : media.currentTime;
-        elapsed.textContent = formatTime(current);
+        const at = scrubbing ? Number(seek.value) : media.currentTime;
+        elapsed.textContent = formatTime(at);
         durationEl.textContent = finite ? formatTime(duration) : "--:--";
-        seek.setAttribute("aria-valuetext", `${formatTime(current)} of ${finite ? formatTime(duration) : "unknown"}`);
-        setFill(seek, finite ? current / duration : 0);
+        seek.setAttribute("aria-valuetext", `${formatTime(at)} of ${finite ? formatTime(duration) : "unknown"}`);
+        setFill(seek, finite ? at / duration : 0);
     };
 
     const renderLoop = () => {
@@ -154,7 +154,9 @@ export function init(root) {
     on(media, "volumechange", renderVolume);
     on(media, "error", () => {
         renderPlaying();
-        showError("This file could not be played here (unsupported format or codec).");
+        showError(media.dataset.src
+            ? "This audio could not be played here (network error, blocked, or unsupported format)."
+            : "This file could not be played here (unsupported format or codec).");
     });
 
     renderPlaying();

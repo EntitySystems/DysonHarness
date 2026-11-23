@@ -20,14 +20,18 @@
     else if (_card is not null && _src is not null)
     {
         <span class="a2ui-audio__title">@TitleText()</span>
-        <AudioPlayer @key="_src" Src="@_src" Compact="true" Title="@TitleText()"
-                     ExternalLabel="Open in file viewer" OnOpenExternal="OpenFallback" />
+        <div class="a2ui-audio__bar">
+            <AudioPlayer @key="@(_src + TitleText())" Src="@_src" Compact="true" Title="@TitleText()"
+                         ExternalLabel="Open in file viewer" OnOpenExternal="OpenFallback" />
+        </div>
     }
     else if (_url is not null)
     {
-        <span class="a2ui-audio__title">@TitleText()<span class="a2ui-audio__host"> · from @_host</span></span>
-        <AudioPlayer @key="_url" DeferredSrc="@_url" Compact="true" Title="@TitleText()"
-                     PlayLabel="@($"Play (loads from {_host})")" ExternalLabel="Open link" OnOpenExternal="OpenFallback" />
+        <span class="a2ui-audio__title">@TitleText()<span class="a2ui-audio__host">@HostHint()</span></span>
+        <div class="a2ui-audio__bar">
+            <AudioPlayer @key="@(_url + TitleText())" DeferredSrc="@_url" Compact="true" Title="@TitleText()"
+                         PlayLabel="@($"Play (loads from {_host})")" ExternalLabel="Open link" OnOpenExternal="OpenFallback" />
+        </div>
     }
     else
     {
@@ -82,6 +86,8 @@
             return;
         }
 
+        // A slower earlier load may have registered an id already; free it before overwriting.
+        ReleasePreview();
         _card = loaded.Value;
         _previewId = Previews.PutFile(_card.AbsolutePath, _card.ContentType);
         _src = DysonFilePreviewStore.UrlFor(_previewId);
@@ -95,6 +101,9 @@
             return title.Trim();
         return _card?.Title ?? (_path is null ? null : Path.GetFileName(_path)) ?? _host ?? "Audio";
     }
+
+    // Names the remote host before the user presses play; skipped when the title already is the host.
+    private string HostHint() => string.Equals(TitleText(), _host, StringComparison.Ordinal) ? "" : " · from " + _host;
 
     private string Caption() => A2uiProps.String(View, Component["caption"], Scope);
 

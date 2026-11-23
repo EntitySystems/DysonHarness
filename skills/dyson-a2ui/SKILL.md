@@ -138,7 +138,7 @@ An inline three.js viewer for a `.glb` or `.fbx` file in the work directory: dra
 
 ## 6b2d. Audio (AudioPlayer)
 
-`AudioPlayer` takes exactly one of `path` (a work-directory file: mp3, m4a, aac, wav, ogg, opus, flac, weba; at most 500 MB) or `url` (http/https; loaded only when the user presses play; a private, loopback or LAN host stays a link card). It is a full-width compact bar (play/pause, seek, time, mute/volume) with an optional `title` and `caption`, and works in Row, Grid, Card, Tabs and Carousel. Only one player plays at a time. Same path rules as LocalVideo: a rooted or `..` path is `VALIDATION_FAILED`; a missing, unsupported or oversized file renders as card text. Both or neither of `url` / `path` is `VALIDATION_FAILED`. A file that cannot be decoded shows an error with "Open in file viewer" (path) or "Open link" (url).
+`AudioPlayer` takes exactly one of `path` (a work-directory file: mp3, m4a, aac, wav, ogg, opus, flac, weba; at most 500 MB) or `url` (http/https; loaded only when the user presses play; a localhost, private-range IP, single-label or `.local` host, or a url with credentials, stays a link card). It is a full-width compact bar (play/pause, seek, time, mute/volume) with an optional `title` and `caption`, and works in Row, Grid, Card, Tabs and Carousel. Only one player plays at a time. Same path rules as LocalVideo: a rooted or `..` path is `VALIDATION_FAILED`; a missing, unsupported or oversized file renders as card text. Both or neither of `url` / `path` is `VALIDATION_FAILED`. A file that cannot be decoded shows an error with "Open in file viewer" (path) or "Open link" (url).
 
 ```json
 {"id":"clip","component":"AudioPlayer","path":"media/standup.mp3","title":"Stand-up recording","caption":"Nov 23"}

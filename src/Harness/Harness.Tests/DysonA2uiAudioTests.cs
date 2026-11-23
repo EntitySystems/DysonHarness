@@ -125,6 +125,16 @@ public class DysonA2uiAudioTests
     [InlineData("open_url:http://[fd00::1]/a", null)]
     [InlineData("open_url:http://[fe80::1]/a", null)]
     [InlineData("open_url:http://0.0.0.0/a", null)]
+    [InlineData("open_url:http://localhost./a", null)]
+    [InlineData("open_url:http://127.0.0.1./a", null)]
+    [InlineData("open_url:http://127.1/a", null)]
+    [InlineData("open_url:http://foo.localhost/a", null)]
+    [InlineData("open_url:http://[::ffff:127.0.0.1]/a", null)]
+    [InlineData("open_url:http://nas/a.mp3", null)]
+    [InlineData("open_url:http://printer.local/a.mp3", null)]
+    [InlineData("open_url:http://100.64.0.1/a", null)]
+    [InlineData("open_url:http://user:pw@example.com/a.mp3", null)]
+    [InlineData("open_url:http://127\u30020\u30020\u30021/a", null)]
     public void PlayableUrl_allows_public_http_hosts_only(string? func, string? expected) =>
         Assert.Equal(expected, DysonA2uiAudio.PlayableUrl(func));
 }

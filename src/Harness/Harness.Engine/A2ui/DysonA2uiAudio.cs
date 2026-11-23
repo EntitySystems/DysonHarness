@@ -89,15 +89,26 @@ public static class DysonA2uiAudio
         var url = s[prefix.Length..].Trim();
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-            || uri.Host.Length == 0)
+            || uri.Host.Length == 0
+            || uri.UserInfo.Length > 0)
             return null;
 
-        var host = uri.DnsSafeHost;
-        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
-            || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
+        // A trailing dot (localhost., 127.0.0.1.) and non-ASCII dots (U+3002) reach the browser as the same host.
+        var host = uri.DnsSafeHost.TrimEnd('.');
+        if (host.Length == 0 || host.Any(c => c > 127))
             return null;
-        return IPAddress.TryParse(host, out var ip) && IsLocalAddress(ip) ? null : url;
+        if (IPAddress.TryParse(host, out var ip))
+            return IsLocalAddress(ip) ? null : url;
+
+        // Intranet names: localhost, single-label hosts (http://nas/) and well-known private suffixes.
+        return host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || !host.Contains('.')
+            || PrivateSuffixes.Any(s => host.EndsWith(s, StringComparison.OrdinalIgnoreCase))
+            ? null
+            : url;
     }
+
+    private static readonly string[] PrivateSuffixes = [".localhost", ".local", ".internal", ".lan", ".home.arpa"];
 
     private static bool IsLocalAddress(IPAddress ip)
     {
@@ -106,12 +117,16 @@ public static class DysonA2uiAudio
         if (IPAddress.IsLoopback(ip) || ip.Equals(IPAddress.Any) || ip.Equals(IPAddress.IPv6Any))
             return true;
         if (ip.AddressFamily == AddressFamily.InterNetworkV6)
-            return ip.IsIPv6LinkLocal || ip.IsIPv6UniqueLocal || ip.IsIPv6SiteLocal;
+            return ip.IsIPv6LinkLocal || ip.IsIPv6UniqueLocal || ip.IsIPv6SiteLocal || ip.IsIPv6Multicast || ip.ScopeId != 0
+                || ip.GetAddressBytes().Take(12).All(x => x == 0); // ::a.b.c.d (IPv4-compatible)
         var b = ip.GetAddressBytes();
         return b[0] == 0
             || b[0] == 10
             || (b[0] == 172 && b[1] is >= 16 and <= 31)
             || (b[0] == 192 && b[1] == 168)
-            || (b[0] == 169 && b[1] == 254);
+            || (b[0] == 169 && b[1] == 254)
+            || (b[0] == 100 && b[1] is >= 64 and <= 127) // CGNAT
+            || (b[0] == 198 && b[1] is 18 or 19)
+            || b[0] >= 224; // multicast, reserved, broadcast
     }
 }
