@@ -1,8 +1,11 @@
 /* Moved whole from app.css in the UI refresh. The shared
    `.turn-visualization__frame, .session-visualizations-modal__frame` base rule stays global. */
 .session-visualizations-modal {
-  width: min(980px, 100%);
-  height: min(84vh, 760px);
+  /* Fill the backdrop's padded box. The global .confirm-dialog max-height (min(70vh, 480px))
+     capped the old height, so it is overridden here too. */
+  width: min(1800px, 100%);
+  height: 100%;
+  max-height: 100%;
 }
 
 .session-visualizations-modal__title-row {
@@ -37,6 +40,7 @@
 .session-visualizations-modal__layout {
   display: grid;
   grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
 }
@@ -102,6 +106,7 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: auto;
   padding: var(--sp-4);
   background: var(--surface-sunken);
 }

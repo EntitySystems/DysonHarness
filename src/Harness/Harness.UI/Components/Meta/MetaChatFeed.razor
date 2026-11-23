@@ -1,6 +1,7 @@
 @namespace Harness.UI.Components.Meta
 @using DysonHarness
 @using Harness.UI.Components.Chat
+@using Harness.UI.Components.Meta.A2ui
 @using Harness.UI.Demo
 @using Harness.UI.Markdown
 @inject IJSRuntime Js
@@ -55,66 +56,63 @@
                         <div class="meta-chat__body turn-block__body"
                              @ref="_bodies[item.Key]">@MarkdownRenderer.ToHtml(item.Text)</div>
                     }
+                    @{
+                        var surface = item.A2uiSurface;
+                        var rendered = surface is { Components.Count: > 0 };
+                        var onOpen = EventCallback.Factory.Create<string>(this, func => OpenFuncAsync(item, func));
+                        var openBusy = _actionBusy.Contains(item.Key);
+                    }
                     @if (item.UserQuestion is { } question)
                     {
-                        var locked = question.Answer is not null;
-                        var draft = DraftFor(question);
-                        var busy = _questionBusy.Contains(question.Id);
-                        <div class="meta-chat__question">
-                            <div class="meta-chat__question-title">@question.Question</div>
-                            @foreach (var choice in question.Choices)
-                            {
-                                var label = choice;
-                                var selected = locked
-                                    ? question.Answer!.SelectedChoices.Contains(label, StringComparer.Ordinal)
-                                    : draft.IsSelected(label);
-                                <label class="meta-chat__question-choice">
-                                    @if (question.MultiSelect)
-                                    {
-                                        <input type="checkbox"
-                                               checked="@selected"
-                                               disabled="@(locked || busy)"
-                                               @onchange="e => ToggleChoice(question, label, e)" />
-                                    }
-                                    else
-                                    {
-                                        <input type="radio"
-                                               name="@($"q-{question.Id:N}")"
-                                               checked="@selected"
-                                               disabled="@(locked || busy)"
-                                               @onchange="() => SelectSingle(question, label)" />
-                                    }
-                                    <span>@label</span>
-                                </label>
-                            }
-                            @if (question.AllowCustomAnswer || !string.IsNullOrWhiteSpace(question.Answer?.CustomText))
-                            {
-                                <label class="meta-chat__question-other">
-                                    <span>Other</span>
-                                    @if (locked)
-                                    {
-                                        <div class="meta-chat__question-locked">@question.Answer?.CustomText</div>
-                                    }
-                                    else
-                                    {
-                                        <textarea rows="2"
-                                                  disabled="@busy"
-                                                  value="@draft.Custom"
-                                                  @oninput="e => SetCustom(question, e)"></textarea>
-                                    }
-                                </label>
-                            }
-                            @if (!locked)
-                            {
-                                <button type="button"
-                                        class="btn meta-chat__question-submit"
-                                        disabled="@(!CanSubmit(question) || busy)"
-                                        @onclick="() => SubmitQuestionAsync(question)">Submit answer</button>
-                                @if (_questionErrors.TryGetValue(question.Id, out var questionError))
-                                {
-                                    <div class="meta-chat__question-error">@questionError</div>
-                                }
-                            }
+                        @* Every meta question card is A2UI. A rendered question-bound surface (forwarding) replaces
+                           the derived card in the same frame; a stub or deleted surface falls back to it. *@
+                        var forwarded = rendered && surface!.QuestionId == question.Id ? surface : null;
+                        var cardSurfaceId = forwarded?.SurfaceId ?? DysonA2uiQuestionCard.SurfaceIdFor(question.Id);
+                        <div class="meta-chat__a2ui">
+                        @if (surface is { Components.Count: 0, LastError: not null })
+                        {
+                            <A2uiSurfaceView @key="surface.SurfaceId" Surface="surface" TurnId="item.TurnId!.Value" />
+                        }
+                        <A2uiQuestionCard Question="question"
+                                          Forwarded="forwarded"
+                                          TurnId="item.TurnId!.Value"
+                                          OnAction="RaiseA2uiActionAsync"
+                                          Busy="_a2ui.IsBusy(cardSurfaceId)"
+                                          Error="@_a2ui.ErrorFor(cardSurfaceId)"
+                                          OnOpen="onOpen"
+                                          OpenBusy="openBusy"
+                                          EmbeddedQuestions="item.EmbeddedQuestions"
+                                          State="_a2ui" />
+                        @if (rendered && forwarded is null)
+                        {
+                            <A2uiSurfaceView @key="surface!.SurfaceId"
+                                             Surface="surface"
+                                             TurnId="item.TurnId!.Value"
+                                             Live="_live.Contains(item.Key)"
+                                             Busy="_a2ui.IsBusy(surface.SurfaceId)"
+                                             Error="@_a2ui.ErrorFor(surface.SurfaceId)"
+                                             OnAction="RaiseA2uiActionAsync"
+                                             OnOpen="onOpen"
+                                             OpenBusy="openBusy"
+                                             EmbeddedQuestions="item.EmbeddedQuestions"
+                                             State="_a2ui" />
+                        }
+                        </div>
+                    }
+                    else if (surface is not null && item.TurnId is Guid surfaceTurnId)
+                    {
+                        <div class="meta-chat__a2ui">
+                        <A2uiSurfaceView @key="surface.SurfaceId"
+                                         Surface="surface"
+                                         TurnId="surfaceTurnId"
+                                         Live="_live.Contains(item.Key)"
+                                         Busy="_a2ui.IsBusy(surface.SurfaceId)"
+                                         Error="@_a2ui.ErrorFor(surface.SurfaceId)"
+                                         OnAction="RaiseA2uiActionAsync"
+                                         OnOpen="onOpen"
+                                         OpenBusy="openBusy"
+                                         EmbeddedQuestions="item.EmbeddedQuestions"
+                                         State="_a2ui" />
                         </div>
                     }
                     @if (item.SecureDataRequest is { } secure)
@@ -142,10 +140,10 @@
                                         @onclick="() => OnOpenVisualization.InvokeAsync(visualizationId)">View visualization</button>
                             }
                         </div>
-                        @if (item.Actions.Count > 0 && _actionResults.TryGetValue(item.Key, out var actionText))
-                        {
-                            <div class="meta-chat__action-result">@actionText</div>
-                        }
+                    }
+                    @if ((item.Actions.Count > 0 || rendered) && _actionResults.TryGetValue(item.Key, out var actionText))
+                    {
+                        <div class="meta-chat__action-result">@actionText</div>
                     }
                 </div>
             }
@@ -157,6 +155,8 @@
                     <span>Working…</span>
                 </div>
             }
+            @* JS-owned (A2uiModel3D.razor.js): Model3D viewer iframes live here so re-renders never reload them. Keep it empty. *@
+            <div class="meta-chat-feed__model3d-layer"></div>
         </div>
     }
 </div>
@@ -175,9 +175,7 @@
     private readonly Dictionary<string, ElementReference> _bodies = new(StringComparer.Ordinal);
     private readonly HashSet<string> _actionBusy = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _actionResults = new(StringComparer.Ordinal);
-    private readonly Dictionary<Guid, QuestionDraft> _drafts = [];
-    private readonly HashSet<Guid> _questionBusy = [];
-    private readonly Dictionary<Guid, string> _questionErrors = [];
+    private readonly MetaChatA2uiState _a2ui = new();
 
     [Parameter] public IReadOnlyList<DysonAgentTurn> Turns { get; set; } = [];
     [Parameter] public IReadOnlyList<QueuedPrompt> Queued { get; set; } = [];
@@ -185,21 +183,19 @@
     [Parameter] public string EmptyMessage { get; set; } = "Tell the meta agent what to orchestrate.";
     [Parameter] public EventCallback<Guid> OnRemoveQueued { get; set; }
     [Parameter] public EventCallback<MetaChatActionClick> OnConversationAction { get; set; }
-    [Parameter] public EventCallback<MetaChatQuestionSubmit> OnUserQuestion { get; set; }
+    [Parameter] public EventCallback<MetaChatA2uiAction> OnA2uiAction { get; set; }
+    [Parameter] public EventCallback<MetaChatFuncClick> OnConversationFunc { get; set; }
     [Parameter] public EventCallback<Guid> OnOpenVisualization { get; set; }
+
+    /// <summary>
+    /// Host error for an A2UI surface action (question cards use <c>dyson_question_{id:N}</c>). Empty clears it.
+    /// The surface stays unlocked.
+    /// </summary>
+    public void NoteA2uiError(string surfaceId, string? error) => _a2ui.NoteError(surfaceId, error);
 
     /// <summary>
     /// Last click text for a bubble, keyed by item key. Ephemeral: a reload restores buttons, not this.
     /// </summary>
-    /// <summary>Host error for a question card. Empty clears it. The card stays unlocked.</summary>
-    public void NoteUserQuestionError(Guid questionId, string? error)
-    {
-        if (string.IsNullOrWhiteSpace(error))
-            _questionErrors.Remove(questionId);
-        else
-            _questionErrors[questionId] = error;
-    }
-
     public void NoteConversationActionResult(Guid turnId, Result<string, string> result)
     {
         var key = $"a:{turnId:D}";
@@ -211,158 +207,37 @@
             _actionResults.Remove(key);
     }
 
-    private QuestionDraft DraftFor(DysonUserQuestion question)
+    private async Task RaiseA2uiActionAsync(MetaChatA2uiAction action)
     {
-        if (_drafts.TryGetValue(question.Id, out var draft)
-            && DraftMatches(draft, question.Choices, question.MultiSelect, question.AllowCustomAnswer))
-        {
-            return draft;
-        }
-
-        draft = new QuestionDraft(question.Choices, question.MultiSelect, question.AllowCustomAnswer);
-        _drafts[question.Id] = draft;
-        return draft;
-    }
-
-    private static bool DraftMatches(
-        QuestionDraft draft,
-        IReadOnlyList<string> choices,
-        bool multiSelect,
-        bool allowCustomAnswer)
-    {
-        if (draft.MultiSelect != multiSelect || draft.AllowCustomAnswer != allowCustomAnswer)
-            return false;
-        if (draft.Choices.Count != choices.Count)
-            return false;
-        for (var i = 0; i < choices.Count; i++)
-        {
-            if (!string.Equals(draft.Choices[i], choices[i], StringComparison.Ordinal))
-                return false;
-        }
-
-        return true;
-    }
-
-    private bool CanSubmit(DysonUserQuestion question)
-    {
-        var draft = DraftFor(question);
-        return DysonUserQuestion.ValidateAnswer(
-            question,
-            draft.Selected,
-            draft.Custom,
-            DateTime.UtcNow).IsSuccess;
-    }
-
-    private void ToggleChoice(DysonUserQuestion question, string choice, ChangeEventArgs e)
-    {
-        if (question.Answer is not null)
+        if (!_a2ui.TryBegin(action.SurfaceId))
             return;
 
-        var draft = DraftFor(question);
-        if (e.Value is bool on && on)
-            draft.Select(choice);
-        else
-            draft.Deselect(choice);
-        _questionErrors.Remove(question.Id);
-    }
-
-    private void SelectSingle(DysonUserQuestion question, string choice)
-    {
-        if (question.Answer is not null || question.MultiSelect)
-            return;
-
-        DraftFor(question).Replace(choice);
-        _questionErrors.Remove(question.Id);
-    }
-
-    private void SetCustom(DysonUserQuestion question, ChangeEventArgs e)
-    {
-        if (question.Answer is not null)
-            return;
-
-        var draft = DraftFor(question);
-        draft.Custom = e.Value?.ToString() ?? "";
-        if (!question.MultiSelect && !string.IsNullOrWhiteSpace(draft.Custom))
-            draft.ClearSelected();
-        _questionErrors.Remove(question.Id);
-    }
-
-    private async Task SubmitQuestionAsync(DysonUserQuestion question)
-    {
-        if (question.Answer is not null || _questionBusy.Contains(question.Id) || !CanSubmit(question))
-            return;
-
-        var draft = DraftFor(question);
-        _questionBusy.Add(question.Id);
-        _questionErrors.Remove(question.Id);
+        StateHasChanged();
         try
         {
-            await OnUserQuestion.InvokeAsync(new MetaChatQuestionSubmit(
-                question.Id,
-                draft.Selected.ToArray(),
-                draft.Custom));
+            await OnA2uiAction.InvokeAsync(action);
         }
         finally
         {
-            _questionBusy.Remove(question.Id);
+            _a2ui.End(action.SurfaceId);
         }
     }
 
-    private sealed class QuestionDraft
+    private async Task OpenFuncAsync(MetaChatItem item, string func)
     {
-        private readonly List<string> _selected = [];
+        if (item.TurnId is not Guid turnId || _actionBusy.Contains(item.Key))
+            return;
 
-        public QuestionDraft(IReadOnlyList<string> choices, bool multiSelect, bool allowCustomAnswer)
+        _actionBusy.Add(item.Key);
+        StateHasChanged();
+        try
         {
-            Choices = choices;
-            MultiSelect = multiSelect;
-            AllowCustomAnswer = allowCustomAnswer;
+            await OnConversationFunc.InvokeAsync(new MetaChatFuncClick(turnId, func));
         }
-
-        public IReadOnlyList<string> Choices { get; }
-
-        public bool MultiSelect { get; }
-
-        public bool AllowCustomAnswer { get; }
-
-        public IReadOnlyList<string> Selected => _selected;
-
-        public string Custom { get; set; } = "";
-
-        public bool IsSelected(string choice)
+        finally
         {
-            foreach (var item in _selected)
-            {
-                if (string.Equals(item, choice, StringComparison.Ordinal))
-                    return true;
-            }
-
-            return false;
+            _actionBusy.Remove(item.Key);
         }
-
-        public void Select(string choice)
-        {
-            if (!IsSelected(choice))
-                _selected.Add(choice);
-        }
-
-        public void Deselect(string choice)
-        {
-            for (var i = _selected.Count - 1; i >= 0; i--)
-            {
-                if (string.Equals(_selected[i], choice, StringComparison.Ordinal))
-                    _selected.RemoveAt(i);
-            }
-        }
-
-        public void Replace(string choice)
-        {
-            _selected.Clear();
-            _selected.Add(choice);
-            Custom = "";
-        }
-
-        public void ClearSelected() => _selected.Clear();
     }
 
     private async Task InvokeActionAsync(MetaChatItem item, int index)

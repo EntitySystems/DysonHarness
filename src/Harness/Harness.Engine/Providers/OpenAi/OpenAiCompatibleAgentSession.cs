@@ -218,7 +218,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
         var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
             await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                    models, providerKind, workDirectoryAbsolutePath, cancellationToken)
+                    models, providerKind, workDirectoryAbsolutePath, agentMode, cancellationToken)
                 .ConfigureAwait(false),
             DysonAgentSystemPrompts.BuildWorktreePromptBlock(
                 worktreeEnabled,
@@ -302,7 +302,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
         var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
             await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                    models, providerKind, workDirectoryAbsolutePath, cancellationToken)
+                    models, providerKind, workDirectoryAbsolutePath, state.Session.AgentMode, cancellationToken)
                 .ConfigureAwait(false),
             DysonAgentSystemPrompts.BuildWorktreePromptBlock(
                 state.Session.WorktreeEnabled,
@@ -404,7 +404,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 childWorktreeEnabled, childWorktreePath, childWorktreeBranch, _registeredWorkDirectoryPath);
         var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
             await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                    _models, providerKind, childWorkDirectory, cancellationToken)
+                    _models, providerKind, childWorkDirectory, agentMode, cancellationToken)
                 .ConfigureAwait(false),
             worktreePrompt);
 
@@ -472,7 +472,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
             var reboundSuffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
                 await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                        _models, providerKind, child.WorkDirectoryPath, cancellationToken)
+                        _models, providerKind, child.WorkDirectoryPath, agentMode, cancellationToken)
                     .ConfigureAwait(false),
                 DysonAgentSystemPrompts.BuildWorktreePromptBlock(
                     true, child.WorktreeAbsolutePath, child.WorktreeBranch, _registeredWorkDirectoryPath));

@@ -1,0 +1,314 @@
+using System.IO.Compression;
+using System.Text;
+using DysonHarness;
+
+namespace Harness.Tests;
+
+public class DysonZipArchivesTests
+{
+    private static string NewTempDir() =>
+        Path.Combine(Path.GetTempPath(), $"dyson-zip-test-{Guid.NewGuid():N}");
+
+    private static void WriteZip(string path, params (string Name, byte[] Data)[] entries) =>
+        WriteZip(path, [.. entries.Select(e => (e.Name, e.Data, 0))]);
+
+    private static void WriteZip(string path, params (string Name, byte[] Data, int ExternalAttributes)[] entries)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
+        foreach (var (name, data, attributes) in entries)
+        {
+            var entry = archive.CreateEntry(name);
+            entry.ExternalAttributes = attributes;
+            using var output = entry.Open();
+            output.Write(data, 0, data.Length);
+        }
+    }
+
+    private static byte[] Utf8(string text) => Encoding.UTF8.GetBytes(text);
+
+    private static void DeleteQuietly(string dir)
+    {
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+        catch { /* best-effort temp cleanup */ }
+    }
+
+    [Fact]
+    public async Task ReadEntries_and_ListFolder_walk_folders()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var zipPath = Path.Combine(dir, "pack.zip");
+            WriteZip(zipPath,
+                ("readme.txt", Utf8("hello")),
+                ("src/a.cs", Utf8("class A {}")),
+                ("src/lib/b.cs", Utf8("class B {}")),
+                ("docs/", []));
+
+            var read = await DysonZipArchives.ReadEntriesAsync(zipPath);
+            Assert.True(read.IsSuccess, read.IsError ? read.Error : null);
+
+            var root = DysonZipArchives.ListFolder(read.Value, "");
+            Assert.Equal(new[] { "docs", "src", "readme.txt" }, root.Select(e => e.Name));
+            Assert.Equal(new[] { true, true, false }, root.Select(e => e.IsDirectory));
+
+            var src = DysonZipArchives.ListFolder(read.Value, "src");
+            Assert.Equal(new[] { "lib", "a.cs" }, src.Select(e => e.Name));
+            Assert.Equal(new[] { "src/lib", "src/a.cs" }, src.Select(e => e.FullName));
+            Assert.Equal((long)"class A {}".Length, src[1].Length);
+
+            Assert.Equal("src", DysonZipArchives.ParentFolder("src/lib"));
+            Assert.Equal("", DysonZipArchives.ParentFolder("src"));
+        }
+        finally
+        {
+            DeleteQuietly(dir);
+        }
+    }
+
+    [Fact]
+    public async Task Extract_reuses_cache_and_invalidates_on_archive_change()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var zipPath = Path.Combine(dir, "pack.zip");
+            var cacheRoot = Path.Combine(dir, "cache");
+            WriteZip(zipPath, ("readme.txt", Utf8("hello")));
+
+            var first = await DysonZipArchives.ExtractEntryAsync(zipPath, "readme.txt", cacheRoot);
+            Assert.True(first.IsSuccess, first.IsError ? first.Error : null);
+            Assert.Equal("hello", await File.ReadAllTextAsync(first.Value.AbsolutePath));
+            Assert.True(first.Value.OpenInViewer);
+            Assert.Equal("readme.txt", first.Value.RelativePath);
+
+            await File.WriteAllTextAsync(first.Value.AbsolutePath, "MARKR"); // same length as "hello"
+            var hit = await DysonZipArchives.ExtractEntryAsync(zipPath, "readme.txt", cacheRoot);
+            Assert.True(hit.IsSuccess, hit.IsError ? hit.Error : null);
+            Assert.Equal(first.Value.AbsolutePath, hit.Value.AbsolutePath);
+            Assert.Equal("MARKR", await File.ReadAllTextAsync(hit.Value.AbsolutePath));
+
+            WriteZip(zipPath, ("readme.txt", Utf8("changed content")));
+            File.SetLastWriteTimeUtc(zipPath, File.GetLastWriteTimeUtc(zipPath).AddMinutes(1));
+            var miss = await DysonZipArchives.ExtractEntryAsync(zipPath, "readme.txt", cacheRoot);
+            Assert.True(miss.IsSuccess, miss.IsError ? miss.Error : null);
+            Assert.NotEqual(first.Value.AbsolutePath, miss.Value.AbsolutePath);
+            Assert.Equal("changed content", await File.ReadAllTextAsync(miss.Value.AbsolutePath));
+        }
+        finally
+        {
+            DeleteQuietly(dir);
+        }
+    }
+
+    [Fact]
+    public async Task Extract_rejects_zip_slip_entries()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var zipPath = Path.Combine(dir, "evil.zip");
+            var cacheRoot = Path.Combine(dir, "cache");
+            string[] names = ["../evil.txt", "/abs.txt", "a/../../x.txt", "C:/x.txt"];
+            WriteZip(zipPath, [.. names.Select(n => (Name: n, Data: Utf8("pwn"))), ("ok.txt", Utf8("fine"))]);
+
+            foreach (var name in names)
+            {
+                var result = await DysonZipArchives.ExtractEntryAsync(zipPath, name, cacheRoot);
+                Assert.True(result.IsError, $"expected error for '{name}'");
+            }
+
+            Assert.False(File.Exists(Path.Combine(dir, "evil.txt")));
+            Assert.False(File.Exists(Path.Combine(dir, "x.txt")));
+            Assert.False(File.Exists(Path.Combine(cacheRoot, "evil.txt")));
+            var outside = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+                .Where(f => !f.Equals(zipPath, StringComparison.Ordinal)
+                    && !f.StartsWith(cacheRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+            Assert.Empty(outside);
+
+            var read = await DysonZipArchives.ReadEntriesAsync(zipPath);
+            Assert.True(read.IsSuccess, read.IsError ? read.Error : null);
+            Assert.Equal(new[] { "ok.txt" }, read.Value.Select(e => e.FullName));
+        }
+        finally
+        {
+            DeleteQuietly(dir);
+        }
+    }
+
+    [Fact]
+    public async Task Extract_enforces_size_guard_and_flags_binary()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var zipPath = Path.Combine(dir, "pack.zip");
+            var cacheRoot = Path.Combine(dir, "cache");
+            WriteZip(zipPath,
+                ("big.txt", Utf8("0123456789")),
+                ("blob.dat", [1, 2, 0, 3]));
+
+            var big = await DysonZipArchives.ExtractEntryAsync(zipPath, "big.txt", cacheRoot, maxEntryBytes: 4);
+            Assert.True(big.IsError);
+
+            var blob = await DysonZipArchives.ExtractEntryAsync(zipPath, "blob.dat", cacheRoot);
+            Assert.True(blob.IsSuccess, blob.IsError ? blob.Error : null);
+            Assert.False(blob.Value.OpenInViewer);
+        }
+        finally
+        {
+            DeleteQuietly(dir);
+        }
+    }
+
+    [Fact]
+    public async Task Extract_opens_non_nfc_entry_names_as_listed()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var zipPath = Path.Combine(dir, "mac.zip");
+            var cacheRoot = Path.Combine(dir, "cache");
+            var nfdName = "re\u0301sume\u0301/cafe\u0301.txt"; // decomposed é, as macOS Archive Utility writes it
+            Assert.NotEqual(nfdName, nfdName.Normalize(NormalizationForm.FormC));
+            WriteZip(zipPath, (nfdName, Utf8("bonjour")));
+
+            var read = await DysonZipArchives.ReadEntriesAsync(zipPath);
+            Assert.True(read.IsSuccess, read.IsError ? read.Error : null);
+            var listed = Assert.Single(read.Value);
+
+            var extracted = await DysonZipArchives.ExtractEntryAsync(zipPath, listed.FullName, cacheRoot);
+            Assert.True(extracted.IsSuccess, extracted.IsError ? extracted.Error : null);
+            Assert.Equal("bonjour", await File.ReadAllTextAsync(extracted.Value.AbsolutePath));
+            Assert.StartsWith(Path.GetFullPath(cacheRoot) + Path.DirectorySeparatorChar, extracted.Value.AbsolutePath, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteQuietly(dir);
+        }
+    }
+
+    [Theory]
+    [InlineData("setup.EXE", 0, true)]
+    [InlineData("a/b/run.sh", 0, true)]
+    [InlineData("Install.Bat", 0, true)]
+    [InlineData("evil.exe.", 0, true)]
+    [InlineData("tool.ps1", 0, true)]
+    [InlineData("x.py", 0, true)]
+    [InlineData("x.AppImage", 0, true)]
+    [InlineData("x.html", 0, true)]
+    [InlineData("shortcut.lnk", 0, true)]
+    [InlineData("report.docx", 0, false)]
+    [InlineData("sheet.xlsx", 0, false)]
+    [InlineData("notes.txt", 0, false)]
+    [InlineData("Makefile", 0, false)]
+    [InlineData("tool", 0b111_101_101 << 16, true)] // rwxr-xr-x
+    [InlineData("data", 0b110_100_100 << 16, false)] // rw-r--r--
+    public void IsLaunchBlocked_classifies_executables(string name, int externalAttributes, bool blocked) =>
+        Assert.Equal(blocked, DysonZipArchives.IsLaunchBlocked(name, externalAttributes));
+
+    [Fact]
+    public async Task Extract_refuses_launcher_bound_executables_and_keeps_text_scripts_viewable()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var zipPath = Path.Combine(dir, "tools.zip");
+            var cacheRoot = Path.Combine(dir, "cache");
+            byte[] binary = [(byte)'M', (byte)'Z', 0, 1];
+            WriteZip(zipPath,
+                ("setup.exe", binary, 0),
+                ("payload", binary, 0b111_101_101 << 16),
+                ("run.sh", Utf8("#!/bin/sh\necho hi\n"), 0b111_101_101 << 16),
+                ("report.docx", [(byte)'P', (byte)'K', 3, 4, 0, 0], 0b110_100_100 << 16)); // non-PE binary (PE magic is refused by any name)
+
+            foreach (var name in new[] { "setup.exe", "payload" })
+            {
+                var refused = await DysonZipArchives.ExtractEntryAsync(zipPath, name, cacheRoot);
+                Assert.True(refused.IsError, $"expected refusal for '{name}'");
+                Assert.StartsWith($"Refusing to open '{name}'", refused.Error);
+            }
+
+            Assert.False(Directory.Exists(cacheRoot)); // refused before anything was written
+
+            var script = await DysonZipArchives.ExtractEntryAsync(zipPath, "run.sh", cacheRoot);
+            Assert.True(script.IsSuccess, script.IsError ? script.Error : null);
+            Assert.True(script.Value.OpenInViewer);
+            Assert.False(script.Value.CanLaunch);
+
+            var doc = await DysonZipArchives.ExtractEntryAsync(zipPath, "report.docx", cacheRoot);
+            Assert.True(doc.IsSuccess, doc.IsError ? doc.Error : null);
+            Assert.False(doc.Value.OpenInViewer);
+            Assert.True(doc.Value.CanLaunch);
+            if (OperatingSystem.IsWindows())
+                Assert.Contains("ZoneId=3", await File.ReadAllTextAsync(doc.Value.AbsolutePath + ":Zone.Identifier"));
+        }
+        finally
+        {
+            DeleteQuietly(dir);
+        }
+    }
+
+    [Fact]
+    public async Task Extract_refuses_pe_by_magic_and_opens_video_in_viewer()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var zipPath = Path.Combine(dir, "media.zip");
+            var cacheRoot = Path.Combine(dir, "cache");
+            WriteZip(zipPath,
+                ("renamed.dat", [(byte)'M', (byte)'Z', 0, 1]),
+                ("clip.mp4", [0, 0, 0, 0x18, (byte)'f', (byte)'t', (byte)'y', (byte)'p']),
+                ("art.psd", [1, 2, 0, 3]));
+
+            var refused = await DysonZipArchives.ExtractEntryAsync(zipPath, "renamed.dat", cacheRoot);
+            Assert.True(refused.IsError);
+            Assert.StartsWith("Refusing to open 'renamed.dat'", refused.Error);
+            Assert.False(Directory.Exists(cacheRoot));
+
+            var clip = await DysonZipArchives.ExtractEntryAsync(zipPath, "clip.mp4", cacheRoot);
+            Assert.True(clip.IsSuccess, clip.IsError ? clip.Error : null);
+            Assert.True(clip.Value.OpenInViewer);
+
+            var psd = await DysonZipArchives.ExtractEntryAsync(zipPath, "art.psd", cacheRoot);
+            Assert.True(psd.IsSuccess, psd.IsError ? psd.Error : null);
+            Assert.False(psd.Value.OpenInViewer);
+            Assert.True(psd.Value.CanLaunch);
+        }
+        finally
+        {
+            DeleteQuietly(dir);
+        }
+    }
+
+    [Fact]
+    public void DefaultCacheRoot_is_per_user()
+    {
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrEmpty(local))
+            Assert.Equal(Path.Combine(local, "DysonHarness", "zip-cache"), DysonZipArchives.DefaultCacheRoot);
+    }
+
+    [Fact]
+    public async Task ReadEntries_returns_error_for_corrupt_zip()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var badPath = Path.Combine(dir, "bad.zip");
+            await File.WriteAllTextAsync(badPath, "this is definitely not a zip archive, just some text bytes");
+
+            var read = await DysonZipArchives.ReadEntriesAsync(badPath);
+            Assert.True(read.IsError);
+            Assert.StartsWith("Not a valid ZIP archive", read.Error);
+        }
+        finally
+        {
+            DeleteQuietly(dir);
+        }
+    }
+}

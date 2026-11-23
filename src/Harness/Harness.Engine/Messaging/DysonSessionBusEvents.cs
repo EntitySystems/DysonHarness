@@ -25,6 +25,9 @@ public sealed record DysonSubagentActivityChangedEvent(
 /// <summary>Child SelectedProvider changed (immediate or pending pick applied). Not deduped.</summary>
 public sealed record DysonSubagentModelChangedEvent(Guid PersistenceId, int RuntimeId) : IDysonMessageBusEvent;
 
+/// <summary>A session's todo list changed (create/update/delete/restore/replace). Carries no rows; read DysonAgentSession.Todos.</summary>
+public sealed record DysonSessionTodosChangedEvent(Guid PersistenceId, int RuntimeId) : IDysonMessageBusEvent;
+
 public sealed record DysonSessionTurnAddedEvent(
     Guid PersistenceId,
     Guid TurnId,
@@ -35,6 +38,13 @@ public sealed record DysonSessionContextTokensChangedEvent(
     Guid PersistenceId,
     int Tokens,
     int Limit) : IDysonMessageBusEvent;
+
+/// <summary>
+/// A slug's <c>DefaultMaxTargetContextTokens</c> was saved (after normalize; null = cleared, inherit harness 200K).
+/// Published on <see cref="DysonBusScopes.Wildcard"/>. Live sessions copy it; they are not interrupted.
+/// </summary>
+public sealed record DysonSlugDefaultMaxTargetContextChangedEvent(
+    Guid SlugId, int? MaxTargetContextTokens) : IDysonMessageBusEvent;
 
 /// <summary>Live context passed the effective limit; published at most once per turn.</summary>
 public sealed record DysonSessionContextLimitReachedEvent(

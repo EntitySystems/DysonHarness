@@ -1,0 +1,69 @@
+/* LocalVideo card. Tokens from app.css only. */
+.a2ui-video {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: min(320px, 100%);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+}
+
+button.a2ui-video {
+  cursor: pointer;
+  transition: box-shadow var(--motion-fast) var(--ease), background var(--motion-fast) var(--ease);
+}
+
+button.a2ui-video:hover:not(:disabled) {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+button.a2ui-video:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.a2ui-video__thumb {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+
+.a2ui-video__thumb video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.a2ui-video__pill {
+  position: absolute;
+  right: var(--sp-1);
+  bottom: var(--sp-1);
+  padding: 1px var(--sp-2);
+  border-radius: var(--radius-full);
+  background: rgb(0 0 0 / 0.72);
+  color: #fff;
+  font-size: var(--fs-xs);
+}
+
+.a2ui-video__title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-video__note {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}

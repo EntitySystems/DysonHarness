@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace DysonHarness;
 
@@ -302,6 +303,7 @@ public abstract class DysonAgentSession
         Status is DysonSessionStatus.Completed
             or DysonSessionStatus.Stopped
             or DysonSessionStatus.Failed
+            or DysonSessionStatus.Blocked
             or DysonSessionStatus.Interrupted;
 
     /// <summary>True while any turn is mid turn summarization (UI /summarize worker).</summary>
@@ -1072,7 +1074,7 @@ public abstract class DysonAgentSession
                 branch = full.Value.Session.WorktreeBranch;
                 report = LastStatusReason(full.Value.Logs, stoppedOnly: false);
                 if (row.Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped
-                    or DysonSessionStatus.Failed or DysonSessionStatus.Interrupted)
+                    or DysonSessionStatus.Failed or DysonSessionStatus.Blocked or DysonSessionStatus.Interrupted)
                     finishedAt = full.Value.Turns.Max(t => t.CompletedUtc);
             }
         }
@@ -1280,6 +1282,9 @@ public abstract class DysonAgentSession
     protected void NotifySubagentFailed(int subagentId, string? summary, Guid? persistenceId = null) =>
         NotifySubagentTerminal(DysonAgentInterruptKind.SubagentFailed, subagentId, summary, persistenceId);
 
+    protected void NotifySubagentBlocked(int subagentId, string? summary, Guid? persistenceId = null) =>
+        NotifySubagentTerminal(DysonAgentInterruptKind.SubagentBlocked, subagentId, summary, persistenceId);
+
     // Tracked before the enqueue: the host may start the report turn (and mark it delivered) synchronously.
     private void NotifySubagentTerminal(
         DysonAgentInterruptKind kind,
@@ -1421,6 +1426,7 @@ public abstract class DysonAgentSession
 
             if (terminal.Status is DysonSessionStatus.Completed
                 or DysonSessionStatus.Failed
+                or DysonSessionStatus.Blocked
                 or DysonSessionStatus.Stopped)
             {
                 MarkWaitConsumedCompletion(subagentId);
@@ -1460,15 +1466,43 @@ public abstract class DysonAgentSession
         }));
     }
 
-    public async Task<Result<string, string>> StopSubagentAsync(
+    public Task<Result<string, string>> StopSubagentAsync(
         int subagentId,
         string? reason = null,
+        CancellationToken cancellationToken = default)
+        => StopSubagentAsync(subagentId, reason, recursive: false, cancellationToken);
+
+    /// <summary>
+    /// Stops a direct child. <paramref name="recursive"/> true also stops that child's
+    /// descendants first (deepest first) through this same method. Already-stopped
+    /// descendants are skipped. A descendant stop that returns an error fails the call.
+    /// </summary>
+    public async Task<Result<string, string>> StopSubagentAsync(
+        int subagentId,
+        string? reason,
+        bool recursive,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         if (!TryGetSubagent(subagentId, out var child))
             return Result<string, string>.AsError($"Unknown subagentId {subagentId}.");
+
+        if (recursive)
+        {
+            // Descendants first so a parent stop cannot race a child that is still running.
+            foreach (var descendant in child.SubSessions.ToArray())
+            {
+                if (descendant.Id < 1)
+                    continue;
+
+                var nested = await child.StopSubagentAsync(
+                        descendant.Id, reason, recursive: true, cancellationToken)
+                    .ConfigureAwait(false);
+                if (nested.IsError)
+                    return nested;
+            }
+        }
 
         // Terminal-first: mark Stopped before cancelling so KickOffChildPrompt cannot
         // drain a pending turn onto a new CTS (restart race).
@@ -2861,20 +2895,23 @@ public abstract class DysonAgentSession
         string summary,
         bool failed = false,
         CancellationToken cancellationToken = default,
-        bool bypassIncompleteTodos = false) =>
+        bool bypassIncompleteTodos = false,
+        bool blocked = false) =>
         SubmitSubagentReportAsync(
             summary,
             failed,
             cancellationToken,
             bypassIncompleteTodos,
-            allowStoppedOrInterrupted: false);
+            allowStoppedOrInterrupted: false,
+            blocked: blocked);
 
     private async Task<Result<string, string>> SubmitSubagentReportAsync(
         string summary,
         bool failed,
         CancellationToken cancellationToken,
         bool bypassIncompleteTodos,
-        bool allowStoppedOrInterrupted)
+        bool allowStoppedOrInterrupted,
+        bool blocked = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -2886,8 +2923,8 @@ public abstract class DysonAgentSession
             .Select(t => $"{t.TaskCode} ({t.DisplayName})={t.Status}")
             .ToArray();
 
-        // Failed reports may leave todos incomplete (blocker handoff). Successful reports require all Complete.
-        if (incomplete.Length > 0 && !failed && !bypassIncompleteTodos)
+        // Failed and blocked reports may leave todos incomplete (blocker handoff). Successful reports require all Complete.
+        if (incomplete.Length > 0 && !failed && !blocked && !bypassIncompleteTodos)
         {
             return Result<string, string>.AsError(
                 "SubmitSubagentReport: incomplete todos: " + string.Join("; ", incomplete));
@@ -2896,7 +2933,7 @@ public abstract class DysonAgentSession
         var trimmed = summary.Trim();
         var failedReport = failed;
         var deferMerge = false;
-        if (!failedReport)
+        if (!failedReport && !blocked)
         {
             // None + short gate wait: a cancelled tool call or a busy MergeGates must not
             // lose this report. A busy gate records it Completed with the merge pending.
@@ -2913,13 +2950,16 @@ public abstract class DysonAgentSession
             }
         }
 
-        var status = failedReport ? DysonSessionStatus.Failed : DysonSessionStatus.Completed;
+        var status = blocked
+            ? DysonSessionStatus.Blocked
+            : failedReport ? DysonSessionStatus.Failed : DysonSessionStatus.Completed;
 
         // Terminal handoff already accepted: reject retries (Failed→Completed supersede still allowed).
         // allowStoppedOrInterrupted is the harness synthetic path only: the Stopped/Interrupted
         // rejection exists to stop the agent retrying after a stop, not to stop the harness
         // closing the loop. Completed / Failed-already-failed still reject (idempotency).
         if (Status == DysonSessionStatus.Completed
+            || Status == DysonSessionStatus.Blocked
             || (Status == DysonSessionStatus.Failed && failedReport)
             || (Status == DysonSessionStatus.Stopped && !allowStoppedOrInterrupted)
             || (Status == DysonSessionStatus.Interrupted && !allowStoppedOrInterrupted))
@@ -2934,14 +2974,16 @@ public abstract class DysonAgentSession
         {
             // Race: another thread accepted between the check and TryAccept.
             return Result<string, string>.AsError(
-                Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed
+                Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed or DysonSessionStatus.Blocked
                     ? $"SubmitSubagentReport: already submitted. {TerminalReportRejectHint}"
                     : $"SubmitSubagentReport: session already {Status}. {TerminalReportRejectHint}");
         }
 
         if (Parent is not null)
         {
-            if (failedReport)
+            if (blocked)
+                Parent.NotifySubagentBlocked(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
+            else if (failedReport)
                 Parent.NotifySubagentFailed(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
             else
                 Parent.NotifySubagentCompleted(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
@@ -3326,8 +3368,10 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// After a child turn completes with nothing queued: remind (max 2) or synthesize a failed report.
-    /// No-op for roots, already-reported children, or sessions with pending work.
+    /// After a child turn completes with nothing queued: one task-end reflection when todos are open,
+    /// then remind (max 2), then synthesize a failed report. Every host path (KickOff, runtime, UI host)
+    /// calls this, so the reflection covers them all. No-op for roots, already-reported children, or
+    /// sessions with pending work.
     /// </summary>
     public async Task ApplyChildReportWatchAsync(CancellationToken cancellationToken = default)
     {
@@ -3336,7 +3380,7 @@ public abstract class DysonAgentSession
         var action = DysonChildReportWatch.Evaluate(
             isChild: Parent is not null,
             status: Status,
-            hasReported: Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed
+            hasReported: Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed or DysonSessionStatus.Blocked
                 || _subagentReportAccepted,
             // A held parent message starts when this run detaches; do not remind or synthesize first.
             hasPendingWork: HasPendingTurn || InFlightPromptTurn is not null || HeldInterruptCount > 0,
@@ -3348,6 +3392,12 @@ public abstract class DysonAgentSession
             case DysonChildReportAction.Wait:
                 // A worker report (or parent event) wakes this session; the reminder count is left alone.
                 AppendLog("child report watch: holding — descendant active or child report undelivered");
+                break;
+            case DysonChildReportAction.Remind
+                when DysonTaskEndReflectFlow.TryCreateForChild(this, out var reflection) && reflection is not null:
+                // Open todos: the model chooses (continue, subagent, report). Not counted as a reminder.
+                EnqueuePendingTurn(reflection);
+                AppendLog("child report watch: open todos, task-end reflection queued");
                 break;
             case DysonChildReportAction.Remind:
                 EnqueuePendingTurn(DysonChildReportWatch.CreateReminderTurn());
@@ -3395,17 +3445,19 @@ public abstract class DysonAgentSession
 
         string? parsedSummary = null;
         var parsedFailed = false;
+        var parsedBlocked = false;
         for (var i = turn.ToolCalls.Count - 1; i >= 0; i--)
         {
             var call = turn.ToolCalls[i];
             if (!string.Equals(call.ToolName, "SubmitSubagentReport", StringComparison.Ordinal))
                 continue;
 
-            if (!TryParseSubmitSubagentReportArgs(call.ArgumentsJson, out var summary, out var failed))
+            if (!TryParseSubmitSubagentReportArgs(call.ArgumentsJson, out var summary, out var failed, out var blocked))
                 continue;
 
             parsedSummary = summary;
             parsedFailed = failed;
+            parsedBlocked = blocked;
             break;
         }
 
@@ -3416,7 +3468,8 @@ public abstract class DysonAgentSession
                     summaryWithNote,
                     parsedFailed,
                     CancellationToken.None,
-                    bypassIncompleteTodos: true)
+                    bypassIncompleteTodos: true,
+                    blocked: parsedBlocked)
                 .ConfigureAwait(false);
 
             // Already-terminal reject: still cancel and return true; do not overwrite status.
@@ -3454,10 +3507,12 @@ public abstract class DysonAgentSession
     private static bool TryParseSubmitSubagentReportArgs(
         string? argumentsJson,
         out string summary,
-        out bool failed)
+        out bool failed,
+        out bool blocked)
     {
         summary = "";
         failed = false;
+        blocked = false;
         try
         {
             using var doc = JsonDocument.Parse(
@@ -3474,10 +3529,11 @@ public abstract class DysonAgentSession
 
             summary = value.Trim();
             if (doc.RootElement.TryGetProperty("status", out var statusProp)
-                && statusProp.ValueKind == JsonValueKind.String
-                && string.Equals(statusProp.GetString(), "failed", StringComparison.OrdinalIgnoreCase))
+                && statusProp.ValueKind == JsonValueKind.String)
             {
-                failed = true;
+                var status = statusProp.GetString();
+                failed = string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase);
+                blocked = string.Equals(status, "blocked", StringComparison.OrdinalIgnoreCase);
             }
 
             return true;
@@ -3520,6 +3576,7 @@ public abstract class DysonAgentSession
         {
             if (Status is not (DysonSessionStatus.Completed
                 or DysonSessionStatus.Failed
+                or DysonSessionStatus.Blocked
                 or DysonSessionStatus.Interrupted))
                 return false;
 
@@ -3604,8 +3661,8 @@ public abstract class DysonAgentSession
         string? summary,
         bool allowStoppedOrInterrupted = false)
     {
-        if (status is not (DysonSessionStatus.Completed or DysonSessionStatus.Failed))
-            throw new ArgumentOutOfRangeException(nameof(status), status, "Must be Completed or Failed.");
+        if (status is not (DysonSessionStatus.Completed or DysonSessionStatus.Failed or DysonSessionStatus.Blocked))
+            throw new ArgumentOutOfRangeException(nameof(status), status, "Must be Completed, Failed or Blocked.");
 
         DysonSessionStatus previous = default;
         DysonSessionStatus next = default;
@@ -3613,7 +3670,7 @@ public abstract class DysonAgentSession
         var changed = false;
         lock (_terminalGate)
         {
-            if (Status == DysonSessionStatus.Completed)
+            if (Status is DysonSessionStatus.Completed or DysonSessionStatus.Blocked)
                 return false;
 
             if (Status is DysonSessionStatus.Stopped or DysonSessionStatus.Interrupted)
@@ -3928,6 +3985,7 @@ public abstract class DysonAgentSession
         {
             var gateHeld = false;
             var promptStarted = false;
+            var stoppedAtStart = false;
             var requeuedHere = false;
             try
             {
@@ -3956,6 +4014,7 @@ public abstract class DysonAgentSession
                 }
 
                 promptStarted = true;
+                stoppedAtStart = child.Status == DysonSessionStatus.Stopped;
                 var result = await child.PromptHarnessTurnAsync(turn, runCts.Token).ConfigureAwait(false);
                 if (runCts.IsCancellationRequested)
                 {
@@ -3970,20 +4029,9 @@ public abstract class DysonAgentSession
                 if (TryDrainPendingTurn(child))
                     return;
 
-                // A child with unfinished todos gets one harness reflection before its
-                // ordinary missing-SubmitSubagentReport watch. If that reflection itself
-                // does not report, the watch still reminds then synthesizes.
-                if (DysonTaskEndReflectFlow.TryCreateForChild(child, out var reflection)
-                    && reflection is not null)
-                {
-                    child.EnqueuePendingTurn(reflection);
-                    if (TryDrainPendingTurn(child))
-                        return;
-                }
-
-                // A no-report finish while workers run falls through to the watch, which holds.
-                if (result.IsError
-                    && !(DysonChildReportWatch.IsHarnessNoReportError(result.Error) && child.IsAwaitingDescendants))
+                // A no-report finish falls through to the watch (hold, reflect, remind, then synthesize),
+                // as on the runtime and UI-host paths. Provider and exception errors synthesize now.
+                if (result.IsError && !DysonChildReportWatch.IsHarnessNoReportError(result.Error))
                 {
                     await child.SubmitSyntheticReportAsync(
                             ResolveKickOffFailureSummary(child, result),
@@ -4026,11 +4074,26 @@ public abstract class DysonAgentSession
                 // Same lock as the late requeue's empty-run check: a message this task requeued while its
                 // own run was still attached is started here instead of sitting on an idle session.
                 // Any other cancel leaves the queue alone (Stop/interrupt owns follow-up).
+                // A Stopped child still runs a parent message; when that turn paused for compaction, its
+                // after-summary Continuation starts here (the drain above skips terminal sessions). A Stop
+                // during this run cancelled runCts and cleared the queue, so it still wins.
                 lock (child._injectInterruptGate)
                 {
                     child.DetachBackgroundRun(runCts);
-                    if ((requeuedHere || !promptStarted) && !child.HasActiveBackgroundRun && child.HasPendingTurn && !child.IsTerminal)
+                    // Only a run that began Stopped: a Stop that lands mid-run marks Stopped before it cancels.
+                    var resumeStopped = promptStarted
+                        && stoppedAtStart
+                        && !runCts.IsCancellationRequested
+                        && child.Status == DysonSessionStatus.Stopped
+                        && child._pendingTurns.TryPeek(out var head)
+                        && head.AfterSummaryResume;
+                    if ((requeuedHere || !promptStarted || resumeStopped)
+                        && !child.HasActiveBackgroundRun
+                        && child.HasPendingTurn
+                        && (resumeStopped || !child.IsTerminal))
+                    {
                         StartNextPendingTurn(child);
+                    }
                 }
 
                 runCts.Dispose();
@@ -4182,9 +4245,12 @@ public abstract class DysonAgentSession
         if (parent is null || parent.PersistenceId == Guid.Empty)
             return;
 
-        var interruptKind = status == DysonSessionStatus.Completed
-            ? DysonAgentInterruptKind.SubagentCompleted
-            : DysonAgentInterruptKind.SubagentFailed;
+        var interruptKind = status switch
+        {
+            DysonSessionStatus.Completed => DysonAgentInterruptKind.SubagentCompleted,
+            DysonSessionStatus.Blocked => DysonAgentInterruptKind.SubagentBlocked,
+            _ => DysonAgentInterruptKind.SubagentFailed,
+        };
         var interruptLog = DysonSessionLogPayload.CreateEntry(
             parent.PersistenceId,
             DysonSessionLogKind.Interrupt,
@@ -4333,6 +4399,7 @@ public abstract class DysonAgentSession
             turn.VisualizationId = row.VisualizationId;
             turn.UserQuestion = DysonUserQuestionSerializer.Deserialize(row.UserQuestionJson);
             turn.SecureDataRequest = DysonSecureDataRequestSerializer.Deserialize(row.SecureDataRequestJson);
+            turn.A2uiSurface = DysonA2uiSurfaceSerializer.Deserialize(row.A2uiSurfaceJson);
             DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
             turn.FinalizeIncompleteTools(
                 "Tool call did not complete (cancelled or interrupted).");
@@ -4422,7 +4489,7 @@ public abstract class DysonAgentSession
             if (stoppedOnly
                     ? payload.Status == DysonSessionStatus.Stopped
                     : payload.Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped
-                        or DysonSessionStatus.Failed or DysonSessionStatus.Interrupted)
+                        or DysonSessionStatus.Failed or DysonSessionStatus.Blocked or DysonSessionStatus.Interrupted)
                 reason = payload.Reason;
         }
 
@@ -4886,7 +4953,8 @@ public abstract class DysonAgentSession
         IReadOnlyList<DysonConversationAction>? actions = null,
         Guid? visualizationId = null,
         DysonUserQuestion? userQuestion = null,
-        DysonSecureDataRequest? secureDataRequest = null)
+        DysonSecureDataRequest? secureDataRequest = null,
+        DysonA2uiSurface? a2uiSurface = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
         var now = DateTime.UtcNow;
@@ -4899,6 +4967,7 @@ public abstract class DysonAgentSession
             VisualizationId = visualizationId,
             UserQuestion = userQuestion,
             SecureDataRequest = secureDataRequest,
+            A2uiSurface = a2uiSurface,
         };
         if (actions is { Count: > 0 })
             turn.RestoreConversationActions(actions);
@@ -5011,6 +5080,8 @@ public abstract class DysonAgentSession
             turn.UserQuestion = card;
             turn.AssistantText = message.Trim();
             turn.RestoreConversationActions(actions ?? []);
+            // A forwarded form was built for the old choices; drop it like TryWithdrawUserQuestion does.
+            turn.A2uiSurface = null;
             updated = turn;
         }
 
@@ -5038,6 +5109,7 @@ public abstract class DysonAgentSession
                 return VoidResult<string>.AsError("DeleteUserQuestion: already answered.");
 
             turn.UserQuestion = null;
+            turn.A2uiSurface = null;
             turn.AssistantText = AppendWithdrawnMarker(turn.AssistantText);
             updated = turn;
         }
@@ -5241,6 +5313,282 @@ public abstract class DysonAgentSession
         }
 
         return null;
+    }
+
+    /// <summary>The question card for <paramref name="questionId"/> (answered or not), or null. SecureData ids are null.</summary>
+    public DysonUserQuestion? FindUserQuestion(Guid questionId)
+    {
+        lock (_userQuestionGate)
+            return FindUserQuestionTurn(questionId)?.UserQuestion;
+    }
+
+    /// <summary>
+    /// Applies one RenderA2ui call (messages already parsed by <see cref="DysonA2uiValidator"/>) to the
+    /// surface with that id. All-or-nothing: any error leaves every turn unchanged. The same id updates the
+    /// same DisplayInfo turn in place (<see cref="TurnUpdated"/>); a new unbound surface appends one
+    /// DisplayInfo turn (<see cref="TurnAdded"/>); <paramref name="questionId"/> binds a new surface to that
+    /// open question's turn.
+    /// </summary>
+    public Result<DysonA2uiApplied, DysonA2uiError> TryApplyA2ui(
+        IReadOnlyList<DysonA2uiMessage> messages,
+        Guid? questionId,
+        string? message)
+    {
+        if (messages is not { Count: > 0 })
+            return A2uiFail(null, "/messages", "messages must contain at least one message.");
+
+        var surfaceId = messages[0].SurfaceId;
+        DysonAgentTurn updated;
+        DysonA2uiApplied applied;
+        lock (_userQuestionGate)
+        {
+            var turn = FindA2uiSurfaceTurn(surfaceId);
+            var current = turn?.A2uiSurface;
+            var boundId = current?.QuestionId;
+            var creating = current is not { Components.Count: > 0 };
+
+            if (current is not null && questionId is { } passed && current.QuestionId != passed)
+                return A2uiFail(surfaceId, "/questionId", "questionId does not match the surface's question.");
+
+            if (questionId is { } q && creating)
+            {
+                var notOpen = CheckOpenQuestion(q);
+                if (notOpen is not null)
+                    return A2uiFail(surfaceId, "/questionId", notOpen);
+
+                var questionTurn = FindUserQuestionTurn(q)!;
+                if (turn is null)
+                {
+                    // A stub (failed create under another id) is replaced; a rendered surface is not.
+                    if (questionTurn.A2uiSurface is { Components.Count: > 0 } other)
+                        return A2uiFail(
+                            surfaceId,
+                            "/questionId",
+                            $"question already has surface {other.SurfaceId}; reuse that surfaceId.");
+                    turn = questionTurn;
+                }
+
+                boundId = q;
+            }
+
+            var result = DysonA2uiSurfaces.Apply(current, boundId, messages);
+            if (result.IsError)
+                return Result<DysonA2uiApplied, DysonA2uiError>.AsError(result.Error);
+
+            if (result.Value is not { } surface)
+            {
+                if (turn is null)
+                    return Result<DysonA2uiApplied, DysonA2uiError>.AsValue(
+                        new DysonA2uiApplied(Guid.Empty, surfaceId, 0, Deleted: true));
+
+                turn.A2uiSurface = null;
+                updated = turn;
+                applied = new DysonA2uiApplied(turn.Id, surfaceId, current?.Revision ?? 0, Deleted: true);
+            }
+            else
+            {
+                var slotError = CheckQuestionSlots(surface, current, messages);
+                if (slotError is not null)
+                    return Result<DysonA2uiApplied, DysonA2uiError>.AsError(slotError);
+
+                if (creating
+                    && surface.Components.Count > 0
+                    && CountLiveA2uiSurfaces() >= DysonA2uiProtocol.MaxLiveSurfacesPerSession)
+                {
+                    return A2uiFail(
+                        surfaceId,
+                        messages[0].Path,
+                        $"At most {DysonA2uiProtocol.MaxLiveSurfacesPerSession} live surfaces per session; deleteSurface one first.");
+                }
+
+                if (turn is null)
+                {
+                    // ponytail: appended under the gate so the live-surface cap and the append are atomic;
+                    // TurnAdded handlers then run inside the (reentrant) gate.
+                    var text = string.IsNullOrWhiteSpace(message) ? "Interactive view" : message;
+                    var added = AppendDisplayInfoTurn(text, a2uiSurface: surface);
+                    return Result<DysonA2uiApplied, DysonA2uiError>.AsValue(
+                        new DysonA2uiApplied(added.Id, surfaceId, surface.Revision, Deleted: false));
+                }
+
+                turn.A2uiSurface = surface;
+                updated = turn;
+                applied = new DysonA2uiApplied(turn.Id, surfaceId, surface.Revision, Deleted: false);
+            }
+        }
+
+        TurnUpdated?.Invoke(this, updated);
+        return Result<DysonA2uiApplied, DysonA2uiError>.AsValue(applied);
+    }
+
+    /// <summary>
+    /// Inline error strip for a failed RenderA2ui call. An existing surface keeps its last good render and
+    /// gets <see cref="DysonA2uiSurface.LastError"/>. Otherwise a stub (no components, revision 0) goes on
+    /// the open question's turn, or on one new DisplayInfo turn. A retry with the same id may createSurface
+    /// over the stub, so errors never stack bubbles. A blank or reserved id gets no stub.
+    /// </summary>
+    public void NoteA2uiError(string surfaceId, Guid? questionId, string? message, DysonA2uiError error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        if (string.IsNullOrWhiteSpace(surfaceId)
+            || surfaceId.StartsWith(DysonA2uiProtocol.ReservedSurfacePrefix, StringComparison.Ordinal))
+            return;
+
+        DysonAgentTurn updated;
+        lock (_userQuestionGate)
+        {
+            var turn = FindA2uiSurfaceTurn(surfaceId);
+            if (turn?.A2uiSurface is { } existing)
+            {
+                turn.A2uiSurface = existing with { LastError = error.Message };
+                updated = turn;
+            }
+            else if (questionId is { } q)
+            {
+                // A bad or busy questionId gets no stub; the tool result alone carries the error.
+                if (CheckOpenQuestion(q) is not null)
+                    return;
+                var questionTurn = FindUserQuestionTurn(q)!;
+                if (questionTurn.A2uiSurface is not null)
+                    return;
+                questionTurn.A2uiSurface = A2uiStub(surfaceId, q, error);
+                updated = questionTurn;
+            }
+            else
+            {
+                var text = string.IsNullOrWhiteSpace(message) ? "Interactive view" : message;
+                AppendDisplayInfoTurn(text, a2uiSurface: A2uiStub(surfaceId, null, error));
+                return;
+            }
+        }
+
+        TurnUpdated?.Invoke(this, updated);
+    }
+
+    private static DysonA2uiSurface A2uiStub(string surfaceId, Guid? questionId, DysonA2uiError error) =>
+        new(surfaceId, questionId, new Dictionary<string, JsonObject>(StringComparer.Ordinal), new JsonObject(), 0, error.Message);
+
+    private static Result<DysonA2uiApplied, DysonA2uiError> A2uiFail(string? surfaceId, string path, string message) =>
+        Result<DysonA2uiApplied, DysonA2uiError>.AsError(
+            new DysonA2uiError(DysonA2uiProtocol.ValidationFailed, surfaceId, path, message));
+
+    /// <summary>Null when <paramref name="questionId"/> is an open question card of this session; else the reason.</summary>
+    private string? CheckOpenQuestion(Guid questionId)
+    {
+        if (FindSecureDataTurn(questionId) is not null)
+            return "That id is a secure data request, not a question.";
+        return FindUserQuestionTurn(questionId)?.UserQuestion switch
+        {
+            null => "Question not found.",
+            { Answer: not null } => "Question already answered.",
+            _ => null,
+        };
+    }
+
+    private DysonAgentTurn? FindA2uiSurfaceTurn(string surfaceId)
+    {
+        foreach (var turn in Turns)
+        {
+            if (turn.Kind == DysonAgentTurnKind.DisplayInfo
+                && turn.A2uiSurface is { } surface
+                && string.Equals(surface.SurfaceId, surfaceId, StringComparison.Ordinal))
+            {
+                return turn;
+            }
+        }
+
+        return null;
+    }
+
+    private int CountLiveA2uiSurfaces()
+    {
+        var count = 0;
+        foreach (var turn in Turns)
+        {
+            if (turn.Kind == DysonAgentTurnKind.DisplayInfo && turn.A2uiSurface is { Components.Count: > 0 })
+                count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// QuestionSlot session checks on the applied, unpublished surface. Ids the previous revision already
+    /// embedded skip the open check, so a slot whose question was answered later still updates.
+    /// </summary>
+    private DysonA2uiError? CheckQuestionSlots(
+        DysonA2uiSurface surface,
+        DysonA2uiSurface? current,
+        IReadOnlyList<DysonA2uiMessage> messages)
+    {
+        var ids = DysonA2uiSurfaces.QuestionSlotIds(surface);
+        if (ids.Count == 0)
+            return null;
+
+        var before = current is null
+            ? new HashSet<Guid>()
+            : new HashSet<Guid>(DysonA2uiSurfaces.QuestionSlotIds(current));
+        var seen = new HashSet<Guid>();
+        foreach (var id in ids)
+        {
+            string? reason = null;
+            if (!seen.Add(id))
+                reason = "QuestionSlot: question already embedded in this surface";
+            else if (surface.QuestionId == id)
+                reason = "QuestionSlot: question is this surface's own bound question";
+            else if (!before.Contains(id) && CheckOpenQuestion(id) is not null)
+                reason = "QuestionSlot: question not found or not open";
+            else if (FindOtherSurfaceEmbedding(id, surface.SurfaceId) is { } other)
+                reason = $"QuestionSlot: question already embedded in surface {other}";
+
+            if (reason is not null)
+                return new DysonA2uiError(
+                    DysonA2uiProtocol.ValidationFailed,
+                    surface.SurfaceId,
+                    QuestionSlotPointer(messages, id),
+                    reason);
+        }
+
+        return null;
+    }
+
+    private string? FindOtherSurfaceEmbedding(Guid questionId, string surfaceId)
+    {
+        foreach (var turn in Turns)
+        {
+            if (turn.Kind != DysonAgentTurnKind.DisplayInfo
+                || turn.A2uiSurface is not { } other
+                || string.Equals(other.SurfaceId, surfaceId, StringComparison.Ordinal))
+                continue;
+            if (DysonA2uiSurfaces.QuestionSlotIds(other).Contains(questionId))
+                return other.SurfaceId;
+        }
+
+        return null;
+    }
+
+    /// <summary>Pointer to the last QuestionSlot in this call naming <paramref name="questionId"/>.</summary>
+    private static string QuestionSlotPointer(IReadOnlyList<DysonA2uiMessage> messages, Guid questionId)
+    {
+        var pointer = "/messages";
+        foreach (var m in messages)
+        {
+            if (m.Body["components"] is not JsonArray components)
+                continue;
+            for (var k = 0; k < components.Count; k++)
+            {
+                if (components[k] is JsonObject c
+                    && c["questionId"] is JsonValue v
+                    && v.TryGetValue<string>(out var raw)
+                    && Guid.TryParse(raw, out var parsed)
+                    && parsed == questionId)
+                {
+                    pointer = $"{m.Path}/components/{k}/questionId";
+                }
+            }
+        }
+
+        return pointer;
     }
 
     /// <summary>

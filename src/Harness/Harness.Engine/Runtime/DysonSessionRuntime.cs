@@ -22,6 +22,8 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _hookedSessions = new();
     private readonly ConcurrentDictionary<DysonAgentSession, IDisposable> _sessionEventTokens = new();
     private readonly DysonSessionEventPublisher? _sessionEvents;
+    private readonly DysonMessageBus? _bus;
+    private readonly IDisposable? _slugContextSubscription;
     private readonly DysonWorkDirectoryFocus? _focus;
     private readonly DysonVoiceMode? _voice;
     private readonly ConcurrentDictionary<Guid, DysonAgentSessionRuntimeLease> _leasesById = new();
@@ -68,7 +70,8 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
         IDysonAgentSessionRuntimeFactory sessionFactory,
         DysonSessionEventPublisher? sessionEvents = null,
         DysonWorkDirectoryFocus? focus = null,
-        DysonVoiceMode? voice = null)
+        DysonVoiceMode? voice = null,
+        DysonMessageBus? bus = null)
     {
         ArgumentNullException.ThrowIfNull(subjectContext);
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
@@ -76,6 +79,15 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
         _sessionEvents = sessionEvents;
         _focus = focus;
         _voice = voice;
+        _bus = bus;
+        if (bus is not null)
+        {
+            var sub = bus.Subscribe<DysonSlugDefaultMaxTargetContextChangedEvent>(
+                DysonBusScopes.Wildcard,
+                OnSlugDefaultMaxTargetContextChanged);
+            if (sub.IsSuccess)
+                _slugContextSubscription = sub.Value;
+        }
 
         var normalized = DysonSessionRuntimeRegistry.NormalizeSubjectId(subjectContext.SubjectId);
         if (normalized.IsError)
@@ -95,6 +107,34 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
 
     /// <summary>Subject voice service from the retained scope. Null off Windows.</summary>
     public DysonVoiceMode? Voice => _voice;
+
+    /// <summary>
+    /// A slug default context was saved. Copy it onto live sessions of that slug and their provider.
+    /// Does not cancel, change status, switch models, or publish a limit event.
+    /// </summary>
+    private void OnSlugDefaultMaxTargetContextChanged(DysonSlugDefaultMaxTargetContextChangedEvent evt)
+    {
+        if (_disposed != 0 || evt.SlugId == Guid.Empty)
+            return;
+
+        foreach (var session in SnapshotLiveSessions())
+        {
+            if (session.SelectedProvider is OpenAiCompatibleAgentProvider selected
+                && selected.SlugId == evt.SlugId)
+            {
+                selected.SetDefaultMaxTargetContextTokens(evt.MaxTargetContextTokens);
+                session.SlugDefaultMaxTargetContextTokens = evt.MaxTargetContextTokens;
+                continue;
+            }
+
+            if (session.Provider is OpenAiCompatibleAgentProvider applied
+                && applied.SlugId == evt.SlugId)
+            {
+                applied.SetDefaultMaxTargetContextTokens(evt.MaxTargetContextTokens);
+                session.SlugDefaultMaxTargetContextTokens = evt.MaxTargetContextTokens;
+            }
+        }
+    }
 
     /// <summary>
     /// Copy of the live session map. <see cref="ConcurrentDictionary{TKey,TValue}"/> is the only guard.
@@ -805,7 +845,7 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
         {
             if (child.Id > 0 && (!child.IsTerminal || child.HasActiveBackgroundRun))
             {
-                await session.StopSubagentAsync(child.Id, reason, cancellationToken).ConfigureAwait(false);
+                await session.StopSubagentAsync(child.Id, reason, recursive: false, cancellationToken).ConfigureAwait(false);
             }
 
             await StopLiveChildrenAsync(child, reason, cancellationToken).ConfigureAwait(false);
@@ -856,6 +896,7 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
 
             CancelAllPromptTokens();
             DisposeVoiceSidecarSubscriptions();
+            _slugContextSubscription?.Dispose();
         }
         finally
         {

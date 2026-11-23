@@ -1,0 +1,116 @@
+/* TreeDiagram: cards over an SVG of elbow links. The Engine lays out fixed 200x112 cards (DysonA2uiTreeDiagram). */
+.a2ui-tree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  min-width: 0;
+}
+
+.a2ui-tree__title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+/* Copied from .a2ui-pipeline__note (A2uiPipelineRun.razor.css). */
+.a2ui-tree__empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.a2ui-tree__scroll {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.a2ui-tree__canvas {
+  position: relative;
+  flex: none;
+}
+
+.a2ui-tree__links {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.a2ui-tree__links path {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.a2ui-tree__cards,
+.a2ui-tree__tags {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Copied from .a2ui-card (A2uiNode.razor.css) plus absolute placement. */
+.a2ui-tree__card {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.a2ui-tree__card-title {
+  flex: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.a2ui-tree__tags {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  max-height: 2.6em;
+  overflow: hidden;
+}
+
+/* Copied from .a2ui-tag (A2uiDataNode.razor.css), reading --a2ui-tree-tag. */
+.a2ui-tree__tag {
+  --a2ui-tree-tag: var(--accent);
+  max-width: 100%;
+  padding: 1px var(--sp-3);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--a2ui-tree-tag) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--a2ui-tree-tag) 30%, transparent);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.a2ui-tree__tag--red { --a2ui-tree-tag: var(--danger); }
+.a2ui-tree__tag--green { --a2ui-tree-tag: var(--success); }
+.a2ui-tree__tag--accent { --a2ui-tree-tag: var(--accent); }
+
+.a2ui-tree__text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+}

@@ -15,6 +15,7 @@ public class DysonMetaAgentToolsetTests
         var names = pipeline.Tools.Keys.OrderBy(n => n, StringComparer.Ordinal).ToArray();
         var expected = DysonMetaAgentTools.AllowedToolNames.OrderBy(n => n, StringComparer.Ordinal).ToArray();
         Assert.Equal(expected, names);
+        Assert.Contains("RenderA2ui", names);
     }
 
     [Fact]

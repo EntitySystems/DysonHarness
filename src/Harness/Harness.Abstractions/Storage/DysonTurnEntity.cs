@@ -64,6 +64,12 @@ public sealed class DysonTurnEntity
     /// </summary>
     public string? SecureDataRequestJson { get; set; }
 
+    /// <summary>
+    /// Meta DisplayInfo A2UI surface (components, data model, revision). Re-validated on load.
+    /// Null on every other turn.
+    /// </summary>
+    public string? A2uiSurfaceJson { get; set; }
+
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }
     public string? CompactToolHistory { get; set; }

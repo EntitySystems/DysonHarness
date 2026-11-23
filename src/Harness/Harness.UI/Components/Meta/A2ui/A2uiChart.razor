@@ -1,0 +1,215 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
+@using System.Text.Json.Nodes
+@using DysonHarness
+
+@* Chart, BarChart, LineChart, AreaChart, PieChart, Sparkline, Gauge. All geometry is DysonA2uiChartGeometry (Engine):
+   every SVG attribute below is a number it formatted or a fixed class. Agent text only appears as escaped element content. *@
+@{
+    var g = _geo;
+    var aria = A2uiProps.Aria(View, Component, Scope, _domId, out var description);
+}
+<figure class="a2ui-chart a2ui-chart--@KindClass(g.Kind)" @attributes="aria">
+    @if (g.Title is not null || g.Subtitle is not null)
+    {
+        <figcaption class="a2ui-chart__head">
+            @if (g.Title is not null)
+            {
+                <span class="a2ui-chart__title">@g.Title</span>
+            }
+            @if (g.Subtitle is not null)
+            {
+                <span class="a2ui-chart__subtitle">@g.Subtitle</span>
+            }
+        </figcaption>
+    }
+    @if (g.IsEmpty)
+    {
+        <p class="a2ui-chart__empty">@g.Message</p>
+    }
+    else if (g.Kind == DysonA2uiChartKind.Gauge)
+    {
+        <svg class="a2ui-chart__svg" viewBox="@g.ViewBox" role="img" aria-label="@Summary(g)" style="@HeightStyle(g)">
+            <path class="a2ui-chart__track" d="@g.TrackD" />
+            @if (!string.IsNullOrEmpty(g.ValueD))
+            {
+                <path class="a2ui-chart__gauge @GaugeTone()" d="@g.ValueD" />
+            }
+            <text class="a2ui-chart__text a2ui-chart__text--big a2ui-chart__text--middle" x="100" y="92">@g.CenterText</text>
+            @foreach (var label in g.Labels)
+            {
+                <g><text class="a2ui-chart__text @AnchorClass(label.Anchor)" x="@label.X" y="@label.Y">@label.Text</text></g>
+            }
+        </svg>
+        @if (!string.IsNullOrWhiteSpace(g.Caption))
+        {
+            <p class="a2ui-chart__note">@g.Caption</p>
+        }
+    }
+    else if (g.Kind is DysonA2uiChartKind.Pie or DysonA2uiChartKind.Donut)
+    {
+        <svg class="a2ui-chart__svg" viewBox="@g.ViewBox" role="img" aria-label="@Summary(g)" style="@HeightStyle(g)">
+            @foreach (var arc in g.Arcs)
+            {
+                <path class="a2ui-chart__arc a2ui-series a2ui-series--@arc.Series a2ui-tone--@arc.Tone" d="@arc.D" fill-rule="evenodd"><title>@arc.Title</title></path>
+            }
+        </svg>
+    }
+    else
+    {
+        <svg class="a2ui-chart__svg" viewBox="@g.ViewBox" role="img" aria-label="@Summary(g)" style="@HeightStyle(g)">
+            @foreach (var line in g.Grid)
+            {
+                <line class="a2ui-chart__grid" x1="@line.X1" y1="@line.Y1" x2="@line.X2" y2="@line.Y2" />
+            }
+            @foreach (var label in g.Labels)
+            {
+                <g><text class="a2ui-chart__text @AnchorClass(label.Anchor)" x="@label.X" y="@label.Y">@label.Text</text></g>
+            }
+            @foreach (var rect in g.Rects)
+            {
+                <rect class="a2ui-chart__bar a2ui-series a2ui-series--@rect.Series" x="@rect.X" y="@rect.Y" width="@rect.Width" height="@rect.Height" rx="1.5"><title>@rect.Title</title></rect>
+            }
+            @foreach (var path in g.Paths)
+            {
+                if (path.FillD is not null)
+                {
+                    <path class="a2ui-chart__area a2ui-series a2ui-series--@path.Series" d="@path.FillD" />
+                }
+                <path class="a2ui-chart__line a2ui-series a2ui-series--@path.Series" d="@path.D" />
+            }
+            @foreach (var dot in g.Dots)
+            {
+                <circle class="a2ui-chart__dot a2ui-series a2ui-series--@dot.Series" cx="@dot.X" cy="@dot.Y" r="3"><title>@dot.Title</title></circle>
+            }
+        </svg>
+    }
+    @if (!g.IsEmpty && g.ShowLegend && g.Legend.Count > 0)
+    {
+        <ul class="a2ui-chart__legend">
+            @foreach (var item in g.Legend)
+            {
+                <li class="a2ui-chart__legend-item"><span class="a2ui-chart__swatch a2ui-series a2ui-series--@item.Series a2ui-tone--@item.Tone" aria-hidden="true"></span>@item.Label</li>
+            }
+        </ul>
+    }
+    @if (g.TruncationNote is not null)
+    {
+        <p class="a2ui-chart__note">@g.TruncationNote</p>
+    }
+    @if (g.Dropped > 0)
+    {
+        <p class="a2ui-chart__note">@Count(g.Dropped) values ignored (not a finite number)</p>
+    }
+    @if (!g.IsEmpty && g.TableRows.Count > 0 && g.Kind != DysonA2uiChartKind.Sparkline)
+    {
+        <table class="a2ui-chart__table">
+            <thead>
+                <tr>
+                    @foreach (var head in g.TableHeader)
+                    {
+                        <th scope="col">@head</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in g.TableRows)
+                {
+                    <tr>
+                        @for (var i = 0; i < row.Count; i++)
+                        {
+                            if (i == 0)
+                            {
+                                <th scope="row">@row[i]</th>
+                            }
+                            else
+                            {
+                                <td>@row[i]</td>
+                            }
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+    @if (description is not null)
+    {
+        <span id="@($"{_domId}-desc")" class="a2ui-chart__table">@description</span>
+    }
+</figure>
+
+@code {
+    private static int s_next;
+    private readonly string _domId = "a2ui-chart-" + Interlocked.Increment(ref s_next).ToString(CultureInfo.InvariantCulture);
+    private DysonA2uiChartGeometry _geo = DysonA2uiChartGeometry.FromComponent([], new JsonObject(), "");
+    private (int Revision, JsonObject? Component, JsonObject? Model, string Scope) _key = (-1, null, null, "");
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public string? Id { get; set; }
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public int Depth { get; set; } = 1;
+
+    /// <summary>
+    /// O(n) over at most 2000 points and synchronous: recomputed only when the surface revision, the
+    /// component, the local model object (replaced on every write) or the scope changes.
+    /// </summary>
+    protected override void OnParametersSet()
+    {
+        var key = (View.Surface.Revision, Component, View.Model, Scope);
+        if (key == _key)
+            return;
+        _key = key;
+        _geo = DysonA2uiChartGeometry.FromComponent(Component, View.Model, Scope);
+    }
+
+    private static string KindClass(DysonA2uiChartKind kind) => kind switch
+    {
+        DysonA2uiChartKind.Line => "line",
+        DysonA2uiChartKind.Area => "area",
+        DysonA2uiChartKind.Pie => "pie",
+        DysonA2uiChartKind.Donut => "pie",
+        DysonA2uiChartKind.Sparkline => "spark",
+        DysonA2uiChartKind.Gauge => "gauge",
+        _ => "bar",
+    };
+
+    private static string AnchorClass(string anchor) => anchor switch
+    {
+        "end" => "a2ui-chart__text--end",
+        "middle" => "a2ui-chart__text--middle",
+        _ => "",
+    };
+
+    private static string HeightStyle(DysonA2uiChartGeometry g) =>
+        g.Kind switch
+        {
+            DysonA2uiChartKind.Sparkline => "",
+            DysonA2uiChartKind.Pie or DysonA2uiChartKind.Donut or DysonA2uiChartKind.Gauge => "",
+            _ => "max-height:" + g.Height.ToString(CultureInfo.InvariantCulture) + "px",
+        };
+
+    private static string Count(int n) => n.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>aria-label text: the title or a fixed kind name (agent text is escaped by Blazor).</summary>
+    private static string Summary(DysonA2uiChartGeometry g) =>
+        g.Title ?? g.Kind switch
+        {
+            DysonA2uiChartKind.Pie or DysonA2uiChartKind.Donut => "Pie chart",
+            DysonA2uiChartKind.Gauge => "Gauge",
+            DysonA2uiChartKind.Sparkline => "Sparkline",
+            DysonA2uiChartKind.Line => "Line chart",
+            DysonA2uiChartKind.Area => "Area chart",
+            _ => "Bar chart",
+        };
+
+    /// <summary>Fixed class from the tone enum; the default is the accent.</summary>
+    private string GaugeTone() => A2uiProps.Str(Component["tone"]) switch
+    {
+        "positive" or "success" => "a2ui-chart__gauge--success",
+        "negative" or "danger" => "a2ui-chart__gauge--danger",
+        "warning" => "a2ui-chart__gauge--warning",
+        "info" => "a2ui-chart__gauge--info",
+        _ => "",
+    };
+}

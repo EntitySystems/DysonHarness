@@ -1,0 +1,241 @@
+/* Text/content components. Tokens from app.css only; enum props map to these fixed classes. */
+.a2ui-title,
+.a2ui-heading__subtitle,
+.a2ui-quote__text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.a2ui-title {
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.a2ui-title--2 { font-size: calc(var(--fs-xl) * 1.25); }
+.a2ui-title--3 { font-size: var(--fs-xl); }
+.a2ui-title--4 { font-size: var(--fs-lg); }
+.a2ui-title--5 { font-size: var(--fs-md); }
+
+.a2ui-heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.a2ui-heading__eyebrow {
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.a2ui-heading__subtitle {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.a2ui-caption {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-label {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-inline {
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Badge: variant x tone, all fixed classes. */
+.a2ui-badge {
+  --a2ui-tone: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 1px var(--sp-2);
+  border-radius: var(--radius-full);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+}
+
+.a2ui-badge--size-sm { font-size: var(--fs-2xs); padding: 0 var(--sp-2); }
+.a2ui-badge--size-lg { font-size: var(--fs-sm); padding: var(--sp-1) var(--sp-3); }
+
+.a2ui-tone--success { --a2ui-tone: var(--success); }
+.a2ui-tone--danger { --a2ui-tone: var(--danger); }
+.a2ui-tone--warning { --a2ui-tone: var(--warning); }
+.a2ui-tone--info { --a2ui-tone: var(--info); }
+.a2ui-tone--accent { --a2ui-tone: var(--accent); }
+.a2ui-tone--secondary { --a2ui-tone: var(--text-dim); }
+
+.a2ui-badge--soft {
+  background: color-mix(in srgb, var(--a2ui-tone) 16%, transparent);
+  color: color-mix(in srgb, var(--a2ui-tone) 80%, var(--text));
+}
+
+.a2ui-badge--solid {
+  background: var(--a2ui-tone);
+  color: var(--text-on-accent);
+}
+
+.a2ui-badge--outline {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--a2ui-tone) 60%, transparent);
+  color: color-mix(in srgb, var(--a2ui-tone) 80%, var(--text));
+}
+
+.a2ui-quote {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-3);
+  border-left: 2px solid var(--accent-border);
+  font-size: var(--fs-sm);
+}
+
+.a2ui-quote__text {
+  font-style: italic;
+  color: var(--text);
+}
+
+.a2ui-quote__by {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.a2ui-code {
+  margin: 0;
+  min-width: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+  overflow: hidden;
+}
+
+.a2ui-code__head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
+.a2ui-code__lang {
+  margin-left: auto;
+  text-transform: lowercase;
+}
+
+.a2ui-code__pre {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-loose);
+  white-space: pre;
+}
+
+.a2ui-kbd-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.a2ui-kbd-plus {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.a2ui-kbd {
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-xs);
+  background: var(--bg-3);
+  box-shadow: inset 0 -1px 0 var(--border-strong), inset 0 0 0 1px var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.a2ui-markdown {
+  min-width: 0;
+}
+
+.a2ui-math {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+}
+
+.a2ui-math__label {
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.a2ui-math__src {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.a2ui-math--display .a2ui-math__src {
+  font-size: var(--fs-md);
+}
+
+/* ShimmerText: a bright band sweeps across muted text. Keyframes + reduced-motion rule live in app.css. */
+.a2ui-shimmer-text {
+  background: linear-gradient(90deg, var(--text-muted) 35%, var(--text) 50%, var(--text-muted) 65%) 0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  font-size: var(--fs-sm);
+  animation: a2ui-shimmer 2s linear infinite;
+}
+
+.a2ui-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.a2ui-link:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.a2ui-link:focus-visible {
+  outline: none;
+  border-radius: var(--radius-xs);
+  box-shadow: var(--focus-ring);
+}
+
+.a2ui-link:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}

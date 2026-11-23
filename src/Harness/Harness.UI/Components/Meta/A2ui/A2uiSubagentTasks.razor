@@ -1,0 +1,70 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Text.Json.Nodes
+@using DysonHarness
+@implements IDisposable
+@inject DysonUiHost Host
+@inject DysonMessageBus Bus
+
+@* SubagentTasks row: agent title, running spinner and the X/N todo pill. Card data and the live watch are
+   DysonA2uiSubagentTasks (Engine); this component only renders and re-renders itself on the watch callback. *@
+@if (_card is { Message: null } card)
+{
+    <div class="a2ui-subagent-tasks"
+         data-status="@card.Status"
+         data-running="@(card.IsRunning ? "true" : null)"
+         @attributes="Aria">
+        @if (card.IsRunning)
+        {
+            <span class="subagent-card__spinner" aria-hidden="true"></span>
+        }
+        <span class="a2ui-subagent-tasks__title">@card.Title</span>
+        <span class="a2ui-subagent-tasks__id mono">#@card.AgentId</span>
+        <span class="a2ui-subagent-tasks__pill mono"
+              aria-live="polite"
+              aria-label="@($"{card.Complete} of {card.Total} tasks complete")">@card.Pill</span>
+    </div>
+}
+else
+{
+    <div class="a2ui-subagent-tasks a2ui-subagent-tasks--note" @attributes="Aria">@(_card?.Message ?? "")</div>
+}
+
+@code {
+    private DysonA2uiSubagentTasksCard? _card;
+    private IDisposable? _watch;
+    private int _agentId = -1;
+    private bool _disposed;
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public Dictionary<string, object>? Aria { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        var id = Component["agentId"] is JsonValue v && v.TryGetValue<int>(out var n) ? n : 0;
+        if (id == _agentId)
+            return;
+
+        _agentId = id;
+        _watch?.Dispose();
+        _watch = null;
+        var owner = Host.Session;
+        _card = DysonA2uiSubagentTasks.Build(owner, id);
+        var watch = DysonA2uiSubagentTasks.Watch(Bus, owner, id, card => _ = InvokeAsync(() =>
+        {
+            if (_disposed || id != _agentId)
+                return;
+            _card = card;
+            StateHasChanged();
+        }));
+        if (watch.IsSuccess)
+            _watch = watch.Value;
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _watch?.Dispose();
+        _watch = null;
+    }
+}

@@ -378,7 +378,8 @@ code, .mono {
 
 
 /* Feed message entrance (A1/A2). Applied only to the newest few items so a history load
-   does not cascade; already-shown items keep the same animation name and never replay. */
+   does not cascade; already-shown items keep the same animation name and never replay.
+   Also the A2UI component entrance on a live surface (.a2ui-enter in A2uiNode.razor.css). */
 @keyframes dyson-msg-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
@@ -389,6 +390,22 @@ code, .mono {
 @keyframes dyson-status-pulse {
   0% { opacity: 0.55; transform: scale(0.6); }
   100% { opacity: 0; transform: scale(1.9); }
+}
+
+/* A2UI ShimmerText: a highlight band sweeps across the text. Reduced motion: the blanket rule stops it,
+   and the explicit rule below leaves readable static text instead of a transparent-clip gradient. */
+@keyframes a2ui-shimmer {
+  0% { background-position: 150% 0; }
+  100% { background-position: -50% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* !important: the scoped .a2ui-shimmer-text[b-*] rule outranks this one. */
+  .a2ui-shimmer-text {
+    background: none !important;
+    -webkit-text-fill-color: currentColor !important;
+    color: var(--text-muted) !important;
+  }
 }
 
 /* Subtle accent glow for a whole button (box-shadow only: no layout shift). Reduced motion: the blanket rule stops it. */

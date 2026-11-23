@@ -38,7 +38,7 @@ public static class DysonBuiltInConversationActions
 {
     private const string OpenPlanPrefix = "open_plan:";
     public const string OpenScratchPrefix = "open_scratch:";
-    private const string OpenFilePrefix = "open_file:";
+    public const string OpenFilePrefix = "open_file:";
     private const string OpenUrlPrefix = "open_url:";
 
     /// <summary>True when the trimmed key starts with a built-in prefix.</summary>

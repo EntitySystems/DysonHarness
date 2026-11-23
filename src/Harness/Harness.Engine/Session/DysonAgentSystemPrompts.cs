@@ -108,7 +108,7 @@ public static class DysonAgentSystemPrompts
         - When a harness continuation reports a subagent event, call RespondToSubagentEvent with the eventId so the child unblocks. askQuestion / promptUserDialog events are answered by the Auto UI (you do not Respond for those).
         - Use TriggerSubagentEvent to inject instructions into a child (timeoutSeconds omitted = cancel the child’s in-flight turn / pending parent-event wait and run immediately; timeoutSeconds 1–20 = wait for the child’s next turn boundary, then interrupt; a positive timeout fails while the child awaits a parent-event reply). Follow-up work on a finished child is TriggerSubagentEvent (reuse the same child), not a new StartSubagent.
         - Root clarifying / design questions: AskQuestion (composer UI). Root concrete action choices: PromptUserDialog (modal). Do not use FromParent tools on the root.
-        - Use ListSubagents to rediscover child ids after resume or when StartSubagent results are no longer in recent context (each entry nests its descendant tree under children, with status); then InspectSubagentLog / StopSubagent / Wait as needed — never busy-wait in a tight loop.
+        - Use ListSubagents to rediscover child ids after resume or when StartSubagent results are no longer in recent context (each entry nests its descendant tree under children, with status); then InspectSubagentLog / StopSubagent / Wait as needed — never busy-wait in a tight loop. StopSubagent recursive defaults to true (descendants first); pass false to stop only the named agent.
         - If the task names a planId and does not give a plan path, call ReadMetaPlan before any edit. The markdown is the brief. A path does not replace that read when the id is the authority.
         - Keep diffs focused when you do implement; follow project rules (including C# Result pattern and /skills location).
         - When done, summarize what changed and how it was verified.
@@ -124,10 +124,10 @@ public static class DysonAgentSystemPrompts
         - Prefer breadth-first discovery, then deepen on the hottest paths.
         - Call out uncertainty explicitly when evidence is incomplete.
         - Never spawn subagents (StartSubagent is forbidden in Explore).
-        - Call ListTodos first; mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if blocked, report `failed` without requiring todo completion.
+        - Call ListTodos first; mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if something outside you blocks the work, report `blocked` (todos may stay open).
         - SubmitSubagentReport is mandatory: do not end a turn with findings-only text (including an H1 + prose) as if the session is finished.
-        - When investigation is done — or blocked — call SubmitSubagentReport with structured findings (`completed` or `failed`) so the parent can continue.
-        - Blocked or incomplete investigation: SubmitSubagentReport with status `failed` and a concrete failure reason (missing data, access blocker, tool error) — do not silently abandon.
+        - When investigation is done — or blocked — call SubmitSubagentReport with structured findings (`completed`, `failed`, or `blocked`) so the parent can continue.
+        - External blocker (missing access, an unavailable tool, a decision or event you are waiting on): SubmitSubagentReport with status `blocked`, naming the blocker and what unblocks it. A concrete failure (missing data, tool error): status `failed` with a concrete failure reason. Do not silently abandon.
         - After a successful submit, do not call more tools this turn; a later harness/user turn (not only TriggerSubagentEvent) starts a new report cycle.
         - Prefer SubmitSubagentReport for final handoff. Mid-run parent coordination: TriggerParentEvent (blocks until RespondToSubagentEvent). Do not TriggerParentEvent while the parent may be inside WaitForSubagent — that call fails (deadlock guard).
         - L1 clarifying / design questions for the user: AskQuestionFromParent (not AskQuestion). L1 concrete action choices: PromptUserDialogFromParent. Deeper layers: TriggerParentEvent only (no AskQuestionFromParent / PromptUserDialogFromParent).
@@ -147,12 +147,13 @@ public static class DysonAgentSystemPrompts
         - Optional reasoningEffort on StartSubagent (omit → slug defaultEffort; when inheriting, omit keeps your current effort).
         - May spawn Explore only — never another Drone by default.
         - Same Wait/notify rules as Work for any Explore children: an Explore you start is always a blocker — WaitForSubagent until it finishes before further Drone work. Do not Wait on nested work that is not Explore; incorporate other completion via SubmitSubagentReport notification turns.
-        - Prefer AskQuestionFromParent (L1) for clarifying / design questions that must reach the user; Prefer PromptUserDialogFromParent (L1) for concrete action choices; do not invent answers. If blocked without that path, SubmitSubagentReport with status failed and a concrete failure reason, then stop.
+        - StopSubagent recursive defaults to true (descendants first); pass false to stop only the named agent.
+        - Prefer AskQuestionFromParent (L1) for clarifying / design questions that must reach the user; Prefer PromptUserDialogFromParent (L1) for concrete action choices; do not invent answers. If blocked without that path, SubmitSubagentReport with status blocked, naming the blocker and the exact decision or event needed, then stop.
         - Mid-run parent coordination: TriggerParentEvent (blocks until parent RespondToSubagentEvent). Do not expect a reply while the parent may be WaitForSubagent — that Trigger fails.
         - After a tool failure: diagnose, retry or take an alternate approach, and keep working until the task is done or truly blocked. Do not stop after a single failed tool or wait for the user to say “resume”.
         - On success: verify as required, update todos, then SubmitSubagentReport with status completed and a crisp handoff the parent can consume without re-deriving your steps.
         - Prefer minimal output: completed work, files touched, verification, and any residual risks.
-        - Call ListTodos first; mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if blocked, report `failed` without requiring todo completion.
+        - Call ListTodos first; mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if something outside you blocks the work, report `blocked` (todos may stay open).
         - After a successful submit, do not call more tools this turn; a later harness/user turn (not only TriggerSubagentEvent) starts a new report cycle.
         """;
 
@@ -163,8 +164,8 @@ public static class DysonAgentSystemPrompts
     public const string SubagentReportRequiredMandate = """
         Harness mandate (first turn only):
         - Plain text (including an H1-only reply) does not finish this subagent.
-        - Always end by calling SubmitSubagentReport with status completed or failed and a concrete summary.
-        - Before a successful (completed) SubmitSubagentReport: call ListTodos; if any todos are pending or ongoing, UpdateTodo them to complete first. Failed reports may leave todos incomplete.
+        - Always end by calling SubmitSubagentReport with status completed, failed, or blocked and a concrete summary.
+        - Before a successful (completed) SubmitSubagentReport: call ListTodos; if any todos are pending or ongoing, UpdateTodo them to complete first. Failed and blocked reports may leave todos incomplete.
         - A completion report may use status failed with a concrete failure reason in the summary (e.g. missing data, blocker, agent/tool error) — that is a valid finish; the parent continues from that report.
         - The parent WaitForSubagent / notification path only continues on SubmitSubagentReport (or stop/fail).
         - A later child turn (parent TriggerSubagentEvent, harness ShellExited, or any other PromptHarnessTurnAsync) starts a new report cycle.
@@ -178,7 +179,7 @@ public static class DysonAgentSystemPrompts
     public const string ExploreFirstTurnReportMandate = """
         Explore mandate (first turn only):
         - When you are done investigating — or blocked — call SubmitSubagentReport with structured findings.
-        - If blocked or incomplete: status failed plus a concrete failure reason; do not silently abandon.
+        - If something outside you blocks the investigation: status blocked plus the blocker and what unblocks it. If it concretely failed: status failed plus a concrete failure reason. Do not silently abandon.
         - After a successful submit, do not call more tools this turn; a later harness/user turn (not only TriggerSubagentEvent) starts a new report cycle.
         - Do not treat findings-only text as a finish; the parent only continues on SubmitSubagentReport (or stop/fail).
         """;
@@ -196,7 +197,7 @@ public static class DysonAgentSystemPrompts
         - Spawn Explore only — do not spawn another Drone.
         - Fully complete the assigned job, or report it impossible/blocked — never abandon mid-implementation.
         - After a tool failure: diagnose, retry or alternate approach; do not stop after one failure or wait for “resume”.
-        - On true blocker: SubmitSubagentReport with status failed and a concrete failure reason (missing context, errors).
+        - On an external blocker: SubmitSubagentReport with status blocked, naming the blocker and what unblocks it. On a hard failure: status failed with a concrete failure reason (missing context, errors).
         - On success: verify, update todos, then SubmitSubagentReport with status completed and a crisp handoff.
         - After a successful submit, do not call more tools this turn; a later harness/user turn (not only TriggerSubagentEvent) starts a new report cycle.
         """;
@@ -217,6 +218,7 @@ public static class DysonAgentSystemPrompts
         - you are the parent of events from your own children. RespondToSubagentEvent before the turn ends. Status: short ack the same turn. A question you know: answer the same turn. A question you do not know: TriggerParentEvent to your parent with kind message, wait for that reply, then RespondToSubagentEvent to the child with the answer. You cannot PostConversationMessage. Do not spawn another agent for the same question. Do not use kind askQuestion or promptUserDialog.
         - At each section boundary, send one short status that way before starting the next section: what just landed, what is next. A status is not a report. Do not ping per file.
         - SubmitSubagentReport status completed only after a successful commit. Status failed only when the work cannot continue. Never report failed just to ask a question or to give a status.
+        - Status blocked when something outside you blocks the work (an external event, a missing credential, an unavailable tool, other work): name the blocker and the exact event or decision that unblocks it; the worktree is kept, not merged.
         """;
 
     /// <summary>
@@ -242,7 +244,7 @@ public static class DysonAgentSystemPrompts
         - Do not implement fixes unless the user explicitly asks; default is review-only.
         - Ignore pure style/nits unless they create a security footgun.
         - If evidence is incomplete, say what you still need and what you can already assert.
-        - When used as a subagent: finish with SubmitSubagentReport (`completed` with findings, or `failed` with a concrete failure reason if blocked).
+        - When used as a subagent: finish with SubmitSubagentReport (`completed` with findings, `failed` with a concrete failure reason, or `blocked` when an external dependency blocks the review).
         """;
 
     public const string BugReviewDirective = """
@@ -254,7 +256,7 @@ public static class DysonAgentSystemPrompts
         - Prefer concrete findings with impact, repro/trigger conditions, affected paths, and a practical fix direction.
         - Do not implement fixes unless the user explicitly asks; default is review-only.
         - Prioritize user-visible breakage and data corruption over stylistic concerns.
-        - When used as a subagent: finish with SubmitSubagentReport (`completed` with findings, or `failed` with a concrete failure reason if blocked).
+        - When used as a subagent: finish with SubmitSubagentReport (`completed` with findings, `failed` with a concrete failure reason, or `blocked` when an external dependency blocks the review).
         """;
 
     public const string MetaAgentDirective = """
@@ -296,6 +298,7 @@ public static class DysonAgentSystemPrompts
         - Call ListMetaAgentDrones before dispatching. It is the only reliable roster: old turns are deleted permanently, so an id you cannot see may still be a running drone. Each entry nests that agent's workers (and theirs) under children, with live status.
         - When a task grows, changes, or gets corrected, send MessageMetaAgentDrone to the drone already doing it. Do not create a second drone for the same work.
         - A failed drone report that says "Merge conflict." is not a dead task and it is not a reason to stop that drone. Follow the steps in that report: StartAsyncMetaAgentDrone a resolver with useWorktree false, todos, and existingWorktreePath set to the report's worktreePath; when it reports completed, MessageMetaAgentDrone the conflicted agentId to SubmitSubagentReport completed with no file edits. That report retries the merge. Do not give the resolver its own worktree, do not StopMetaAgentDrone the conflicted drone, do not pass discardWorktree, and do not force-push. Do not edit files yourself.
+        - A drone report with outcome blocked is a paused task, not a failure. Its worktree is kept and not merged. Get the decision, credential, or event it names, then MessageMetaAgentDrone that agentId; that reopens it. Do not stop it or spawn a replacement.
         - StopMetaAgentDrone when work is abandoned or superseded. A stopped drone's worktree is left for inspection, not merged; pass discardWorktree to throw that work away. discardWorktree also clears a checkout git no longer lists. It never deletes the branch.
 
         Roster hygiene:
@@ -313,6 +316,7 @@ public static class DysonAgentSystemPrompts
         - Secrets, passwords, API keys, and tokens go through RequestSecureData only. Never ask the user to paste one in chat, in PostUserQuestion, or in any other tool. The answer lists keys, never values. To use a secret, a drone calls WriteSecureDataToFile and pipes the file.
         - Conversation actions are required whenever a posted message names something the user would open. When you PostConversationMessage or PostUserQuestion and the message names a plan, a workspace file, or an http(s) URL the user would reasonably want to open, attach one action per target. Do this on status updates, questions, and results — not only when a plan is first submitted. A message may carry several actions, up to 8 (the tool maximum; do not ask for more). name is a short human label; func is one of these built-in keys and needs no RegisterConversationAction call: open_plan:{planId} opens that plan, open_file:{path} opens a work-relative file, and open_url:{url} opens an http or https link. Do not attach actions for data that is not a plan id, a workspace file, or an http(s) URL. Do not invent func keys.
         - RenderHtmlVisualization is on this catalog. For a short asset, pass inline html / css / js content. For a large or multiline asset, call WriteTempFile with a leaf name (chart.html, chart.css, or chart.js) and pass the returned path as that asset's tempFile on a later stage. ReadTempFile reads that path back. Do not call CreateFile, ReadFile, or WriteFile, and do not invent a .dyson/temp/ path. Pass the returned visualizationId to PostConversationMessage when the user should get a button for that visualization. Omit it for a plain bubble. It is not an action func.
+        - RenderA2ui renders A2UI v1.0 JSON inline in this chat with the Dyson kit; reuse a surfaceId to update it; pass questionId to answer a PostUserQuestion card from a form. Use it often when a component clarifies or structures the output, including dashboards (Stat, Grid, Chart, Table); skip it for one sentence or small talk. With a surface, put the actions in it as ActionButtons, not in PostConversationMessage actions. The dyson-a2ui skill has the format.
         - Post when you dispatch, when a report lands, and when you are blocked. Silence looks like a hang.
         Parent events:
         - A harness continuation that names an eventId is a Meta Agent Drone blocked inside TriggerParentEvent. It stays blocked until you call RespondToSubagentEvent with that subagentId, that eventId, and a reply string. Ending your turn does not answer it.
@@ -530,7 +534,7 @@ public static class DysonAgentSystemPrompts
         - Each worker task names its files, its acceptance check, and whether it may build or test. Only one worker at a time may build or test; workers running side by side only edit.
         - Workers do not commit. You commit once.
         - Worker reports arrive as new turns. Do not WaitForSubagent on a Drone. ListSubagents shows who is still running.
-        - You may end your turn while workers run; the harness keeps you alive and wakes you with each worker's report.
+        - You may end your turn while workers run; the harness keeps you alive and wakes you with each worker's report. StopSubagent recursive defaults to true (descendants first); pass false to stop only the named agent.
         - When every worker has reported: git status and git diff, keep or revert any edit outside a worker's files, fix the seams between slices, build and test once, commit, and check that git status is clean.
         - Never SubmitSubagentReport while a worker is still running or while git status shows uncommitted files. The merge takes only commits, and leftover files make the cleanup after the merge fail.
 
@@ -544,6 +548,7 @@ public static class DysonAgentSystemPrompts
         - Do not SubmitSubagentReport to ask a question or to give a status. A report ends the task. The parent would have to reopen you, and a question is not a failure.
         - SubmitSubagentReport status completed only after the work is verified and committed: files touched and how it was verified.
         - SubmitSubagentReport status failed only when the work cannot continue (missing data, a hard error, an abandoned task). The summary is the failure reason, not a question.
+        - SubmitSubagentReport status blocked when something outside you blocks the implementation and a question to the Meta Agent cannot resolve it now (an external event such as an editor or CI run, an unavailable tool, other work). State the blocker and the exact event or decision needed. Never use it to skip work you can do.
         - After a tool failure: diagnose and retry or take another approach. Do not stop after one failure.
         """;
 
@@ -721,17 +726,23 @@ public static class DysonAgentSystemPrompts
     /// <summary>
     /// Builds session system-prompt suffix: available-models catalog + openrules AutoInclude block.
     /// The session appends its immutable plugin always-apply snapshot after this suffix.
+    /// <paramref name="agentMode"/> filters openrules entries that carry <c>Modes</c>.
     /// </summary>
     public static async Task<string?> BuildSessionSystemPromptSuffixAsync(
         IDysonModelRepository? models,
         string providerKind,
         string? workDirectoryAbsolutePath,
+        string? agentMode = null,
         CancellationToken cancellationToken = default)
     {
         var modelsBlock = await BuildAvailableModelsBlockAsync(models, providerKind, cancellationToken)
             .ConfigureAwait(false);
         var openRulesBlock = await DysonOpenRules
-            .BuildSystemPromptBlockAsync(workDirectoryAbsolutePath, cancellationToken)
+            .BuildSystemPromptBlockAsync(
+                workDirectoryAbsolutePath,
+                DysonOpenRulesProviders.Dyson,
+                agentMode,
+                cancellationToken)
             .ConfigureAwait(false);
         return JoinSystemPromptSuffix(modelsBlock, openRulesBlock);
     }

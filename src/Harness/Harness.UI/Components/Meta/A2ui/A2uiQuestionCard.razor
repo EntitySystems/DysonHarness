@@ -1,0 +1,64 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using DysonHarness
+@using Harness.UI.Components.Meta
+
+@* Every meta question card: a fixed surface the Engine derives from the question (DysonA2uiQuestionCard).
+   With Forwarded set, the agent's question-bound surface renders in the same frame instead. *@
+@if ((Forwarded ?? _surface) is { } surface)
+{
+    var answered = Question.Answer is not null;
+    <div class="a2ui-question @(answered ? "a2ui-question--answered" : null)">
+        <A2uiSurfaceView @key="(Forwarded is null ? _key : Forwarded.SurfaceId)"
+                         Surface="surface"
+                         TurnId="TurnId"
+                         Locked="answered"
+                         Busy="Busy"
+                         Error="@Error"
+                         Question="Question"
+                         OnAction="OnAction"
+                         OnOpen="OnOpen"
+                         OpenBusy="OpenBusy"
+                         EmbeddedQuestions="EmbeddedQuestions"
+                         State="State" />
+    </div>
+}
+else
+{
+    <div class="a2ui-question-error" role="alert">This question can be answered from the Questions modal.</div>
+}
+
+@code {
+    private string? _key;
+    private DysonA2uiSurface? _surface;
+
+    [Parameter, EditorRequired] public DysonUserQuestion Question { get; set; } = default!;
+    [Parameter] public EventCallback<MetaChatA2uiAction> OnAction { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public string? Error { get; set; }
+
+    /// <summary>Agent surface bound to this question (forwarding). Null: the derived card.</summary>
+    [Parameter] public DysonA2uiSurface? Forwarded { get; set; }
+
+    /// <summary>Turn of a forwarded surface. Ignored by the host for the derived card.</summary>
+    [Parameter] public Guid TurnId { get; set; }
+
+    [Parameter] public EventCallback<string> OnOpen { get; set; }
+    [Parameter] public bool OpenBusy { get; set; }
+    [Parameter] public IReadOnlyDictionary<Guid, DysonUserQuestion?> EmbeddedQuestions { get; set; } = MetaChatItems.NoEmbeddedQuestions;
+    [Parameter] public MetaChatA2uiState? State { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (Forwarded is not null)
+            return;
+
+        // Rebuild only when the card is replaced or answered; the key change also resets the local model.
+        var key = DysonA2uiQuestionCard.RenderKey(Question);
+        if (string.Equals(key, _key, StringComparison.Ordinal))
+            return;
+
+        _key = key;
+        var built = DysonA2uiQuestionCard.Build(Question);
+        _surface = built.IsError ? null : built.Value;
+    }
+}

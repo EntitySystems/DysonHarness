@@ -23,10 +23,11 @@ public class DysonTurnInterruptionPersistenceTests
             || (int)DysonSessionStatus.Completed != 1
             || (int)DysonSessionStatus.Stopped != 2
             || (int)DysonSessionStatus.Failed != 3
-            || (int)DysonSessionStatus.Interrupted != 4)
+            || (int)DysonSessionStatus.Interrupted != 4
+            || (int)DysonSessionStatus.Blocked != 5)
         {
             throw new InvalidOperationException(
-                "DysonSessionStatus must stay Active=0 Completed=1 Stopped=2 Failed=3 Interrupted=4.");
+                "DysonSessionStatus must stay Active=0 Completed=1 Stopped=2 Failed=3 Interrupted=4 Blocked=5.");
         }
 
         if ((int)DysonSessionLogKind.SessionRenamed != 15

@@ -148,6 +148,158 @@ public class DysonFileViewerPdfTests
             Assert.Null(host.FileViewer.Error);
             Assert.Empty(host.FileViewer.GitDiffAnnotations);
 
+            using (var zipStream = File.Create(Path.Combine(workRoot, "pack.zip")))
+            using (var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                var zipEntry = archive.CreateEntry("src/a.txt");
+                await using var entryStream = zipEntry.Open();
+                await entryStream.WriteAsync("hi"u8.ToArray());
+            }
+
+            await File.WriteAllTextAsync(Path.Combine(workRoot, "bad.zip"), "definitely not a zip");
+
+            await host.OpenFileViewerAsync("pack.zip", workRoot);
+            Assert.NotNull(host.FileViewer);
+            Assert.True(host.FileViewer.IsZip);
+            Assert.NotEmpty(host.FileViewer.ZipEntries);
+            Assert.Equal("", host.FileViewer.Content);
+            Assert.Null(host.FileViewer.Error);
+
+            await host.OpenFileViewerAsync("bad.zip", workRoot);
+            Assert.NotNull(host.FileViewer);
+            Assert.True(host.FileViewer.IsZip);
+            Assert.False(string.IsNullOrEmpty(host.FileViewer.Error));
+            Assert.Empty(host.FileViewer.ZipEntries);
+
+            // Nested zip opens at its own root on a fresh epoch; Back restores the entry's folder for every type.
+            byte[] innerBytes;
+            using (var innerStream = new MemoryStream())
+            {
+                using (var inner = new System.IO.Compression.ZipArchive(innerStream, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+                {
+                    await using var s = inner.CreateEntry("deep/x.txt").Open();
+                    await s.WriteAsync("x"u8.ToArray());
+                }
+                innerBytes = innerStream.ToArray();
+            }
+
+            using (var zipStream = File.Create(Path.Combine(workRoot, "outer.zip")))
+            using (var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                await using (var s = archive.CreateEntry("sub/inner.zip").Open())
+                    await s.WriteAsync(innerBytes);
+                await using (var s = archive.CreateEntry("sub/note.txt").Open())
+                    await s.WriteAsync("note"u8.ToArray());
+            }
+
+            var epochs = new List<int>();
+            using var epochSub = host.Bus.Subscribe<DysonFileViewerChangedEvent>(host.BusScopeKey, e => epochs.Add(e.Epoch)).Value;
+            var cacheDirs = new List<string>();
+            try
+            {
+                await host.OpenFileViewerAsync("outer.zip", workRoot);
+                Assert.Equal("", host.FileViewer!.ZipFolder);
+                var outerEpoch = epochs[^1];
+
+                await host.OpenZipEntryAsync("sub/inner.zip");
+                Assert.True(host.FileViewer!.IsZip);
+                Assert.Equal("inner.zip", host.FileViewer.RelativePath);
+                Assert.Equal("", host.FileViewer.ZipFolder);
+                Assert.NotEqual(outerEpoch, epochs[^1]);
+                cacheDirs.Add(host.FileViewer.ZipWorkRoot!);
+                Assert.Equal("Back to outer.zip", Assert.Single(host.FileViewer.Actions).Label);
+
+                await host.FileViewer.Actions[0].Invoke();
+                Assert.Equal("outer.zip", host.FileViewer!.RelativePath);
+                Assert.Equal("sub", host.FileViewer.ZipFolder);
+
+                await host.OpenZipEntryAsync("sub/note.txt");
+                Assert.Equal("note", host.FileViewer!.Content);
+                cacheDirs.Add(Path.GetDirectoryName(host.FileViewer.AbsolutePath!)!);
+                await host.FileViewer.Actions[0].Invoke();
+                Assert.True(host.FileViewer!.IsZip);
+                Assert.Equal("sub", host.FileViewer.ZipFolder);
+
+                await host.OpenFileViewerAsync("pack.zip", workRoot);
+                Assert.Equal("", host.FileViewer!.ZipFolder);
+
+                // Executables never reach the launcher: a binary .exe is refused (error for the banner, listing stays);
+                // a text script opens read-only with no "Open in default editor".
+                using (var zipStream = File.Create(Path.Combine(workRoot, "tools.zip")))
+                using (var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    await using (var s = archive.CreateEntry("bin/evil.exe").Open())
+                        await s.WriteAsync(new byte[] { (byte)'M', (byte)'Z', 0, 0 });
+                    await using (var s = archive.CreateEntry("run.sh").Open())
+                        await s.WriteAsync("#!/bin/sh\necho hi\n"u8.ToArray());
+                }
+
+                await host.OpenFileViewerAsync("tools.zip", workRoot);
+                var toolsViewer = host.FileViewer;
+                var refused = await host.OpenZipEntryAsync("bin/evil.exe");
+                Assert.True(refused.IsError);
+                Assert.StartsWith("Refusing to open 'evil.exe'", refused.Error);
+                Assert.Same(toolsViewer, host.FileViewer);
+
+                var script = await host.OpenZipEntryAsync("run.sh");
+                Assert.True(script.IsSuccess);
+                Assert.Equal("#!/bin/sh\necho hi\n", host.FileViewer!.Content);
+                Assert.False(host.FileViewer.CanOpenInDefaultEditor);
+                Assert.Equal("Back to tools.zip", Assert.Single(host.FileViewer.Actions).Label);
+                cacheDirs.Add(Path.GetDirectoryName(host.FileViewer.AbsolutePath!)!);
+
+                // Magic bytes beat the extension; video entries open in the player; other binaries go to the OS
+                // default handler (never the reveal path, which is for workspace executables only).
+                var opened = new List<string>();
+                var revealed = new List<string>();
+                host.OpenWithOsDefault = p => { opened.Add(p); return Task.FromResult(VoidResult<string>.Success); };
+                host.RevealInFileManager = p => { revealed.Add(p); return Task.FromResult(VoidResult<string>.Success); };
+                using (var zipStream = File.Create(Path.Combine(workRoot, "media.zip")))
+                using (var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    await using (var s = archive.CreateEntry("renamed.dat").Open())
+                        await s.WriteAsync(new byte[] { (byte)'M', (byte)'Z', 0x90, 0 });
+                    await using (var s = archive.CreateEntry("clip.mp4").Open())
+                        await s.WriteAsync(new byte[] { 0, 0, 0, 0x18, (byte)'f', (byte)'t', (byte)'y', (byte)'p' });
+                    await using (var s = archive.CreateEntry("art.psd").Open())
+                        await s.WriteAsync(new byte[] { (byte)'8', (byte)'B', (byte)'P', (byte)'S', 0, 1, 0, 0 });
+                }
+
+                await host.OpenFileViewerAsync("media.zip", workRoot);
+                var mediaViewer = host.FileViewer;
+                var renamed = await host.OpenZipEntryAsync("renamed.dat");
+                Assert.True(renamed.IsError);
+                Assert.StartsWith("Refusing to open 'renamed.dat'", renamed.Error);
+                Assert.Same(mediaViewer, host.FileViewer);
+
+                var clip = await host.OpenZipEntryAsync("clip.mp4");
+                Assert.True(clip.IsSuccess);
+                Assert.True(host.FileViewer!.IsVideo);
+                Assert.False(host.FileViewer.IsAudio);
+                Assert.Equal("Back to media.zip", Assert.Single(host.FileViewer.Actions).Label);
+                cacheDirs.Add(Path.GetDirectoryName(host.FileViewer.AbsolutePath!)!);
+
+                await host.OpenFileViewerAsync("media.zip", workRoot);
+                var psd = await host.OpenZipEntryAsync("art.psd");
+                Assert.True(psd.IsSuccess);
+                Assert.EndsWith("art.psd", Assert.Single(opened));
+                Assert.Empty(revealed);
+                Assert.True(host.FileViewer!.IsZip);
+
+                // A late extraction must not resurrect a closed viewer or replace the file opened since.
+                await host.OpenFileViewerAsync("tools.zip", workRoot);
+                var late = host.OpenZipEntryAsync("run.sh");
+                host.CloseFileViewer();
+                await host.OpenFileViewerAsync("notes.txt", workRoot);
+                Assert.True((await late).IsSuccess);
+                Assert.Equal("notes.txt", host.FileViewer!.RelativePath);
+            }
+            finally
+            {
+                foreach (var cacheDir in cacheDirs)
+                    try { Directory.Delete(cacheDir, recursive: true); } catch { /* best-effort */ }
+            }
+
             GitInit(workRoot);
             await File.WriteAllTextAsync(Path.Combine(workRoot, "untracked.txt"), "one\ntwo\n");
             await host.OpenFileViewerAsync("untracked.txt", workRoot);

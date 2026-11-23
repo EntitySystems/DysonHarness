@@ -890,6 +890,40 @@ public class DysonUiHostRuntimeDelegationTests
         Assert.Equal(new[] { 101, 102 }, harness.WaitingFactory.ReportOrder.ToArray());
     }
 
+    [Fact]
+    public async Task Host_follow_up_starts_a_child_reflection_on_its_own_run()
+    {
+        await using var harness = await HostHarness.CreateAsync(waiting: true);
+        await using var host = harness.CreateHost();
+
+        var started = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+        var session = host.Session ?? throw new InvalidOperationException("Expected focused session.");
+
+        var spawned = await session.CreateChildAsync(DysonAgentModes.Explore, "hold");
+        Assert.True(spawned.IsSuccess, spawned.IsError ? spawned.Error : null);
+        Assert.True(session.TryGetSubagent(spawned.Value.SubagentId, out var child));
+        await harness.WaitingFactory!.ChildEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        CancelBackgroundRunForTests(child);
+        await WaitUntilAsync(() => harness.WaitingFactory.CancelObserved == 1, TimeSpan.FromSeconds(5));
+
+        // TaskEndReflect cannot enter the host FIFO; it must not be dropped either.
+        child.EnqueuePendingTurn(new DysonAgentTurn { Kind = DysonAgentTurnKind.TaskEndReflect, Instruction = "reflect" });
+        var followUp = typeof(DysonUiHost).GetMethod(
+            "EnqueueHostFollowUpWork",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(followUp);
+        followUp.Invoke(host, [child]);
+
+        var waiting = (WaitingSession)child;
+        await WaitUntilAsync(() => waiting.LastPrompted?.Kind == DysonAgentTurnKind.TaskEndReflect, TimeSpan.FromSeconds(5));
+        Assert.Equal(DysonAgentTurnKind.TaskEndReflect, waiting.LastPrompted?.Kind);
+        Assert.True(child.HasActiveBackgroundRun);
+        Assert.False(child.HasPendingTurn);
+        Assert.Equal(0, harness.Runtime.GetQueuedPromptCount(child.PersistenceId));
+    }
+
     private static Task<VoidResult<string>> InvokeExecutePromptOnSessionAsync(
         DysonUiHost host,
         DysonAgentSession session,
@@ -1318,6 +1352,8 @@ public class DysonUiHostRuntimeDelegationTests
 
         public void SetPersistenceIdForTest(Guid persistenceId) => SetPersistenceId(persistenceId);
 
+        public volatile DysonAgentTurn? LastPrompted;
+
         public void AttachRunForTest(CancellationTokenSource runCts) => AttachBackgroundRun(runCts);
 
         public void DetachRunForTest(CancellationTokenSource runCts) => DetachBackgroundRun(runCts);
@@ -1396,6 +1432,7 @@ public class DysonUiHostRuntimeDelegationTests
             DysonAgentTurn turn,
             CancellationToken cancellationToken = default)
         {
+            LastPrompted = turn;
             if (Parent is not null)
             {
                 _factory.ChildEntered.TrySetResult();

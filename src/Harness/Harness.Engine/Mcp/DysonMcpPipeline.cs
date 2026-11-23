@@ -1524,7 +1524,9 @@ public sealed class DysonMcpPipeline
             Name = "StopSubagent",
             Description =
                 "Cancel a running subagent (cooperative stop via its run CancellationToken). " +
-                "Marks the child Stopped and notifies the parent.",
+                "Marks the child Stopped and notifies the parent. " +
+                "recursive defaults to true when omitted: descendants are stopped first (deepest first), then the named agent. " +
+                "Pass false to stop only the named agent.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1537,6 +1539,10 @@ public sealed class DysonMcpPipeline
                     "reason": {
                       "type": "string",
                       "description": "Optional reason for the stop request."
+                    },
+                    "recursive": {
+                      "type": "boolean",
+                      "description": "Also stop descendants (deepest first). Omitted means true. Pass false to stop only the named agent."
                     }
                   },
                   "required": ["subagentId"]
@@ -1578,11 +1584,13 @@ public sealed class DysonMcpPipeline
         {
             Name = "SubmitSubagentReport",
             Description =
-                "Subagents must call this when finished (or blocked). " +
-                "Summary may be a success handoff or, when status is failed, a concrete failure reason. " +
+                "Subagents must call this when finished, failed, or blocked. " +
+                "Summary is a success handoff, a concrete failure reason (failed), or the blocker plus the exact decision or event needed to unblock (blocked). " +
+                "Use status blocked only when something outside you blocks the implementation: an external event, a missing credential or decision, an unavailable tool, or a dependency on other work. Never use it to skip work you can do yourself. " +
                 "Notifies the parent with the summary so the host can queue a parent turn. " +
                 "All session todos must be Complete before a successful (completed) report; " +
-                "failed reports may leave todos incomplete. " +
+                "failed and blocked reports may leave todos incomplete. " +
+                "A blocked worktree drone does not merge; the parent resumes it with a message. " +
                 "Before submitting: call ListTodos first to see if this session has any pending work; " +
                 "if ListTodos shows pending or ongoing items, complete those via UpdateTodo first, then submit. " +
                 "A successful submit ends this turn — do not call any more tools after it succeeds. " +
@@ -1598,12 +1606,12 @@ public sealed class DysonMcpPipeline
                   "properties": {
                     "summary": {
                       "type": "string",
-                      "description": "Crisp handoff for the parent (findings, outcome) or a concrete failure reason when status is failed."
+                      "description": "Crisp handoff for the parent (findings, outcome); a concrete failure reason when failed; when blocked, the blocker and the exact decision or event that unblocks it."
                     },
                     "status": {
                       "type": "string",
-                      "enum": ["completed", "failed"],
-                      "description": "Report outcome (default: completed)."
+                      "enum": ["completed", "failed", "blocked"],
+                      "description": "Report outcome (default: completed). blocked: something outside you blocks the work; todos may stay open."
                     }
                   },
                   "required": ["summary"]
@@ -1708,7 +1716,8 @@ public sealed class DysonMcpPipeline
             Name = "WaitForSeconds",
             Description =
                 "Block until the given number of seconds elapses (1–300). " +
-                "Use for short deliberate delays; prompt cancel aborts the wait.",
+                "Use for short deliberate delays; prompt cancel aborts the wait. " +
+                "In a Meta Agent Drone, a subagent parent event ends the wait early with status interrupted and the event to answer.",
             InputSchemaJson = """
                 {
                   "type": "object",

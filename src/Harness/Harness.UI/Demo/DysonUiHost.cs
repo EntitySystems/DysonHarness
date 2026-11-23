@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DysonHarness;
 using Harness.UI.Components.Meta;
 using Harness.UI.Theme;
@@ -556,6 +557,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 EnsureRegistered(session);
             if (session.Config.Focus is null)
                 session.Config.Focus = runtime.Focus;
+            session.Config.Pipelines ??= ResolvePipelinesAsync;
 
             var sessionId = session.PersistenceId;
             if (sessionId == Guid.Empty)
@@ -864,6 +866,18 @@ public sealed class DysonUiHost : IAsyncDisposable
             DysonRuntimeChangeKind.Recovery => DysonHostChangeKind.All,
             _ => DysonHostChangeKind.All,
         };
+
+    /// <summary>ListPipelineRuns hook (<see cref="DysonAgentSessionConfig.Pipelines"/>): the work directory's service, created on demand. Starts no polling.</summary>
+    private async Task<Result<DysonVersionControlService, string>> ResolvePipelinesAsync(
+        Guid workDirectoryId, CancellationToken cancellationToken)
+    {
+        if (_vcs is null)
+            return Result<DysonVersionControlService, string>.AsError("Pipelines are not available in this host");
+        var wd = await _workDirectories.GetAsync(workDirectoryId, cancellationToken).ConfigureAwait(false);
+        return wd.IsError
+            ? Result<DysonVersionControlService, string>.AsError(wd.Error)
+            : _vcs.GetOrCreate(wd.Value);
+    }
 
     private bool TryGetAttachedRuntime(out DysonSessionRuntime runtime)
     {
@@ -2082,11 +2096,46 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// When <paramref name="workRoot"/> is set (e.g. FILES rail), uses that root;
     /// otherwise resolves from the focused session work directory.
     /// </summary>
-    public async Task OpenFileViewerAsync(
+    public Task OpenFileViewerAsync(
         string relativePath,
         string? workRoot,
         IReadOnlyList<DysonFileViewerAction>? actions,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        OpenFileViewerCoreAsync(relativePath, workRoot, actions, zipFolder: "", launchable: true, cancellationToken);
+
+    /// <summary>Hands a file to the OS default handler. Test seam; only binary non-executables reach it.</summary>
+    internal Func<string, Task<VoidResult<string>>> OpenWithOsDefault { get; set; } = DysonOsLauncher.OpenFileAsync;
+
+    /// <summary>Selects a file in the OS file manager without launching it. Test seam; used for executables.</summary>
+    internal Func<string, Task<VoidResult<string>>> RevealInFileManager { get; set; } = DysonOsLauncher.RevealFileAsync;
+
+    /// <summary>
+    /// "Open in default editor" / "Open in default app" from the viewer. Re-classifies the file at click time
+    /// (media/pdf/image/zip routes skip the sniff gate, and the file may have changed since it opened), so an
+    /// executable is only ever revealed, never launched.
+    /// </summary>
+    public async Task<VoidResult<string>> OpenViewerFileExternallyAsync(CancellationToken cancellationToken = default)
+    {
+        if (_fileViewer is not { CanOpenInDefaultEditor: true, AbsolutePath: { } path })
+            return VoidResult<string>.Success;
+
+        var route = await DysonFileRouting.ClassifyFileAsync(path, cancellationToken).ConfigureAwait(true);
+        if (route.IsError)
+            return VoidResult<string>.AsError(route.Error);
+        return route.Value is DysonFileOpenRoute.Viewer or DysonFileOpenRoute.OsDefault
+            ? await OpenWithOsDefault(path).ConfigureAwait(true)
+            : await RevealInFileManager(path).ConfigureAwait(true);
+    }
+
+    /// <param name="zipFolder">Folder a zip listing opens at ("" = archive root); ignored for non-zip paths.</param>
+    /// <param name="launchable">False hides "Open in default editor" (zip entries that are executables/scripts).</param>
+    private async Task OpenFileViewerCoreAsync(
+        string relativePath,
+        string? workRoot,
+        IReadOnlyList<DysonFileViewerAction>? actions,
+        string zipFolder,
+        bool launchable,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
 
@@ -2151,15 +2200,40 @@ public sealed class DysonUiHost : IAsyncDisposable
         var isMd = IsMarkdownPath(path);
         var isPdf = DysonFileViewerState.IsPdfPath(path);
         var isImage = DysonComposerUploads.LooksLikeImage(contentType: null, path);
-        var audioContentType = DysonAudioFiles.ContentTypeFor(path);
+        var mediaContentType = DysonAudioFiles.ContentTypeFor(path) ?? DysonVideoFiles.ContentTypeFor(path);
+        var isVideo = DysonVideoFiles.IsVideoPath(path);
 
         var resolved = fs.ResolvePath(path);
         if (resolved.IsSuccess)
             absolutePath = resolved.Value;
 
-        if (audioContentType is not null)
+        if (DysonZipArchives.IsZipPath(path) && resolved.IsSuccess)
         {
-            // Stream from disk (range requests for seeking); ResolvePath already rejected paths outside the work root.
+            var zip = await DysonZipArchives.ReadEntriesAsync(resolved.Value, cancellationToken).ConfigureAwait(true);
+            // New epoch: the overlay drops its folder state and starts at ZipFolder (root for any newly opened archive).
+            var zipEpoch = Interlocked.Increment(ref _fileViewerEpoch);
+            SetFileViewer(new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = title,
+                Content = "",
+                IsMarkdown = false,
+                IsZip = true,
+                ZipWorkRoot = resolvedRoot,
+                ZipFolder = zipFolder,
+                ZipEntries = zip.IsSuccess ? zip.Value : [],
+                Error = zip.IsError ? zip.Error : null,
+                AbsolutePath = absolutePath,
+                CanOpenInDefaultEditor = launchable && absolutePath is not null,
+                MarkdownBlocks = [],
+                Actions = actionList,
+            }, zipEpoch);
+            return;
+        }
+
+        if (mediaContentType is not null)
+        {
+            // Audio or video: stream from disk (range requests for seeking); ResolvePath already rejected paths outside the work root.
             var exists = resolved.IsError
                 ? Result<bool, string>.AsError(resolved.Error)
                 : await fs.FileExistsAsync(path, cancellationToken).ConfigureAwait(true);
@@ -2171,7 +2245,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                     Title = title,
                     Content = "",
                     IsMarkdown = false,
-                    IsAudio = true,
+                    IsAudio = !isVideo,
+                    IsVideo = isVideo,
                     AbsolutePath = absolutePath,
                     CanOpenInDefaultEditor = false,
                     MarkdownBlocks = [],
@@ -2181,18 +2256,19 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return;
             }
 
-            var previewId = _filePreviews.PutFile(resolved.Value, audioContentType);
+            var previewId = _filePreviews.PutFile(resolved.Value, mediaContentType);
             SetFileViewer(new DysonFileViewerState
             {
                 RelativePath = path,
                 Title = title,
                 Content = "",
                 IsMarkdown = false,
-                IsAudio = true,
+                IsAudio = !isVideo,
+                IsVideo = isVideo,
                 AudioPreviewId = previewId,
                 AudioPreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
                 AbsolutePath = absolutePath,
-                CanOpenInDefaultEditor = true,
+                CanOpenInDefaultEditor = launchable,
                 MarkdownBlocks = [],
                 Actions = actionList,
             });
@@ -2250,7 +2326,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 PdfPreviewId = previewId,
                 PdfPreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
                 AbsolutePath = absolutePath,
-                CanOpenInDefaultEditor = absolutePath is not null,
+                CanOpenInDefaultEditor = launchable && absolutePath is not null,
                 MarkdownBlocks = [],
                 Actions = actionList,
             });
@@ -2290,11 +2366,62 @@ public sealed class DysonUiHost : IAsyncDisposable
                 ImagePreviewId = previewId,
                 ImagePreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
                 AbsolutePath = absolutePath,
-                CanOpenInDefaultEditor = absolutePath is not null,
+                CanOpenInDefaultEditor = launchable && absolutePath is not null,
                 MarkdownBlocks = [],
                 Actions = actionList,
             });
             return;
+        }
+
+        // Sniff gate (off the circuit inside ClassifyFileAsync): binary files never reach the text reader.
+        // A failed ResolvePath falls through as Viewer so the text read reports the error as before.
+        var route = DysonFileOpenRoute.Viewer;
+        if (resolved.IsSuccess)
+        {
+            var classified = await DysonFileRouting.ClassifyFileAsync(resolved.Value, cancellationToken).ConfigureAwait(true);
+            if (classified.IsError)
+            {
+                SetFileViewer(new DysonFileViewerState
+                {
+                    RelativePath = path,
+                    Title = title,
+                    Content = "",
+                    IsMarkdown = isMd,
+                    AbsolutePath = absolutePath,
+                    CanOpenInDefaultEditor = false,
+                    MarkdownBlocks = [],
+                    Error = classified.Error,
+                    Actions = actionList,
+                });
+                return;
+            }
+
+            route = classified.Value;
+            if (route is DysonFileOpenRoute.OsDefault or DysonFileOpenRoute.Reveal)
+            {
+                // Executables are only ever revealed, never launched; other binaries go to the OS handler.
+                var handed = route is DysonFileOpenRoute.OsDefault
+                    ? await OpenWithOsDefault(resolved.Value).ConfigureAwait(true)
+                    : await RevealInFileManager(resolved.Value).ConfigureAwait(true);
+                if (handed.IsSuccess)
+                    return; // The OS app / file manager is the feedback; no modal.
+
+                SetFileViewer(new DysonFileViewerState
+                {
+                    RelativePath = path,
+                    Title = title,
+                    Content = "",
+                    IsMarkdown = false,
+                    AbsolutePath = absolutePath,
+                    CanOpenInDefaultEditor = false,
+                    MarkdownBlocks = [],
+                    Error = route is DysonFileOpenRoute.Reveal
+                        ? $"'{title}' is an executable; Dyson does not open or run it. {handed.Error}"
+                        : handed.Error,
+                    Actions = actionList,
+                });
+                return;
+            }
         }
 
         var fm = new DysonFileManager(fs);
@@ -2336,7 +2463,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             Content = read.Value,
             IsMarkdown = isMd,
             AbsolutePath = absolutePath,
-            CanOpenInDefaultEditor = absolutePath is not null,
+            // Scripts / html / svg / exec-bit text (ViewerReadOnly) never offer the OS launcher.
+            CanOpenInDefaultEditor = launchable && absolutePath is not null && route is DysonFileOpenRoute.Viewer,
             MarkdownBlocks = markdownBlocks,
             Actions = actionList,
             GitDiffAnnotations = annotations,
@@ -2642,6 +2770,51 @@ public sealed class DysonUiHost : IAsyncDisposable
             ImagePreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
             AbsolutePath = null,
         });
+    }
+
+    /// <summary>
+    /// Opens one entry of the zip currently shown in the file viewer: extracts it (cached) and routes it to the
+    /// viewer (with a Back action) or the OS default handler. Errors (including refused executables) are returned
+    /// for the listing's error banner; the listing stays open. A viewer closed or replaced mid-extract is left alone.
+    /// </summary>
+    public async Task<VoidResult<string>> OpenZipEntryAsync(string entryFullName, CancellationToken cancellationToken = default)
+    {
+        if (_fileViewer is not { IsZip: true, AbsolutePath: { } zipPath, ZipWorkRoot: { } zipRoot } zipViewer)
+            return VoidResult<string>.Success;
+
+        var epoch = Volatile.Read(ref _fileViewerEpoch);
+        var zipRel = zipViewer.RelativePath;
+        var zipActions = zipViewer.Actions;
+        var backFolder = DysonZipArchives.ParentFolder(entryFullName);
+        var extracted = await DysonZipArchives
+            .ExtractEntryAsync(zipPath, entryFullName, ct: cancellationToken)
+            .ConfigureAwait(true);
+        if (_disposed || epoch != Volatile.Read(ref _fileViewerEpoch) || !ReferenceEquals(_fileViewer, zipViewer))
+            return VoidResult<string>.Success;
+        if (extracted.IsError)
+            return VoidResult<string>.AsError(extracted.Error);
+
+        var x = extracted.Value;
+        if (x.OpenInViewer)
+        {
+            await OpenFileViewerCoreAsync(
+                x.RelativePath,
+                x.Root,
+                [
+                    new DysonFileViewerAction
+                    {
+                        Label = $"Back to {zipViewer.Title}",
+                        Invoke = () => OpenFileViewerCoreAsync(zipRel, zipRoot, zipActions, backFolder, launchable: true, CancellationToken.None),
+                    },
+                ],
+                zipFolder: "",
+                launchable: x.CanLaunch,
+                cancellationToken).ConfigureAwait(true);
+            return VoidResult<string>.Success;
+        }
+
+        // The engine refuses launch-blocked entries; only launchable binaries reach the OS handler.
+        return await OpenWithOsDefault(x.AbsolutePath).ConfigureAwait(true);
     }
 
     private void SetFileViewer(DysonFileViewerState state, int? expectedEpoch = null)
@@ -3605,7 +3778,21 @@ public sealed class DysonUiHost : IAsyncDisposable
         if ((uint)index >= (uint)actions.Count)
             return Result<string, string>.AsError("Conversation action index is out of range.");
 
-        var funcKey = actions[index].FuncKey;
+        return await InvokeMetaConversationFuncAsync(actions[index].FuncKey, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Dispatches one func key (meta-chat button or A2UI ActionButton). Built-in keys open here; any other
+    /// key uses the session delegate map. Does not append or remove turns and does not set <see cref="LastError"/>.
+    /// </summary>
+    public async Task<Result<string, string>> InvokeMetaConversationFuncAsync(
+        string funcKey,
+        CancellationToken cancellationToken = default)
+    {
+        var session = _session;
+        if (session is null)
+            return Result<string, string>.AsError("No active session.");
+
         var resolved = await DysonBuiltInConversationActions
             .TryResolveAsync(funcKey, SessionWorkDirectoryPath(session), cancellationToken)
             .ConfigureAwait(true);
@@ -3656,6 +3843,33 @@ public sealed class DysonUiHost : IAsyncDisposable
             default:
                 return Result<string, string>.AsError($"Conversation action '{funcKey}' is reserved.");
         }
+    }
+
+    /// <summary>
+    /// Submits an A2UI Button action: the Engine validates it against the surface and the bound question,
+    /// then the answer takes the usual question-answer path.
+    /// </summary>
+    public async Task<VoidResult<string>> SubmitMetaA2uiActionAsync(
+        Guid turnId,
+        string surfaceId,
+        string sourceComponentId,
+        JsonObject localModel,
+        CancellationToken cancellationToken = default)
+    {
+        var session = _session;
+        if (session is null)
+            return VoidResult<string>.AsError("No active session.");
+
+        var prepared = DysonA2uiReturnHandler.Prepare(session, turnId, surfaceId, sourceComponentId, localModel);
+        if (prepared.IsError)
+            return VoidResult<string>.AsError(prepared.Error);
+
+        session.AppendLog($"A2UI action {prepared.Value.Action.ToWireJson()}");
+        return await SubmitMetaUserQuestionAnswerAsync(
+            prepared.Value.QuestionId,
+            prepared.Value.Selected,
+            prepared.Value.CustomText,
+            cancellationToken).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -3946,7 +4160,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var effectivePath = SessionWorkDirectoryPath(_session) ?? registeredPath;
         var openRulesBlock = await DysonOpenRules
-            .BuildSystemPromptBlockAsync(effectivePath, cancellationToken)
+            .BuildSystemPromptBlockAsync(
+                effectivePath, DysonOpenRulesProviders.Dyson, agentMode, cancellationToken)
             .ConfigureAwait(false);
         var worktreeBlock = DysonAgentSystemPrompts.BuildWorktreePromptBlock(
             _session.WorktreeEnabled,
@@ -4864,7 +5079,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (parent is not null && child.Id > 0 && !child.IsTerminal)
         {
-            var stopped = await parent.StopSubagentAsync(child.Id, "Stopped by user.")
+            var stopped = await parent.StopSubagentAsync(child.Id, "Stopped by user.", recursive: false)
                 .ConfigureAwait(false);
             if (!stopped.IsError)
                 await PersistStoppedSessionAsync(child).ConfigureAwait(false);
@@ -4914,7 +5129,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (focused is { Parent: not null, Id: > 0 } child)
         {
-            var stopped = await child.Parent.StopSubagentAsync(child.Id, "Stopped by user.")
+            var stopped = await child.Parent.StopSubagentAsync(child.Id, "Stopped by user.", recursive: false)
                 .ConfigureAwait(false);
             if (!stopped.IsError)
                 await PersistStoppedSessionAsync(child).ConfigureAwait(false);
@@ -4996,7 +5211,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (child.Id <= 0)
                 continue;
 
-            var stopped = await parent.StopSubagentAsync(child.Id, reason: "Stopped by user.")
+            var stopped = await parent.StopSubagentAsync(child.Id, reason: "Stopped by user.", recursive: false)
                 .ConfigureAwait(false);
             if (!stopped.IsError)
                 await PersistStoppedSessionAsync(child).ConfigureAwait(false);
@@ -5711,6 +5926,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,
         };
+        config.Pipelines = ResolvePipelinesAsync;
         if (TryGetAttachedRuntime(out var runtimeFocus))
         {
             config.Focus = runtimeFocus.Focus;
@@ -6067,7 +6283,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _models, providerKind, cancellationToken)
             .ConfigureAwait(false);
         var openRulesBlock = await DysonOpenRules
-            .BuildSystemPromptBlockAsync(effectivePath, cancellationToken)
+            .BuildSystemPromptBlockAsync(
+                effectivePath, DysonOpenRulesProviders.Dyson, session.Mode, cancellationToken)
             .ConfigureAwait(false);
         var worktreeBlock = DysonAgentSystemPrompts.BuildWorktreePromptBlock(
             session.WorktreeEnabled,
@@ -7471,6 +7688,10 @@ public sealed class DysonUiHost : IAsyncDisposable
 
                 if (interrupt.Kind == DysonAgentInterruptKind.SubagentEvent)
                 {
+                    // Answered in-turn (e.g. after a WaitForSeconds wake) or cancelled: no stale prompt.
+                    if (DysonSubagentHostLogic.IsParentEventClosed(parent, interrupt))
+                        continue;
+
                     var prompt = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
                         interrupt, title, parent.Mode);
                     var turn = DysonSubagentHostLogic.CreateTurn(prompt);
@@ -8048,11 +8269,22 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (sessionId == Guid.Empty || IsUserStopped(sessionId))
             return;
 
+        DysonAgentTurn? childReflection = null;
         while (session.TryDequeuePendingTurn(out var pending))
         {
-            if (!pending.AllowEnqueue)
-                continue;
-            EnqueuePrompt(sessionId, pending);
+            if (pending.AllowEnqueue)
+                EnqueuePrompt(sessionId, pending);
+            else if (session.Parent is not null && pending.Kind == DysonAgentTurnKind.TaskEndReflect)
+                childReflection = pending;
+        }
+
+        // The child-report watch's task-end reflection cannot enter the host FIFO (AllowEnqueue false).
+        // It runs on the child's own background run, as on the KickOff path; host prompts defer behind it.
+        if (childReflection is not null && !session.IsTerminal)
+        {
+            session.EnqueuePendingTurn(childReflection);
+            if (!session.HasActiveBackgroundRun)
+                DysonAgentSession.StartNextPendingTurn(session);
         }
 
         var last = session.Turns.Count > 0 ? session.Turns[^1] : null;

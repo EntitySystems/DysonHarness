@@ -1,0 +1,41 @@
+/* Question card frame (moved from .meta-chat__question). Also frames forwarded question surfaces. */
+.a2ui-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(var(--accent-softer), var(--accent-softer)), var(--surface-raised);
+  box-shadow: inset 3px 0 0 var(--accent), var(--shadow-2);
+  color: var(--text);
+}
+
+/* A root Card inside the frame: the frame is the box. */
+.a2ui-question ::deep .a2ui-surface > .a2ui-card {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* Answered: subdued, with a check glyph before the title. */
+.a2ui-question--answered {
+  opacity: 0.85;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+}
+
+.a2ui-question--answered ::deep .a2ui-text--title::before {
+  content: "✓";
+  margin-right: var(--sp-2);
+  color: color-mix(in srgb, var(--success) 78%, var(--text));
+}
+
+.a2ui-question--answered ::deep .a2ui-choice {
+  cursor: default;
+}
+
+.a2ui-question-error {
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--danger) 78%, var(--text));
+}

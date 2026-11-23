@@ -83,6 +83,25 @@ public sealed class DysonGitHubVersionControlProvider : IVersionControlProvider
         DysonPipelineTarget target, long runId, string? etag, CancellationToken ct) =>
         FetchAsync(target, etag, JobsPath(target, runId), body => ParseJobs(body, runId), ct);
 
+    public async Task<Result<DysonPipelineRun, DysonPipelineError>> GetRunAsync(
+        DysonPipelineTarget target, long runId, CancellationToken ct) =>
+        Single(await FetchAsync(target, null, RunPath(target, runId), ParseRunBody, ct).ConfigureAwait(false));
+
+    public async Task<Result<DysonPipelineJob, DysonPipelineError>> GetJobAsync(
+        DysonPipelineTarget target, long jobId, CancellationToken ct) =>
+        Single(await FetchAsync(target, null, JobPath(target, jobId), ParseJobBody, ct).ConfigureAwait(false));
+
+    private static Result<T, DysonPipelineError> Single<T>(Result<DysonPipelineFetch<T>, DysonPipelineError> fetched)
+    {
+        if (fetched.IsError)
+            return Result<T, DysonPipelineError>.AsError(fetched.Error);
+        var items = fetched.Value.Items;
+        return items.Count > 0
+            ? Result<T, DysonPipelineError>.AsValue(items[0])
+            : Result<T, DysonPipelineError>.AsError(
+                new DysonPipelineError(DysonPipelineErrorKind.Failed, "Unexpected gh output; update GitHub CLI."));
+    }
+
     private async Task<Result<DysonPipelineFetch<T>, DysonPipelineError>> FetchAsync<T>(
         DysonPipelineTarget target, string? etag, string path, Func<string, IReadOnlyList<T>> parse,
         CancellationToken ct)
@@ -271,56 +290,76 @@ public sealed class DysonGitHubVersionControlProvider : IVersionControlProvider
         }
     }
 
-    private static IReadOnlyList<DysonPipelineRun> ParseRuns(string body)
+    internal static IReadOnlyList<DysonPipelineRun> ParseRuns(string body)
     {
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
         if (!doc.RootElement.TryGetProperty("workflow_runs", out var runs) || runs.ValueKind != JsonValueKind.Array)
             return [];
         var list = new List<DysonPipelineRun>(runs.GetArrayLength());
         foreach (var run in runs.EnumerateArray())
-        {
-            var (state, label) = MapState(Text(run, "status"), Text(run, "conclusion"));
-            list.Add(new DysonPipelineRun(
-                Id: Long(run, "id"),
-                WorkflowName: Text(run, "name") ?? "",
-                Title: Text(run, "display_title") ?? "",
-                Branch: Text(run, "head_branch") ?? "",
-                HeadSha: Text(run, "head_sha") ?? "",
-                Event: Text(run, "event") ?? "",
-                RunNumber: Int(run, "run_number"),
-                Attempt: Int(run, "run_attempt"),
-                State: state,
-                StateLabel: label,
-                CreatedAt: Time(run, "created_at") ?? default,
-                StartedAt: Time(run, "run_started_at"),
-                UpdatedAt: Time(run, "updated_at") ?? default,
-                HtmlUrl: Text(run, "html_url") ?? ""));
-        }
+            list.Add(ParseRun(run));
 
         return list;
     }
 
-    private static IReadOnlyList<DysonPipelineJob> ParseJobs(string body, long runId)
+    /// <summary>One run object, as in <c>workflow_runs[]</c> or the body of <c>actions/runs/{id}</c>.</summary>
+    internal static DysonPipelineRun ParseRun(JsonElement run)
+    {
+        var (state, label) = MapState(Text(run, "status"), Text(run, "conclusion"));
+        return new DysonPipelineRun(
+            Id: Long(run, "id"),
+            WorkflowName: Text(run, "name") ?? "",
+            Title: Text(run, "display_title") ?? "",
+            Branch: Text(run, "head_branch") ?? "",
+            HeadSha: Text(run, "head_sha") ?? "",
+            Event: Text(run, "event") ?? "",
+            RunNumber: Int(run, "run_number"),
+            Attempt: Int(run, "run_attempt"),
+            State: state,
+            StateLabel: label,
+            CreatedAt: Time(run, "created_at") ?? default,
+            StartedAt: Time(run, "run_started_at"),
+            UpdatedAt: Time(run, "updated_at") ?? default,
+            HtmlUrl: Text(run, "html_url") ?? "");
+    }
+
+    private static IReadOnlyList<DysonPipelineRun> ParseRunBody(string body)
+    {
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
+        return doc.RootElement.ValueKind == JsonValueKind.Object ? [ParseRun(doc.RootElement)] : [];
+    }
+
+    private static IReadOnlyList<DysonPipelineJob> ParseJobBody(string body)
+    {
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
+        return doc.RootElement.ValueKind == JsonValueKind.Object ? [ParseJob(doc.RootElement, 0)] : [];
+    }
+
+    internal static IReadOnlyList<DysonPipelineJob> ParseJobs(string body, long runId)
     {
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
         if (!doc.RootElement.TryGetProperty("jobs", out var jobs) || jobs.ValueKind != JsonValueKind.Array)
             return [];
         var list = new List<DysonPipelineJob>(jobs.GetArrayLength());
         foreach (var job in jobs.EnumerateArray())
-        {
-            var (state, label) = MapState(Text(job, "status"), Text(job, "conclusion"));
-            list.Add(new DysonPipelineJob(
-                Id: Long(job, "id"),
-                RunId: job.TryGetProperty("run_id", out _) ? Long(job, "run_id") : runId,
-                Name: Text(job, "name") ?? "",
-                State: state,
-                StateLabel: label,
-                StartedAt: Time(job, "started_at"),
-                CompletedAt: Time(job, "completed_at"),
-                HtmlUrl: Text(job, "html_url") ?? ""));
-        }
+            list.Add(ParseJob(job, runId));
 
         return list;
+    }
+
+    /// <summary>One job object, as in <c>jobs[]</c> or the body of <c>actions/jobs/{id}</c>; <paramref name="fallbackRunId"/> when it has no <c>run_id</c>.</summary>
+    internal static DysonPipelineJob ParseJob(JsonElement job, long fallbackRunId)
+    {
+        var (state, label) = MapState(Text(job, "status"), Text(job, "conclusion"));
+        return new DysonPipelineJob(
+            Id: Long(job, "id"),
+            RunId: job.TryGetProperty("run_id", out _) ? Long(job, "run_id") : fallbackRunId,
+            Name: Text(job, "name") ?? "",
+            State: state,
+            StateLabel: label,
+            StartedAt: Time(job, "started_at"),
+            CompletedAt: Time(job, "completed_at"),
+            HtmlUrl: Text(job, "html_url") ?? "");
     }
 
     private static string? Text(JsonElement element, string name) =>
@@ -429,6 +468,12 @@ public sealed class DysonGitHubVersionControlProvider : IVersionControlProvider
 
     private static string RunsPath(DysonPipelineTarget target) =>
         $"repos/{target.Owner}/{target.Name}/actions/runs?per_page=20&exclude_pull_requests=true";
+
+    private static string RunPath(DysonPipelineTarget target, long runId) =>
+        $"repos/{target.Owner}/{target.Name}/actions/runs/{runId}";
+
+    private static string JobPath(DysonPipelineTarget target, long jobId) =>
+        $"repos/{target.Owner}/{target.Name}/actions/jobs/{jobId}";
 
     private static string JobsPath(DysonPipelineTarget target, long runId) =>
         $"repos/{target.Owner}/{target.Name}/actions/runs/{runId}/jobs?per_page=100&filter=latest";

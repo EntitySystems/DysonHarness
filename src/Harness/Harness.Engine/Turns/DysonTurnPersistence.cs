@@ -31,6 +31,7 @@ public static class DysonTurnPersistence
             VisualizationId = turn.VisualizationId,
             UserQuestionJson = DysonUserQuestionSerializer.Serialize(turn.UserQuestion),
             SecureDataRequestJson = DysonSecureDataRequestSerializer.Serialize(turn.SecureDataRequest),
+            A2uiSurfaceJson = DysonA2uiSurfaceSerializer.Serialize(turn.A2uiSurface),
             ToolStateJson = DysonTurnToolStateSerializer.CaptureFromTurn(turn),
             ToolHistoryOptimized = turn.ToolHistoryOptimized,
             CompactToolHistory = turn.CompactToolHistory,

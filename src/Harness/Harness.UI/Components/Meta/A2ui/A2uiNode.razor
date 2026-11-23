@@ -1,0 +1,443 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Text.Json.Nodes
+@using DysonHarness
+
+@* One kit component. Render only: every resolve, write, expansion and check is DysonA2uiBinding.
+   Text is Blazor-escaped (never MarkupString); no agent string reaches href/src/style/class/event attributes. *@
+@if (Depth <= DysonA2uiProtocol.MaxTreeDepth && View.Component(Id) is { } c)
+{
+    RenderFragment node = @<text>
+    @{
+        var aria = A2uiProps.Aria(View, c, Scope, _domId, out _description);
+    }
+    @switch (Str(c["component"]))
+    {
+        case "Text":
+            var text = DysonA2uiBinding.ResolveString(c["text"], View.Model, Scope);
+            if (Inline)
+            {
+                <span class="a2ui-text @TextClass(c)" @attributes="aria">@text</span>
+            }
+            else
+            {
+                <p class="a2ui-text @TextClass(c)" @attributes="aria">@text</p>
+            }
+            break;
+        case "Row":
+        case "Column":
+        case "List":
+            <div class="@LayoutClass(c)" @attributes="aria">
+                @foreach (var (childId, childScope) in A2uiProps.Children(View, c, Scope))
+                {
+                    if (A2uiProps.Weight(View, childId) is { } weight)
+                    {
+                        <div class="a2ui-weighted" style="flex: @weight 1 0">
+                            <A2uiNode View="View" Id="@childId" Scope="@childScope" Depth="Depth + 1" />
+                        </div>
+                    }
+                    else
+                    {
+                        <A2uiNode View="View" Id="@childId" Scope="@childScope" Depth="Depth + 1" />
+                    }
+                }
+            </div>
+            break;
+        case "Card":
+            <div class="a2ui-card" @attributes="aria">
+                @if (c["children"] is not null)
+                {
+                    foreach (var (childId, childScope) in A2uiProps.Children(View, c, Scope))
+                    {
+                        <A2uiNode View="View" Id="@childId" Scope="@childScope" Depth="Depth + 1" />
+                    }
+                }
+                else
+                {
+                    <A2uiNode View="View" Id="@Str(c["child"])" Scope="@Scope" Depth="Depth + 1" />
+                }
+            </div>
+            break;
+        case "Divider":
+            <hr class="a2ui-divider @(Str(c["axis"]) == "vertical" ? "a2ui-divider--vertical" : null)" @attributes="aria" />
+            break;
+        case DysonA2uiLocalVideo.ComponentName:
+            <A2uiLocalVideo View="View" Component="c" Scope="@Scope" Aria="aria" />
+            break;
+        case DysonA2uiModel3D.ComponentName:
+            <A2uiModel3D View="View" Id="@Id" Component="c" Scope="@Scope" Aria="aria" />
+            break;
+        case DysonA2uiSubagentTasks.ComponentName:
+            <A2uiSubagentTasks View="View" Component="c" Aria="aria" />
+            break;
+        case DysonA2uiTreeDiagram.ComponentName:
+            <A2uiTreeDiagram View="View" Component="c" Scope="@Scope" Aria="aria" />
+            break;
+        case "Button":
+            var failed = ButtonProblems(c);
+            <div class="a2ui-button-wrap">
+                <button type="button"
+                        class="btn a2ui-btn @ButtonClass(c)"
+                        disabled="@(failed.Count > 0 || View.Locked || View.Busy)"
+                        @attributes="aria"
+                        @onclick="() => View.ClickAsync(Id ?? string.Empty)">
+                    <A2uiNode View="View" Id="@Str(c["child"])" Scope="@Scope" Depth="Depth + 1" Inline="true" />
+                </button>
+                @if (View.Dirty && failed.Count > 0)
+                {
+                    <div class="a2ui-check-message">@failed[0]</div>
+                }
+            </div>
+            break;
+        case "TextField":
+            var fieldValue = DysonA2uiBinding.ResolveString(c[ValueKey], View.Model, Scope);
+            var placeholder = c.ContainsKey("placeholder") ? DysonA2uiBinding.ResolveString(c["placeholder"], View.Model, Scope) : null;
+            var fieldVariant = Str(c["variant"]);
+            var fieldChecks = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+            <div class="field a2ui-field" @attributes="aria">
+                <label for="@_domId">@DysonA2uiBinding.ResolveString(c["label"], View.Model, Scope)</label>
+                @if (fieldVariant == "longText")
+                {
+                    <textarea id="@_domId"
+                              class="a2ui-textarea"
+                              rows="2"
+                              placeholder="@placeholder"
+                              disabled="@(View.Locked || View.Busy)"
+                              value="@fieldValue"
+                              @oninput="e => View.Write(c[ValueKey], Scope, JsonValue.Create(e.Value?.ToString() ?? string.Empty))"></textarea>
+                }
+                else
+                {
+                    <input id="@_domId"
+                           type="@InputType(fieldVariant)"
+                           placeholder="@placeholder"
+                           disabled="@(View.Locked || View.Busy)"
+                           value="@fieldValue"
+                           @oninput="e => View.Write(c[ValueKey], Scope, JsonValue.Create(e.Value?.ToString() ?? string.Empty))" />
+                }
+                @if (View.Dirty && fieldChecks.Count > 0)
+                {
+                    <div class="a2ui-check-message">@fieldChecks[0]</div>
+                }
+            </div>
+            break;
+        case "CheckBox":
+            var boxChecks = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+            <div class="a2ui-checkbox-wrap" @attributes="aria">
+                <label class="a2ui-choice">
+                    <input type="checkbox"
+                           checked="@(DysonA2uiBinding.ResolveBool(c[ValueKey], View.Model, Scope))"
+                           disabled="@(View.Locked || View.Busy)"
+                           @onchange="e => View.Write(c[ValueKey], Scope, JsonValue.Create(e.Value is true))" />
+                    <span>@DysonA2uiBinding.ResolveString(c["label"], View.Model, Scope)</span>
+                </label>
+                @if (View.Dirty && boxChecks.Count > 0)
+                {
+                    <div class="a2ui-check-message">@boxChecks[0]</div>
+                }
+            </div>
+            break;
+        case "ChoicePicker":
+            var multi = Str(c["variant"]) == "multipleSelection";
+            var chips = Str(c["displayStyle"]) == "chips";
+            var selected = DysonA2uiBinding.ResolveStringList(c[ValueKey], View.Model, Scope);
+            var pickerChecks = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+            <fieldset class="a2ui-picker @(chips ? "a2ui-picker--chips" : null)" @attributes="aria">
+                @if (c.ContainsKey("label"))
+                {
+                    <legend class="a2ui-picker__label">@DysonA2uiBinding.ResolveString(c["label"], View.Model, Scope)</legend>
+                }
+                @foreach (var option in Options(c))
+                {
+                    var value = option.Value;
+                    <label class="@(chips ? "a2ui-chip" : "a2ui-choice")">
+                        <input type="@(multi ? "checkbox" : "radio")"
+                               name="@_domId"
+                               checked="@(selected.Contains(value, StringComparer.Ordinal))"
+                               disabled="@(View.Locked || View.Busy)"
+                               @onchange="e => Pick(c, value, multi, e)" />
+                        <span>@option.Label</span>
+                    </label>
+                }
+                @if (View.Dirty && pickerChecks.Count > 0)
+                {
+                    <div class="a2ui-check-message">@pickerChecks[0]</div>
+                }
+            </fieldset>
+            break;
+        case "QuestionSlot":
+            var slotQuestion = Guid.TryParseExact(Str(c["questionId"]), "D", out var slotId)
+                ? View.EmbeddedQuestions.GetValueOrDefault(slotId)
+                : null;
+            if (slotQuestion is not null)
+            {
+                var slotSurfaceId = DysonA2uiQuestionCard.SurfaceIdFor(slotQuestion.Id);
+                <A2uiQuestionCard Question="slotQuestion"
+                                  OnAction="View.OnAction"
+                                  Busy="@(View.State?.IsBusy(slotSurfaceId) ?? false)"
+                                  Error="@View.State?.ErrorFor(slotSurfaceId)" />
+            }
+            else
+            {
+                <p class="a2ui-text a2ui-text--caption">Question withdrawn.</p>
+            }
+            break;
+        case "ActionButton":
+            var func = Str(c["func"]) ?? "";
+            <button type="button"
+                    class="btn a2ui-action"
+                    disabled="@View.OpenBusy"
+                    @attributes="aria"
+                    @onclick="() => View.OpenAsync(func)">@Str(c["label"])</button>
+            break;
+        case "Box":
+        case "Grid":
+        case "GridItem":
+        case "Flow":
+        case "FlowItem":
+        case "Carousel":
+        case "CarouselItem":
+        case "Spacer":
+        case "Tabs":
+        case "Section":
+        case "Accordion":
+            _description = null; // group components build their own aria
+            <A2uiLayout View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "Title":
+        case "Heading":
+        case "Caption":
+        case "Label":
+        case "Bold":
+        case "Italic":
+        case "Underline":
+        case "Strikethrough":
+        case "Badge":
+        case "Blockquote":
+        case "Quote":
+        case "Code":
+        case "CodeBlock":
+        case "Kbd":
+        case "Markdown":
+        case "Math":
+        case "ShimmerText":
+        case "Link":
+        case "Tooltip":
+        case "PulseIndicator":
+        case "FlashcardFlip":
+        case "Popover":
+        case "PopoverTrigger":
+        case "PopoverContent":
+        case "Modal":
+            _description = null;
+            <A2uiTextNode View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "Pressable":
+        case "Form":
+        case "TextArea":
+        case "Select":
+        case "RadioGroup":
+        case "Radio":
+        case "SegmentedControl":
+        case "Slider":
+        case "DateTimeInput":
+            _description = null;
+            <A2uiInputNode View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "ListItem":
+        case "Table":
+        case "TableSection":
+        case "TableRow":
+        case "TableCell":
+        case "DataTable":
+        case "ComparisonTable":
+        case "Stat":
+        case "StatGroup":
+        case "KeyValueList":
+        case "Timeline":
+        case "Progress":
+        case "RadialProgress":
+        case "Rating":
+        case "TagList":
+        case "Avatar":
+        case "AvatarGroup":
+        case "Agenda":
+            _description = null;
+            <A2uiDataNode View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "Chart":
+        case "BarChart":
+        case "LineChart":
+        case "AreaChart":
+        case "PieChart":
+        case "Sparkline":
+        case "Gauge":
+            _description = null;
+            <A2uiChart View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "Image":
+        case "Icon":
+        case "Favicon":
+        case "Video":
+        case "AudioPlayer":
+        case "ImageGallery":
+        case "ImageGrid":
+        case "CarouselMediaItem":
+        case "VideoEmbed":
+        case "Map":
+        case "LinkCard":
+        case "Citation":
+        case "EntityCard":
+            _description = null;
+            <A2uiMediaNode View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+        case "PipelineRun":
+            _description = null;
+            <A2uiPipelineRun View="View" Id="@Id" Component="c" Scope="@Scope" Depth="Depth" />
+            break;
+    }
+    @if (_description is not null)
+    {
+        <span id="@($"{_domId}-desc")" class="a2ui-sr-only">@_description</span>
+    }
+    </text>;
+    @* Live surface only: display:contents wrapper (no layout box) whose child animates; Inline (Button text) never wraps. *@
+    var enter = Inline ? null : View.EnterStyle(Id);
+    if (enter is null)
+    {
+        @node
+    }
+    else
+    {
+        <div class="a2ui-enter" style="@enter">@node</div>
+    }
+}
+
+@code {
+    private const string ValueKey = "value";
+    private readonly string _domId = "a2ui-" + Guid.NewGuid().ToString("N");
+    private string? _description;
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public string? Id { get; set; }
+
+    /// <summary>Absolute pointer of the current template item; "" at the surface root.</summary>
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public int Depth { get; set; } = 1;
+
+    /// <summary>Inside a Button: Text renders as a span.</summary>
+    [Parameter] public bool Inline { get; set; }
+
+    private static string? Str(JsonNode? node) => A2uiProps.Str(node);
+
+    private List<(string Label, string Value)> Options(JsonObject c)
+    {
+        var list = new List<(string, string)>();
+        if (c["options"] is not JsonArray options)
+            return list;
+        foreach (var option in options)
+        {
+            if (option is JsonObject o)
+                list.Add((DysonA2uiBinding.ResolveString(o["label"], View.Model, Scope), DysonA2uiBinding.ResolveString(o["value"], View.Model, Scope)));
+        }
+
+        return list;
+    }
+
+    private void Pick(JsonObject c, string value, bool multi, ChangeEventArgs e)
+    {
+        var current = DysonA2uiBinding.ResolveStringList(c["value"], View.Model, Scope);
+        var next = new JsonArray();
+        if (multi)
+        {
+            foreach (var item in current)
+            {
+                if (!string.Equals(item, value, StringComparison.Ordinal))
+                    next.Add(item);
+            }
+
+            if (e.Value is true)
+                next.Add(value);
+        }
+        else
+        {
+            next.Add(value);
+        }
+
+        View.Write(c[ValueKey], Scope, next);
+    }
+
+    /// <summary>Failing checks, then (question-bound Button) the answer validation message.</summary>
+    private IReadOnlyList<string> ButtonProblems(JsonObject c)
+    {
+        var failed = DysonA2uiBinding.FailedChecks(c, View.Model, Scope);
+        if (failed.Count > 0)
+            return failed;
+        if (View.Question is { } question && View.Surface.QuestionId == question.Id && Id is not null)
+        {
+            var can = DysonA2uiQuestionBridge.CanSubmit(question, View.Surface, Id, View.Model);
+            if (can.IsError)
+                return [can.Error];
+        }
+
+        return [];
+    }
+
+    private static string? TextClass(JsonObject c) => Str(c["variant"]) switch
+    {
+        "h1" => "a2ui-text--h1",
+        "h2" => "a2ui-text--h2",
+        "h3" => "a2ui-text--h3",
+        "h4" => "a2ui-text--h4",
+        "h5" => "a2ui-text--title",
+        "caption" => "a2ui-text--caption",
+        _ => null,
+    };
+
+    private static string ButtonClass(JsonObject c) => Str(c["variant"]) switch
+    {
+        "primary" => "btn-primary",
+        "borderless" => "btn-ghost",
+        _ => "a2ui-btn--default",
+    };
+
+    private static string InputType(string? variant) => variant switch
+    {
+        "number" => "number",
+        "obscured" => "password",
+        _ => "text",
+    };
+
+    private static string LayoutClass(JsonObject c)
+    {
+        var name = Str(c["component"]);
+        var layout = name switch
+        {
+            "Row" => "a2ui-row",
+            "List" when Str(c["direction"]) == "horizontal" => "a2ui-row a2ui-list",
+            "List" => "a2ui-column a2ui-list",
+            _ => "a2ui-column",
+        };
+        var justify = Str(c["justify"]) switch
+        {
+            "start" => " a2ui-justify--start",
+            "center" => " a2ui-justify--center",
+            "end" => " a2ui-justify--end",
+            "spaceAround" => " a2ui-justify--around",
+            "spaceBetween" => " a2ui-justify--between",
+            "spaceEvenly" => " a2ui-justify--evenly",
+            "stretch" => " a2ui-justify--stretch",
+            _ => "",
+        };
+        var align = Str(c["align"]) switch
+        {
+            "start" => " a2ui-align--start",
+            "center" => " a2ui-align--center",
+            "end" => " a2ui-align--end",
+            "stretch" => " a2ui-align--stretch",
+            _ => "",
+        };
+        var gap = A2uiProps.GapClass(c);
+        var pad = A2uiProps.PadClass(c);
+        return layout + justify + align + (gap.Length > 0 ? " " + gap : "") + (pad.Length > 0 ? " " + pad : "");
+    }
+}

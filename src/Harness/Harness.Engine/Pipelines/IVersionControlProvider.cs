@@ -10,6 +10,12 @@ public interface IVersionControlProvider
         DysonPipelineTarget target, string? etag, CancellationToken ct);
     Task<Result<DysonPipelineFetch<DysonPipelineJob>, DysonPipelineError>> ListJobsAsync(
         DysonPipelineTarget target, long runId, string? etag, CancellationToken ct);
+    /// <summary>One run by id, outside the recent-20 list. No ETag. A missing run is a RepoNotFound error.</summary>
+    Task<Result<DysonPipelineRun, DysonPipelineError>> GetRunAsync(
+        DysonPipelineTarget target, long runId, CancellationToken ct);
+    /// <summary>One job by id; <see cref="DysonPipelineJob.RunId"/> names its run. No ETag.</summary>
+    Task<Result<DysonPipelineJob, DysonPipelineError>> GetJobAsync(
+        DysonPipelineTarget target, long jobId, CancellationToken ct);
 }
 
 /// <summary>Lets each work-directory instance create its own provider instances.</summary>

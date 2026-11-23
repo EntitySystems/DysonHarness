@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using DysonHarness;
 using Harness.UI.Demo;
@@ -310,6 +310,235 @@ public class DysonFileViewerContentTests
         finally
         {
             try { Directory.Delete(workRoot, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    private static async Task<string> NewWorkRootAsync(params (string Name, byte[] Bytes)[] files)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"dyson-fv-route-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        foreach (var (name, bytes) in files)
+            await File.WriteAllBytesAsync(Path.Combine(root, name), bytes);
+        return root;
+    }
+
+    private static void DeleteQuietly(string root)
+    {
+        try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
+    }
+
+    /// <summary>Swaps the host launcher seams for recorders so no process is ever spawned.</summary>
+    private static (List<string> Opened, List<string> Revealed) RecordLaunchers(
+        DysonUiHost host,
+        VoidResult<string>? openResult = null,
+        VoidResult<string>? revealResult = null)
+    {
+        var opened = new List<string>();
+        var revealed = new List<string>();
+        host.OpenWithOsDefault = path =>
+        {
+            opened.Add(path);
+            return Task.FromResult(openResult ?? VoidResult<string>.Success);
+        };
+        host.RevealInFileManager = path =>
+        {
+            revealed.Add(path);
+            return Task.FromResult(revealResult ?? VoidResult<string>.Success);
+        };
+        return (opened, revealed);
+    }
+
+    [Fact]
+    public async Task Unsupported_binary_opens_with_os_default_and_is_never_read_as_text()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var workRoot = await NewWorkRootAsync(("art.psd", [(byte)'8', (byte)'B', (byte)'P', (byte)'S', 0, 1, 0, 0]));
+        try
+        {
+            var (opened, revealed) = RecordLaunchers(ctx.Host);
+
+            await ctx.Host.OpenFileViewerAsync("art.psd", workRoot);
+
+            Assert.Equal(Path.GetFullPath(Path.Combine(workRoot, "art.psd")), Assert.Single(opened));
+            Assert.Empty(revealed);
+            Assert.Null(ctx.Host.FileViewer);
+
+            // A failing launcher surfaces the error in the viewer and never shows the bytes as text.
+            RecordLaunchers(ctx.Host, openResult: VoidResult<string>.AsError("no handler"));
+            await ctx.Host.OpenFileViewerAsync("art.psd", workRoot);
+            Assert.NotNull(ctx.Host.FileViewer);
+            Assert.Equal("no handler", ctx.Host.FileViewer.Error);
+            Assert.Equal("", ctx.Host.FileViewer.Content);
+        }
+        finally
+        {
+            DeleteQuietly(workRoot);
+        }
+    }
+
+    [Fact]
+    public async Task Executables_are_revealed_never_launched()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var workRoot = await NewWorkRootAsync(
+            ("tool.exe", [(byte)'M', (byte)'Z', 0, 0, 3, 0]),
+            ("payload", [0x7F, (byte)'E', (byte)'L', (byte)'F', 2, 1, 1, 0]),
+            ("x.dat", [(byte)'M', (byte)'Z', 0x90, 0]));
+        try
+        {
+            var (opened, revealed) = RecordLaunchers(ctx.Host);
+
+            foreach (var name in new[] { "tool.exe", "payload", "x.dat" })
+            {
+                var before = revealed.Count;
+                await ctx.Host.OpenFileViewerAsync(name, workRoot);
+                Assert.Equal(before + 1, revealed.Count);
+                Assert.Equal(Path.GetFullPath(Path.Combine(workRoot, name)), revealed[^1]);
+                Assert.Null(ctx.Host.FileViewer);
+            }
+
+            Assert.Empty(opened);
+
+            // Reveal failure: explained in the viewer; the launcher is still never called.
+            RecordLaunchers(ctx.Host, revealResult: VoidResult<string>.AsError("no file manager"));
+            await ctx.Host.OpenFileViewerAsync("tool.exe", workRoot);
+            Assert.NotNull(ctx.Host.FileViewer);
+            Assert.Contains("does not open or run it", ctx.Host.FileViewer.Error, StringComparison.Ordinal);
+            Assert.Contains("no file manager", ctx.Host.FileViewer.Error, StringComparison.Ordinal);
+            Assert.Equal("", ctx.Host.FileViewer.Content);
+        }
+        finally
+        {
+            DeleteQuietly(workRoot);
+        }
+    }
+
+    [Fact]
+    public async Task Open_externally_reclassifies_so_a_renamed_executable_is_revealed_not_launched()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var workRoot = await NewWorkRootAsync(
+            ("clip.mp4", [(byte)'M', (byte)'Z', 0x90, 0]),
+            ("pic.png", [0x7F, (byte)'E', (byte)'L', (byte)'F', 2, 1, 1, 0]),
+            ("movie.mp4", [0, 0, 0, 0x18, (byte)'f', (byte)'t', (byte)'y', (byte)'p']));
+        try
+        {
+            var (opened, revealed) = RecordLaunchers(ctx.Host);
+
+            // Media/image branches run before the sniff gate and offer the external button; the click must not launch.
+            foreach (var name in new[] { "clip.mp4", "pic.png" })
+            {
+                await ctx.Host.OpenFileViewerAsync(name, workRoot);
+                Assert.True(ctx.Host.FileViewer!.CanOpenInDefaultEditor);
+                Assert.True((await ctx.Host.OpenViewerFileExternallyAsync()).IsSuccess);
+                Assert.Equal(Path.GetFullPath(Path.Combine(workRoot, name)), revealed[^1]);
+            }
+
+            Assert.Empty(opened);
+
+            await ctx.Host.OpenFileViewerAsync("movie.mp4", workRoot);
+            Assert.True((await ctx.Host.OpenViewerFileExternallyAsync()).IsSuccess);
+            Assert.Equal(Path.GetFullPath(Path.Combine(workRoot, "movie.mp4")), Assert.Single(opened));
+            Assert.Equal(2, revealed.Count);
+        }
+        finally
+        {
+            DeleteQuietly(workRoot);
+        }
+    }
+
+    [Fact]
+    public async Task Text_scripts_open_read_only()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var workRoot = await NewWorkRootAsync(
+            ("run.sh", "#!/bin/sh\necho hi\n"u8.ToArray()),
+            ("page.html", "<p>hi</p>"u8.ToArray()),
+            ("notes.txt", "hello"u8.ToArray()));
+        try
+        {
+            var (opened, revealed) = RecordLaunchers(ctx.Host);
+
+            await ctx.Host.OpenFileViewerAsync("run.sh", workRoot);
+            Assert.Equal("#!/bin/sh\necho hi\n", ctx.Host.FileViewer!.Content);
+            Assert.False(ctx.Host.FileViewer.CanOpenInDefaultEditor);
+
+            await ctx.Host.OpenFileViewerAsync("page.html", workRoot);
+            Assert.Equal("<p>hi</p>", ctx.Host.FileViewer!.Content);
+            Assert.False(ctx.Host.FileViewer.CanOpenInDefaultEditor);
+
+            await ctx.Host.OpenFileViewerAsync("notes.txt", workRoot);
+            Assert.Equal("hello", ctx.Host.FileViewer!.Content);
+            Assert.True(ctx.Host.FileViewer.CanOpenInDefaultEditor);
+
+            Assert.Empty(opened);
+            Assert.Empty(revealed);
+        }
+        finally
+        {
+            DeleteQuietly(workRoot);
+        }
+    }
+
+    [Fact]
+    public void Video_extensions_map_to_video_mime_types()
+    {
+        Assert.Equal("video/mp4", DysonVideoFiles.ContentTypeFor("a.mp4"));
+        Assert.Equal("video/mp4", DysonVideoFiles.ContentTypeFor("dir/a.M4V"));
+        Assert.Equal("video/webm", DysonVideoFiles.ContentTypeFor("a.webm"));
+        Assert.Equal("video/quicktime", DysonVideoFiles.ContentTypeFor("a.mov"));
+        Assert.Equal("video/x-matroska", DysonVideoFiles.ContentTypeFor("a.MKV"));
+
+        Assert.Null(DysonVideoFiles.ContentTypeFor("a.ogv"));
+        Assert.Null(DysonVideoFiles.ContentTypeFor("a.mp3"));
+        Assert.Null(DysonVideoFiles.ContentTypeFor(""));
+        Assert.Null(DysonVideoFiles.ContentTypeFor(null));
+
+        Assert.True(DysonVideoFiles.IsVideoPath("clip.Mp4"));
+        Assert.False(DysonVideoFiles.IsVideoPath("song.mp3"));
+        Assert.False(DysonAudioFiles.IsAudioPath("a.mkv"));
+    }
+
+    [Fact]
+    public async Task Video_file_streams_from_disk_and_close_revokes()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var workRoot = await NewWorkRootAsync(
+            ("clip.MP4", [0, 0, 0, 0x18, (byte)'f', (byte)'t', (byte)'y', (byte)'p']),
+            ("movie.mkv", [0x1A, 0x45, 0xDF, 0xA3, 0, 0, 0, 0]));
+        try
+        {
+            var (opened, revealed) = RecordLaunchers(ctx.Host);
+
+            foreach (var (name, mime) in new[] { ("clip.MP4", "video/mp4"), ("movie.mkv", "video/x-matroska") })
+            {
+                await ctx.Host.OpenFileViewerAsync(name, workRoot);
+
+                var viewer = ctx.Host.FileViewer;
+                Assert.NotNull(viewer);
+                Assert.True(viewer.IsVideo);
+                Assert.False(viewer.IsAudio);
+                Assert.Null(viewer.Error);
+                Assert.Equal("", viewer.Content);
+                var previewId = viewer.AudioPreviewId;
+                Assert.False(string.IsNullOrEmpty(previewId));
+                Assert.Equal(DysonFilePreviewStore.UrlFor(previewId!), viewer.AudioPreviewUrl);
+                Assert.True(ctx.Previews.TryGet(previewId!, out var entry));
+                Assert.Equal(mime, entry.ContentType);
+                Assert.Equal(Path.GetFullPath(Path.Combine(workRoot, name)), entry.FilePath);
+                Assert.Empty(entry.Bytes);
+
+                ctx.Host.CloseFileViewer();
+                Assert.Null(ctx.Host.FileViewer);
+                Assert.False(ctx.Previews.TryGet(previewId!, out _));
+            }
+
+            Assert.Empty(opened);
+            Assert.Empty(revealed);
+        }
+        finally
+        {
+            DeleteQuietly(workRoot);
         }
     }
 

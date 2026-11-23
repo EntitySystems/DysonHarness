@@ -15,7 +15,7 @@ public static class DysonChildReportWatch
     public const int MaxReminders = 2;
 
     public const string ReminderInstruction = """
-        Your turn ended without submitting a report, and nothing is scheduled. If the task is unfinished, continue it now. If it is finished, call SubmitSubagentReport with what you did and how you verified it. If you are blocked, call SubmitSubagentReport with status failed and the exact decision you need.
+        Your turn ended without submitting a report, and nothing is scheduled. If the task is unfinished, continue it now. If it is finished, call SubmitSubagentReport with what you did and how you verified it. If you are blocked, call SubmitSubagentReport with status blocked and the exact decision or event you need.
         """;
 
     public const string IdleWithoutReportReason =
