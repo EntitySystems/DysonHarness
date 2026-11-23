@@ -12,6 +12,7 @@ description: >-
 
 - Use `RenderA2ui` often: whenever a component would clarify or structure what you show (status of several drones, a plan summary with links, a comparison, a checklist, a form).
 - Use plain `PostConversationMessage` for a single sentence or small talk.
+- Users prefer to see, not read. When a file or URL exists, embed it (`Image` path, `AudioPlayer`, `LocalVideo`, `Model3D`). Draw data as a `Chart`, `TreeDiagram` or `SubagentTasks` instead of describing it in text.
 - Use `PostUserQuestion` for a question. The host already draws its card as A2UI.
 - With a surface, put the actions in the surface as `ActionButton`s (section 6c), not in PostConversationMessage `actions`.
 
@@ -38,7 +39,7 @@ Required props in **bold**. Full props per component: [reference.md](reference.m
 | Inputs | `Button` (**child**, **action**), `TextField`, `TextArea`, `CheckBox`, `ChoicePicker`, `Select`/`RadioGroup`/`SegmentedControl` (**options**, **value**), `Radio` (**label**, **value**, **option**), `Slider` (**value**; min/max/step), `DateTimeInput` (**value**), `Pressable` (**child**, **action**), `Form` (**children**); `checks` = `@checks` |
 | Data | `ListItem` (**label**), `Table` (columns + rows, or TableSection/TableRow/TableCell children), `DataTable` (**columns** [{key, label, format?}], **rows**), `ComparisonTable` (**options**, **rows** [{feature, values}]), `Stat` (**label**, **value**; delta, trend, tone), `StatGroup` (**items**), `KeyValueList`/`Timeline` (**items**), `Progress`/`RadialProgress`/`Rating`/`Gauge` (**value**), `TagList` (**tags**), `Avatar` (**name**), `AvatarGroup` (**people**), `Agenda` (**days**), `Map` (**markers** [{label, lat, lng}]) |
 | Charts | `Chart` (**data**; chartType, xKey, series), `BarChart`, `LineChart`, `AreaChart`, `PieChart`, `Sparkline` (**data**) — section 4b |
-| Media | `Image` (exactly one of **url** / **path**; height 120..800), `Icon` (**name**), `Favicon`, `Video`/`AudioPlayer`/`VideoEmbed` (**url**), `ImageGallery`/`ImageGrid` (images), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
+| Media | `Image` (exactly one of **url** / **path**; height 120..800), `Icon` (**name**), `Favicon`, `Video`/`VideoEmbed` (**url**), `AudioPlayer` (exactly one of **url** / **path**; section 6b2d), `ImageGallery`/`ImageGrid` (images), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
 | Overlay | `Popover` (children = [PopoverTrigger, PopoverContent]), `Modal` (**trigger**, **content**), `FlashcardFlip` (**front**, **back**), `PulseIndicator` |
 | Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `Model3D` (**path**; title, height 160..800), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest), `SubagentTasks` (**agentId** integer = a drone/explore/review's agentId; the host fills the title, the X/N todo pill and the running state, live), `TreeDiagram` (**nodes** nested `{id, title, text?, tags?[{label, color red|green|accent}], children?}`; flow vertical|horizontal; title) |
 
@@ -57,7 +58,7 @@ Rejected: `Svg`, `HtmlView`, Icon `svgPath` (no model markup), `Treemap`, `Sanke
 ## 4c. Links and media
 
 - `Link.href`, `LinkCard.url`, `Citation.url`, `EntityCard.href`/`actions[].href`, `Video`/`AudioPlayer`/`VideoEmbed.url`: literal `http(s)` URL (becomes `open_url:`) or `open_plan:`/`open_scratch:`/`open_file:`. They count toward the 8 actions per surface with ActionButtons (a PipelineRun counts 1).
-- Remote media URLs (`Image.url`, `Avatar.image`, galleries) are validated but never loaded: a placeholder with the alt/caption text, initials for Avatar. Video and audio render as link cards. `Image.path` shows a work-directory png/jpg/gif/webp/bmp ≤ 20 MB with an expand-to-modal button (section 6b2c). Nothing in a surface fetches from the network.
+- Remote media URLs (`Image.url`, `Avatar.image`, galleries) are validated but never loaded: a placeholder with the alt/caption text, initials for Avatar. `Video` and `VideoEmbed` render as link cards; `AudioPlayer` plays (section 6b2d). `Image.path` shows a work-directory png/jpg/gif/webp/bmp ≤ 20 MB with an expand-to-modal button (section 6b2c). Nothing in a surface fetches from the network on its own: an `AudioPlayer` url loads only after the user presses play.
 
 Dashboard example:
 
@@ -135,6 +136,15 @@ An inline three.js viewer for a `.glb` or `.fbx` file in the work directory: dra
 {"id":"shot","component":"Image","path":"docs/img/login.png","alt":"Login screen","caption":"After the fix","height":360}
 ```
 
+## 6b2d. Audio (AudioPlayer)
+
+`AudioPlayer` takes exactly one of `path` (a work-directory file: mp3, m4a, aac, wav, ogg, opus, flac, weba; at most 500 MB) or `url` (http/https; loaded only when the user presses play; a private, loopback or LAN host stays a link card). It is a full-width compact bar (play/pause, seek, time, mute/volume) with an optional `title` and `caption`, and works in Row, Grid, Card, Tabs and Carousel. Only one player plays at a time. Same path rules as LocalVideo: a rooted or `..` path is `VALIDATION_FAILED`; a missing, unsupported or oversized file renders as card text. Both or neither of `url` / `path` is `VALIDATION_FAILED`. A file that cannot be decoded shows an error with "Open in file viewer" (path) or "Open link" (url).
+
+```json
+{"id":"clip","component":"AudioPlayer","path":"media/standup.mp3","title":"Stand-up recording","caption":"Nov 23"}
+{"id":"pod","component":"AudioPlayer","url":"https://example.com/ep1.mp3","title":"Episode 1"}
+```
+
 ## 6b3. Subagent tasks (SubagentTasks)
 
 One live row per agent: title, `#id`, and an `X/N` pill (todos complete / all todos of that agent). Pass the `agentId` from `StartAsyncMetaAgentDrone` / `ListMetaAgentDrones` (your direct children only). `0/0` means no todos yet. A running agent shows the roster spinner and status color. An unknown id or a stopped agent renders as card text, not an error.
@@ -183,4 +193,4 @@ An invalid call returns `{"version":"1.0","error":{"code":"VALIDATION_FAILED","s
 
 ## 8. Security
 
-No HTML, script, styles or fetched URLs: text is plain text, unknown props (`html`, `style`, …) are rejected, cosmetic props (`background`, `radius`, `width`, `color`, …) are accepted and ignored, no `openUrl`. Only `ActionButton` `func` and the link props in section 4c open things.
+No HTML, script, styles or automatically fetched URLs: text is plain text, unknown props (`html`, `style`, …) are rejected, cosmetic props (`background`, `radius`, `width`, `color`, …) are accepted and ignored, no `openUrl`. Only `ActionButton` `func` and the link props in section 4c open things.

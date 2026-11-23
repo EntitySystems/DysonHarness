@@ -1,0 +1,39 @@
+/* AudioPlayer surface node: figure, title, caption and note only. The compact bar itself is Files/AudioPlayer. Tokens from app.css only. */
+.a2ui-audio {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  container-type: inline-size;
+}
+
+.a2ui-audio__title {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-audio__host,
+.a2ui-audio__caption {
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-audio__note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+}
+
+.a2ui-audio__text {
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}

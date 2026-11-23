@@ -495,8 +495,11 @@ public static class DysonA2uiCatalog
         d["Icon"] = Kit(false, ("name", TxtReq), ("label", Txt),
             ("svgPath", Rej("Icon.svgPath is rejected: model-supplied SVG is not allowed. Use a built-in icon name.")));
         d["Favicon"] = Kit(false, ("url", Media), ("domain", Lit));
-        foreach (var name in new[] { "Video", "AudioPlayer" })
-            d[name] = Kit(false, ("url", LinkReq), ("title", Txt), ("caption", Txt));
+        d["Video"] = Kit(false, ("url", LinkReq), ("title", Txt), ("caption", Txt));
+        // AudioPlayer: exactly one of url / path (checked by the validator at the component pointer). url stays a LinkTarget
+        // so persisted {url} rows still validate; path is a Dyson extension prop.
+        d[DysonA2uiAudio.ComponentName] = Kit(false, ("url", Link), ("path", new DysonA2uiPropSpec(DysonA2uiPropKind.Label)),
+            ("title", Txt), ("caption", Txt));
         d["LinkCard"] = Kit(false, ("url", LinkReq), ("title", TxtReq), ("description", Txt), ("image", Media), ("favicon", Media),
             ("siteName", Txt));
         d["Citation"] = Kit(false, ("label", Txt), ("index", Num), ("title", Txt), ("snippet", Txt), ("source", Txt), ("url", Link));

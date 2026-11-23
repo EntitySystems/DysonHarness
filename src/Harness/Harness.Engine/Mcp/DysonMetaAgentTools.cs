@@ -541,13 +541,14 @@ public static class DysonMetaAgentTools
             Name = "RenderA2ui",
             Description =
                 "Render an interactive UI surface inline in the meta chat from A2UI v1.0 JSON. " +
-                "Use it often: whenever a component (cards, lists, forms, choices, buttons) would clarify or structure what you show the user. " +
+                "Use it often: whenever a component would clarify or structure what you show the user. " +
+                "Users prefer to see: embed an existing file or URL (Image, AudioPlayer, LocalVideo, Model3D, Chart) over describing it. " +
                 "Skip it for a single-sentence reply or simple chatting (use PostConversationMessage). " +
-                "When you use a surface, put the actions in the surface as ActionButton components (func open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_url:{url}); " +
+                "With a surface, put the actions in the surface as ActionButton components (open_plan:, open_scratch:, open_file:, open_url:); " +
                 "PostConversationMessage actions are only for a plain message with no surface. " +
                 "JSON only: no markdown, HTML, or code fences. " +
-                "Kit: layout (Row, Column, Grid, Card, Tabs...), text (Text, Heading, Markdown, Link...), inputs (TextField, Select, Slider...), data (Table, DataTable, Stat, Chart...); " +
-                "Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram. No Svg/HtmlView. Image.path = work file (shown); url never loaded. " +
+                "Kit: layout (Row, Grid, Card, Tabs...), text (Text, Heading, Markdown...), inputs (TextField, Select...), data (Table, Stat, Chart...); " +
+                "Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram. No Svg/HtmlView. Image/AudioPlayer path = work file. " +
                 "Reuse a surfaceId to update it. " +
                 "The dyson-a2ui skill has the format and examples.",
             InputSchemaJson = """

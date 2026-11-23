@@ -320,6 +320,8 @@ public static partial class DysonA2uiValidator
                 return Err(path, "PipelineRun needs exactly one of runId or jobIds.");
             if (name == DysonA2uiImage.ComponentName && c.ContainsKey("url") == c.ContainsKey("path"))
                 return Err(path, "Image needs exactly one of url or path.");
+            if (name == DysonA2uiAudio.ComponentName && c.ContainsKey("url") == c.ContainsKey("path"))
+                return Err(path, "AudioPlayer needs exactly one of url or path.");
             if (name == DysonA2uiTreeDiagram.ComponentName && DysonA2uiTreeDiagram.Check(c["nodes"]) is var (suffix, treeMessage))
                 return Err(path + suffix, treeMessage);
 

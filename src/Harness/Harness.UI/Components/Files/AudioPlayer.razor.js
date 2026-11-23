@@ -11,6 +11,9 @@ function formatTime(seconds) {
     return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
+// One player at a time across the page (A2UI surfaces and the file viewer share this module instance).
+let current = null;
+
 function setFill(range, fraction) {
     const pct = Number.isFinite(fraction) ? Math.min(Math.max(fraction, 0), 1) * 100 : 0;
     range.style.setProperty("--fill", `${pct}%`);
@@ -27,7 +30,8 @@ export function init(root) {
     const volume = root.querySelector('[data-role="volume"]');
     const error = root.querySelector('[data-role="error"]');
     const errorText = root.querySelector('[data-role="error-text"]');
-    if (!media || !play || !seek || !loop || !mute || !volume)
+    // loop is absent in the Compact layout.
+    if (!media || !play || !seek || !mute || !volume)
         return { dispose() { } };
 
     const isVideo = media.tagName === "VIDEO";
@@ -48,7 +52,8 @@ export function init(root) {
         root.toggleAttribute("data-playing", playing);
         if (playing && error)
             error.hidden = true;
-        const label = playing ? "Pause" : "Play";
+        // A deferred remote player keeps its "Play (loads from host)" hint until the first press sets src.
+        const label = playing ? "Pause" : (media.getAttribute("src") ? "Play" : play.dataset.playLabel || "Play");
         play.setAttribute("aria-label", label);
         play.title = label;
     };
@@ -69,6 +74,8 @@ export function init(root) {
     };
 
     const renderLoop = () => {
+        if (!loop)
+            return;
         loop.setAttribute("aria-pressed", String(media.loop));
         loop.title = media.loop ? "Loop: on" : "Loop: off";
     };
@@ -87,6 +94,9 @@ export function init(root) {
 
     const togglePlay = () => {
         if (media.paused || media.ended) {
+            // The only remote fetch: a deferred (url) player gets its src on the user's first press.
+            if (!media.getAttribute("src") && media.dataset.src)
+                media.src = media.dataset.src;
             const started = media.play();
             if (started && typeof started.catch === "function")
                 started.catch((e) => showError(`Could not play: ${e && e.message ? e.message : e}`));
@@ -99,10 +109,12 @@ export function init(root) {
     if (isVideo)
         on(media, "click", togglePlay);
 
-    on(loop, "click", () => {
-        media.loop = !media.loop;
-        renderLoop();
-    });
+    if (loop) {
+        on(loop, "click", () => {
+            media.loop = !media.loop;
+            renderLoop();
+        });
+    }
 
     on(mute, "click", () => {
         if (media.muted || media.volume === 0) {
@@ -130,6 +142,11 @@ export function init(root) {
         renderTime();
     });
 
+    on(media, "play", () => {
+        if (current && current !== media)
+            current.pause();
+        current = media;
+    });
     for (const type of ["play", "playing", "pause", "ended"])
         on(media, type, renderPlaying);
     for (const type of ["timeupdate", "durationchange", "loadedmetadata", "seeked", "emptied"])
@@ -148,6 +165,8 @@ export function init(root) {
     return {
         dispose() {
             abort.abort();
+            if (current === media)
+                current = null;
             try {
                 media.pause();
                 media.removeAttribute("src");
