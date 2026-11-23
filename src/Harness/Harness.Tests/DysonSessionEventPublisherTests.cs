@@ -95,6 +95,32 @@ public class DysonSessionEventPublisherTests
     }
 
     [Fact]
+    public void TodosChanged_publishes_DysonSessionTodosChangedEvent_on_child_and_parent_scopes()
+    {
+        using var bus = new DysonMessageBus();
+        using var publisher = new DysonSessionEventPublisher(bus);
+        var (parent, child) = AttachParentChild(publisher, bus, out _, out _, out var token);
+        var onParent = new List<DysonSessionTodosChangedEvent>();
+        var onChild = new List<DysonSessionTodosChangedEvent>();
+        Assert.True(bus.Subscribe<DysonSessionTodosChangedEvent>(
+            DysonBusScopes.Session(parent.PersistenceId), onParent.Add).IsSuccess);
+        Assert.True(bus.Subscribe<DysonSessionTodosChangedEvent>(
+            DysonBusScopes.Session(child.PersistenceId), onChild.Add).IsSuccess);
+
+        child.RestoreTodos([]);
+
+        var evt = Assert.Single(onChild);
+        Assert.Equal(evt, Assert.Single(onParent));
+        Assert.Equal(child.PersistenceId, evt.PersistenceId);
+        Assert.Equal(child.Id, evt.RuntimeId);
+
+        token.Dispose();
+        child.RestoreTodos([]);
+        Assert.Single(onChild);
+        Assert.Single(onParent);
+    }
+
+    [Fact]
     public void TryMarkTerminal_publishes_stopped_status()
     {
         using var bus = new DysonMessageBus();

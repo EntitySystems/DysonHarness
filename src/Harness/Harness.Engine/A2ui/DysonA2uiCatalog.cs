@@ -211,7 +211,7 @@ public static class DysonA2uiCatalog
     public const string UnknownComponentGroups =
         "layout (Row, Column, Box, Grid, Tabs, Section, Accordion...), text (Title, Heading, Markdown, Code, Badge, Link...), "
         + "inputs (TextField, Select, Slider, DateTimeInput...), data (Table, DataTable, Stat, Timeline, Progress...), charts (Chart, BarChart...), "
-        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, PipelineRun";
+        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, PipelineRun, SubagentTasks";
 
     private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> StatItem = Props(
         ("label", TxtReq), ("value", AnyReq), ("delta", Txt), ("trend", Enm("up", "down", "flat")),
@@ -330,6 +330,8 @@ public static class DysonA2uiCatalog
             ["PipelineRun"] = Dyson(
                 ("runId", new(DysonA2uiPropKind.PositiveLong)),
                 ("jobIds", new(DysonA2uiPropKind.PositiveLongList, MaxItems: 30))),
+            [DysonA2uiSubagentTasks.ComponentName] = Dyson(
+                ("agentId", new(DysonA2uiPropKind.BoundedInt, Required: true, Min: 1, Max: int.MaxValue))),
         };
 
         AddLayout(d);
