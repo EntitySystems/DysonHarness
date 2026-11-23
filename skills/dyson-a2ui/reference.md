@@ -130,6 +130,7 @@ All charts also take title, subtitle, height 120..480, format number/currency/pe
 | ActionButton | **label**, **func** (open_plan/open_scratch/open_file/open_url) |
 | QuestionSlot | **questionId** |
 | LocalVideo | **path** (work-relative); title |
+| Model3D | **path** (work-relative `.glb` / `.fbx`); title; height 160..800 (default 320) |
 | PipelineRun | exactly one of runId (integer ≥1) or jobIds (1..30 distinct integers); literals only |
 | SubagentTasks | **agentId** (integer ≥1, literal) |
 

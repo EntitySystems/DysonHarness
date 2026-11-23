@@ -211,7 +211,7 @@ public static class DysonA2uiCatalog
     public const string UnknownComponentGroups =
         "layout (Row, Column, Box, Grid, Tabs, Section, Accordion...), text (Title, Heading, Markdown, Code, Badge, Link...), "
         + "inputs (TextField, Select, Slider, DateTimeInput...), data (Table, DataTable, Stat, Timeline, Progress...), charts (Chart, BarChart...), "
-        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, PipelineRun, SubagentTasks";
+        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks";
 
     private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> StatItem = Props(
         ("label", TxtReq), ("value", AnyReq), ("delta", Txt), ("trend", Enm("up", "down", "flat")),
@@ -314,6 +314,10 @@ public static class DysonA2uiCatalog
             [DysonA2uiLocalVideo.ComponentName] = Dyson(
                 ("path", new(DysonA2uiPropKind.Label, Required: true)),
                 ("title", new(DysonA2uiPropKind.DynamicString))),
+            [DysonA2uiModel3D.ComponentName] = Dyson(
+                ("path", new(DysonA2uiPropKind.Label, Required: true)),
+                ("title", new(DysonA2uiPropKind.DynamicString)),
+                ("height", Int(160, 800))),
             ["ChoicePicker"] = Kit(true,
                 ("options", new(DysonA2uiPropKind.Options, Required: true)),
                 ("value", new(DysonA2uiPropKind.DynamicStringList, Required: true)),

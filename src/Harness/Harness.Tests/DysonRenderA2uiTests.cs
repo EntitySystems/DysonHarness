@@ -162,9 +162,23 @@ public class DysonRenderA2uiTests
         Assert.False(missing.IsError, missing.Content);
     }
 
-    private static JsonObject VideoSurface(string surfaceId, string path)
+    [Fact]
+    public async Task Model3D_escaping_path_fails_at_the_path_pointer_but_missing_file_renders()
     {
-        var create = Create(surfaceId, new JsonObject { ["id"] = "root", ["component"] = "LocalVideo", ["path"] = path });
+        var (session, executor) = await MetaExecutorAsync();
+        var bad = await RenderAsync(executor, Args(VideoSurface("m3d", "../x.glb", "Model3D")));
+        Assert.True(bad.IsError);
+        Assert.Contains("\"VALIDATION_FAILED\"", bad.Content, StringComparison.Ordinal);
+        Assert.Contains("/components/0/path", bad.Content, StringComparison.Ordinal);
+        Assert.Empty(Assert.Single(session.Turns).A2uiSurface!.Components);
+
+        var missing = await RenderAsync(executor, Args(VideoSurface("m3d", "gone-" + Guid.NewGuid().ToString("N") + ".glb", "Model3D")));
+        Assert.False(missing.IsError, missing.Content);
+    }
+
+    private static JsonObject VideoSurface(string surfaceId, string path, string component = "LocalVideo")
+    {
+        var create = Create(surfaceId, new JsonObject { ["id"] = "root", ["component"] = component, ["path"] = path });
         create["createSurface"]!["catalogId"] = DysonCatalog;
         return create;
     }
