@@ -27,6 +27,7 @@
     private DysonA2uiSurface? _lastSurface;
     private (bool Locked, bool Busy, string? Error, bool OpenBusy, DysonUserQuestion? Question, int StateVersion) _last;
     private IReadOnlyDictionary<Guid, DysonUserQuestion?>? _lastEmbedded;
+    private readonly A2uiEnter _enter = new();
 
     [Parameter, EditorRequired] public DysonA2uiSurface Surface { get; set; } = default!;
 
@@ -52,6 +53,9 @@
 
     [Parameter] public bool OpenBusy { get; set; }
 
+    /// <summary>Appended while the feed is on screen (the row's <c>--live</c> signal): components appear in sequence. Else static.</summary>
+    [Parameter] public bool Live { get; set; }
+
     [Parameter] public IReadOnlyDictionary<Guid, DysonUserQuestion?> EmbeddedQuestions { get; set; } = MetaChatItems.NoEmbeddedQuestions;
 
     /// <summary>Feed busy/error map for cards embedded by QuestionSlots.</summary>
@@ -61,6 +65,9 @@
 
     /// <summary>True after a local edit since the last agent revision.</summary>
     internal bool Dirty { get; private set; }
+
+    /// <summary>Entrance style for the node wrapper; null when this surface is not live or the node does not animate.</summary>
+    internal string? EnterStyle(string? id) => Live ? _enter.Style(id) : null;
 
     internal JsonObject? Component(string? id) =>
         id is not null && Surface.Components.TryGetValue(id, out var component) ? component : null;
@@ -109,6 +116,8 @@
             _revision = Surface.Revision;
             Dirty = false;
             _render = true;
+            if (Live)
+                _enter.Schedule(Surface, Environment.TickCount64);
         }
 
         var current = (Locked, Busy, Error, OpenBusy, Question, State?.Version ?? 0);

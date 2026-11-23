@@ -1,4 +1,15 @@
 /* Dyson A2UI kit. Tokens from app.css only; enum props map to these fixed classes. */
+
+/* First-appearance entrance of a live surface (A2uiEnter). The wrapper has no box, so layout is unchanged; the
+   node it holds rises and fades like a feed row (keyframe in app.css), after its own delay. `backwards` only holds
+   the start state while waiting. Reduced motion: the blanket rule in app.css sets animation: none. */
+.a2ui-enter {
+  display: contents;
+}
+
+.a2ui-enter ::deep > * {
+  animation: dyson-msg-in 280ms var(--ease) var(--a2ui-enter-delay, 0ms) backwards;
+}
 .a2ui-row,
 .a2ui-column {
   display: flex;

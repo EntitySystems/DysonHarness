@@ -378,7 +378,8 @@ code, .mono {
 
 
 /* Feed message entrance (A1/A2). Applied only to the newest few items so a history load
-   does not cascade; already-shown items keep the same animation name and never replay. */
+   does not cascade; already-shown items keep the same animation name and never replay.
+   Also the A2UI component entrance on a live surface (.a2ui-enter in A2uiNode.razor.css). */
 @keyframes dyson-msg-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
