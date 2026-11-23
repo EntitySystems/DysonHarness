@@ -94,6 +94,40 @@ public class DysonRenderA2uiTests
         Assert.Equal(362, resolved.Value.PlanId);
     }
 
+    [Fact]
+    public async Task RenderA2ui_Dyson_components_without_catalogId_render_with_no_error_strip()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        var result = await RenderAsync(executor, Args(
+            Env("createSurface", new JsonObject { ["surfaceId"] = "plans" }),
+            Env("updateComponents", new JsonObject
+            {
+                ["surfaceId"] = "plans",
+                ["components"] = new JsonArray(
+                    new JsonObject { ["id"] = "root", ["component"] = "Row", ["children"] = new JsonArray("open") },
+                    new JsonObject { ["id"] = "open", ["component"] = "ActionButton", ["label"] = "Plan 362", ["func"] = "open_plan:362" }),
+            })));
+        Assert.False(result.IsError, result.Content);
+
+        var surface = Assert.Single(session.Turns).A2uiSurface!;
+        Assert.Null(surface.LastError);
+        Assert.Equal(1, surface.Revision);
+        Assert.Equal(DysonCatalog, surface.Components["open"]["@catalogId"]!.GetValue<string>());
+
+        // A later updateComponents-only call has no createSurface to read a catalogId from.
+        var later = await RenderAsync(executor, Args(Env("updateComponents", new JsonObject
+        {
+            ["surfaceId"] = "plans",
+            ["components"] = new JsonArray(
+                new JsonObject { ["id"] = "root", ["component"] = "Row", ["children"] = new JsonArray("open", "next") },
+                new JsonObject { ["id"] = "next", ["component"] = "ActionButton", ["label"] = "Plan 363", ["func"] = "open_plan:363" }),
+        })));
+        Assert.False(later.IsError, later.Content);
+        surface = Assert.Single(session.Turns).A2uiSurface!;
+        Assert.Null(surface.LastError);
+        Assert.Equal(2, DysonA2uiSurfaces.ActionButtonFuncs(surface).Count);
+    }
+
     [Theory]
     [InlineData("open_url:javascript:alert(1)", "Only http/https URLs are allowed.")]
     [InlineData("open_file:../x", "Path escapes work directory")]

@@ -19,7 +19,7 @@ public class DysonA2uiLocalVideoTests
         Assert.Equal("/messages/0/createSurface/components/0/path", pointer);
         Assert.Equal("media/clip.mp4", path);
 
-        var basic = DysonA2uiValidator.Parse(DysonA2uiValidatorTests.Create("""{"id":"root","component":"LocalVideo","path":"a.mp4"}"""));
+        var basic = DysonA2uiValidator.Parse(DysonA2uiValidatorTests.Create("""{"id":"root","component":"LocalVideo","path":"a.mp4"}""", DysonA2uiValidatorTests.Basic));
         Assert.True(basic.IsError);
 
         var blank = DysonA2uiValidator.Parse(DysonA2uiValidatorTests.Create($$"""{"id":"root","component":"LocalVideo","@catalogId":"{{Dyson}}","path":" "}"""));

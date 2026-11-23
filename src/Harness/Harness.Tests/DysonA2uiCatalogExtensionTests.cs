@@ -408,7 +408,7 @@ public class DysonA2uiCatalogExtensionTests
         Assert.True(ParseOne("\"component\":\"PipelineRun\",\"runId\":5", CatalogExtra(Dyson)).IsSuccess);
         Assert.True(ParseOne("\"component\":\"PipelineRun\",\"jobIds\":[1,2,3]", CatalogExtra(DysonA2uiProtocol.PlaygroundCatalogId)).IsSuccess);
         AssertFails(ParseOne("\"component\":\"PipelineRun\",\"jobIds\":[" + string.Join(",", Enumerable.Range(1, 31)) + "]", CatalogExtra(Dyson)), P0 + "/jobIds");
-        AssertFails(ParseOne("\"component\":\"PipelineRun\",\"runId\":5"), P0 + "/component");
+        AssertFails(ParseOne("\"component\":\"PipelineRun\",\"runId\":5", CatalogExtra(DysonA2uiProtocol.BasicCatalogId)), P0 + "/component");
     }
 
     [Fact]

@@ -9,6 +9,8 @@ public class DysonA2uiValidatorTests
 {
     internal const string Dyson = DysonA2uiProtocol.DysonCatalogId;
 
+    internal const string Basic = ",\"catalogId\":\"" + DysonA2uiProtocol.BasicCatalogId + "\"";
+
     internal static string Create(string components, string extra = "", string surfaceId = "flight_search") =>
         $$$"""[{"version":"1.0","createSurface":{"surfaceId":"{{{surfaceId}}}"{{{extra}}},"components":[{{{components}}}]}}]""";
 
@@ -146,7 +148,7 @@ public class DysonA2uiValidatorTests
         Assert.True(ok.IsSuccess);
         Assert.True(DysonA2uiValidator.Parse(Create($$"""{"id":"root","component":"QuestionSlot","questionId":"{{qid}}"}""", $$""","catalogId":"{{Dyson}}" """)).IsSuccess);
 
-        Assert.EndsWith("/component", DysonA2uiValidator.Parse(Create($$"""{"id":"root","component":"QuestionSlot","questionId":"{{qid}}"}""")).Error.Path);
+        Assert.EndsWith("/component", DysonA2uiValidator.Parse(Create($$"""{"id":"root","component":"QuestionSlot","questionId":"{{qid}}"}""", Basic)).Error.Path);
         foreach (var bad in new[] { """{"@path":"/q"}""", "\"not-a-guid\"", $"\"{Guid.Empty}\"" })
         {
             var result = DysonA2uiValidator.Parse(Create($$"""{"id":"root","component":"QuestionSlot","@catalogId":"{{Dyson}}","questionId":{{bad}}}"""));
@@ -170,7 +172,7 @@ public class DysonA2uiValidatorTests
         Assert.Equal(DysonA2uiProtocol.ValidationFailed, result.Error.Code);
         Assert.EndsWith("/components/0/func", result.Error.Path);
 
-        var basic = DysonA2uiValidator.Parse(Create("""{"id":"root","component":"ActionButton","label":"Go","func":"open_plan:1"}"""));
+        var basic = DysonA2uiValidator.Parse(Create("""{"id":"root","component":"ActionButton","label":"Go","func":"open_plan:1"}""", Basic));
         Assert.True(basic.IsError);
         Assert.EndsWith("/components/0/component", basic.Error.Path);
 

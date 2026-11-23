@@ -24,7 +24,7 @@ description: >-
 - Stable UAX#31 `surfaceId` (e.g. `deploy_form`; no `dyson_` prefix).
 - `createSurface {surfaceId, catalogId?, components, dataModel?}` once; exactly one `"id":"root"`, every child id must exist.
 - Then `updateComponents {surfaceId, components}` (same id replaces) / `updateDataModel {surfaceId, path?, value}` (RFC 6901, default `/`; `null` deletes). Re-create is `INTEGRITY_ERROR`; `deleteSurface {surfaceId}` drops it.
-- `ActionButton` / `QuestionSlot` / `LocalVideo` / `PipelineRun` need the Dyson catalog: surface `catalogId` or component `"@catalogId"` = `a2ui://dyson/catalogs/v1/catalog.json`. Otherwise omit `catalogId` (basic). In a later `updateComponents`, put `"@catalogId"` on each Dyson component itself (the surface `catalogId` is not carried over). Every other component needs no `@catalogId`.
+- `ActionButton` / `QuestionSlot` / `LocalVideo` / `PipelineRun` are Dyson catalog components. They work with `catalogId` omitted (or set to `a2ui://dyson/catalogs/v1/catalog.json`). Only an explicit basic surface `catalogId` or component `"@catalogId"` rejects them. No component needs `@catalogId`.
 - The CopilotKit playground id `https://copilotkit.ai/a2ui/catalogs/playground/v1` is accepted as an alias of the Dyson catalog.
 
 ## 4. Kit
