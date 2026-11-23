@@ -30,6 +30,11 @@
   gap: 0;
 }
 
+/* A weighted card in a row stretches to the row height (the card itself grows: A2uiNode.razor.css). */
+.a2ui-box--row > .a2ui-weighted:has(> .a2ui-card) {
+  align-self: stretch;
+}
+
 /* gap / padding int 0..12 in 4px steps. */
 .a2ui-gap--0 { gap: 0; }
 .a2ui-gap--1 { gap: 4px; }

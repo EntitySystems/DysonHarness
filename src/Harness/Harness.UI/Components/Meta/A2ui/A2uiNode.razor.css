@@ -74,6 +74,27 @@
   background: var(--surface-raised);
 }
 
+/* Cards side by side read as one row: stretch to the row / grid-cell height (flex-grow in the column wrappers),
+   and the trailing action sits at the bottom whatever the body length. */
+.a2ui-row > .a2ui-card,
+.a2ui-box--row > .a2ui-card,
+.a2ui-row > .a2ui-weighted:has(> .a2ui-card) {
+  align-self: stretch;
+}
+
+.a2ui-weighted > .a2ui-card,
+.a2ui-stack > .a2ui-card,
+.a2ui-carousel__slot > .a2ui-card,
+.a2ui-card > .a2ui-column {
+  flex: 1 1 auto;
+}
+
+.a2ui-card > :is(.a2ui-button-wrap, .a2ui-action):last-child,
+.a2ui-card > .a2ui-column > :is(.a2ui-button-wrap, .a2ui-action):last-child,
+.a2ui-card > .a2ui-column > .a2ui-row:last-child:has(.a2ui-button-wrap, .a2ui-action) {
+  margin-top: auto;
+}
+
 .a2ui-divider {
   width: 100%;
   margin: var(--sp-1) 0;
