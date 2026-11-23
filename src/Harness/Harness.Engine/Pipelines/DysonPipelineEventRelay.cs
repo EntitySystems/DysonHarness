@@ -30,7 +30,7 @@ public sealed class DysonPipelineEventRelay : IDisposable
     /// <summary>A work directory whose service could not be resolved is retried no sooner than this.</summary>
     internal static readonly TimeSpan ResolveRetry = TimeSpan.FromSeconds(30);
 
-    internal const int MaxLinesPerRun = 8;
+    internal const int MaxLinesPerRun = 8; // ponytail: per-run cap is a count, not a size
     internal const int MaxLinesChars = 1500;
 
     /// <summary>
@@ -149,6 +149,13 @@ public sealed class DysonPipelineEventRelay : IDisposable
         }
         finally
         {
+            // A cancelled resolve leaves the remaining entries marked Resolving: clear them so a later sync retries.
+            lock (_lock)
+            {
+                foreach (var entry in _entries.Values)
+                    entry.Resolving = false;
+            }
+
             _gate.Release();
         }
     }
@@ -229,7 +236,14 @@ public sealed class DysonPipelineEventRelay : IDisposable
 
                 lastSent = _now();
                 // A failed delivery drops this batch: the next event batch carries the current state anyway.
-                await _deliver(sessionId, batch.Format(), ct).ConfigureAwait(false);
+                try
+                {
+                    await _deliver(sessionId, batch.Format(), ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Boundary: a throwing deliver callback must not kill this session's worker (its channel would grow unread).
+                }
             }
         }
         catch (OperationCanceledException)
@@ -354,7 +368,11 @@ internal sealed class DysonPipelineEventBatch
     {
         var key = (evt.RunId, evt.JobId ?? 0L);
         if (_index.TryGetValue(key, out var at))
-            _events[at] = evt;
+        {
+            // A failure stays in the batch even when a re-run of the same run id starts in the same window.
+            if (!_events[at].IsImportant || evt.IsImportant)
+                _events[at] = evt;
+        }
         else
         {
             _index[key] = _events.Count;

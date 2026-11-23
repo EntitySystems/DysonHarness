@@ -8606,7 +8606,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (result.Error == DysonSessionRuntime.PromptDeferredError && turn.AllowEnqueue)
             return RequeueUntilBackgroundRunIdle(session, turn, filePaths);
 
-        if (turn.Kind == DysonAgentTurnKind.Normal)
+        // An automatic pipeline batch is not an answer to a parked child event; its silence must not fail that event.
+        if (turn.Kind == DysonAgentTurnKind.Normal && !DysonInjectedUserComments.IsPipelineText(turn.Instruction))
             FollowUpParkedMetaEventsAfterUserTurn(session, turn.StartedUtc);
 
         return result;

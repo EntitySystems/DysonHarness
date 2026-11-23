@@ -142,6 +142,24 @@ public class DysonVoiceSidecarMinorTests
     }
 
     [Fact]
+    public async Task Pipeline_batch_supersedes_a_still_queued_older_batch()
+    {
+        var prompts = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var harness = await Rig.CreateAsync(prompts);
+        var meta = await harness.AdoptAsync(DysonAgentModes.MetaAgent);
+        var stale = DysonAgentSession.CreateNormalTurn(
+            DysonInjectedUserComments.FormatWithMarker(DysonInjectedUserComments.PipelineMarker, "stale batch"));
+        Assert.True(harness.Runtime.EnqueuePrompt(meta.PersistenceId, stale).IsSuccess);
+
+        var delivered = await harness.Runtime.DeliverPipelineBatchAsync(meta.PersistenceId, "fresh batch", CancellationToken.None);
+        Assert.True(delivered.IsSuccess, delivered.IsError ? delivered.Error : null);
+
+        // The first prompt to run is the fresh one: the stale one was dropped from the queue, not run first.
+        var ran = await prompts.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Contains("fresh batch", ran, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Pipeline_batch_for_a_vanished_session_is_dropped_quietly()
     {
         await using var harness = await Rig.CreateAsync(null);

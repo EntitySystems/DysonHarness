@@ -77,13 +77,21 @@ public sealed partial class DysonSessionRuntime
         if (_disposed != 0 || !_sessionsById.TryGetValue(sessionId, out var target))
             return Task.FromResult(VoidResult<string>.Success); // stale: the session went away
 
-        if (target.InFlightPromptTurn is { } inFlight
-            && target.InjectTurnComment(inFlight.Id, text, DysonInjectedUserComments.PipelineMarker).IsSuccess)
-        {
+        // A summary or confirm turn leaves the model context, so a comment there would be lost: queue instead.
+        var summarizing = target.IsSummaryInFlight || target.HasAnySummarizingTurn;
+        // InFlightPromptTurns copies the stack under the model gate; Peek on the live stack can race a turn end.
+        if (!summarizing && target.InFlightPromptTurns.FirstOrDefault() is { } inFlight && TryInjectPipelineComment(target, inFlight, text))
             return Task.FromResult(VoidResult<string>.Success);
-        }
 
         // Intake closed between the check and the inject, or nothing is running: queue a turn.
+        // A batch still waiting (session stopped or busy) is superseded: the newer one carries the newer state.
+        // ponytail: older queued batches are dropped, not merged; upgrade path = merge their lines into this one.
+        foreach (var stale in GetQueuedPrompts(target.PersistenceId))
+        {
+            if (DysonInjectedUserComments.IsPipelineText(stale.Turn.Instruction))
+                TryRemovePrompt(target.PersistenceId, stale.Id);
+        }
+
         var turn = DysonAgentSession.CreateNormalTurn(
             DysonInjectedUserComments.FormatWithMarker(DysonInjectedUserComments.PipelineMarker, text));
         var queued = EnqueuePrompt(target.PersistenceId, turn);
@@ -92,6 +100,20 @@ public sealed partial class DysonSessionRuntime
 
         _ = DrainPipelineTurnAsync(target);
         return Task.FromResult(VoidResult<string>.Success);
+    }
+
+    /// <summary>The turn may end between the stack copy and the inject (or the stack enumeration may race a push): fall back to queueing.</summary>
+    private static bool TryInjectPipelineComment(DysonAgentSession target, DysonAgentTurn turn, string text)
+    {
+        try
+        {
+            return target.InjectTurnComment(turn.Id, text, DysonInjectedUserComments.PipelineMarker).IsSuccess;
+        }
+        catch (InvalidOperationException)
+        {
+            // Boundary: _inFlightPromptStack is enumerated without the model gate (push/pop race).
+            return false;
+        }
     }
 
     private async Task DrainPipelineTurnAsync(DysonAgentSession target)

@@ -21,8 +21,9 @@ public sealed class DysonPipelineEventRelayTests
         public ConcurrentQueue<(Guid Session, string Text, DateTimeOffset At)> Delivered { get; } = new();
         public DysonPipelineEventRelay Relay { get; }
 
-        public Rig(TimeSpan window, TimeSpan minGap)
+        public Rig(TimeSpan window, TimeSpan minGap, bool throwOnFirstDelivery = false)
         {
+            var thrown = !throwOnFirstDelivery;
             var seams = new DysonVersionControlSeams(
                 (span, ct) => Task.Delay(Timeout.InfiniteTimeSpan, ct),
                 () => T0,
@@ -32,6 +33,12 @@ public sealed class DysonPipelineEventRelayTests
                 Bus,
                 (id, text, _) =>
                 {
+                    if (!thrown)
+                    {
+                        thrown = true;
+                        throw new InvalidOperationException("boom");
+                    }
+
                     Delivered.Enqueue((id, text, DateTimeOffset.UtcNow));
                     return Task.FromResult(VoidResult<string>.Success);
                 },
@@ -86,6 +93,31 @@ public sealed class DysonPipelineEventRelayTests
         Assert.Contains("job 10", first.Text, StringComparison.Ordinal);
         Assert.Contains("completed: Succeeded", first.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("job 10 \"job10\" (run 1 \"CI\"): started", first.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_throwing_delivery_does_not_stop_later_batches()
+    {
+        using var rig = new Rig(TimeSpan.FromMilliseconds(20), TimeSpan.Zero, throwOnFirstDelivery: true);
+        await rig.Relay.SyncAsync([rig.Target()]);
+
+        rig.Publish(Evt(rig.Wd, DysonPipelineEventKind.RunStarted, 1));
+        await Task.Delay(300);
+        rig.Publish(Evt(rig.Wd, DysonPipelineEventKind.RunStarted, 2));
+
+        var delivered = await rig.NextAsync(0);
+        Assert.Contains("run 2", delivered.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_failure_survives_the_same_run_restarting_in_one_batch()
+    {
+        var wd = Guid.NewGuid();
+        var batch = new DysonPipelineEventBatch();
+        batch.Add(Evt(wd, DysonPipelineEventKind.RunCompleted, 1, null, DysonPipelineState.Failed, "Failed"));
+        batch.Add(Evt(wd, DysonPipelineEventKind.RunStarted, 1));
+
+        Assert.Contains("completed: Failed", batch.Format(), StringComparison.Ordinal);
     }
 
     [Fact]
