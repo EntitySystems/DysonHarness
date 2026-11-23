@@ -19,7 +19,7 @@ public static class DysonA2uiLinks
     {
         var s = raw?.Trim() ?? "";
         if (s.Length == 0)
-            return Result<string, string>.AsError("expected a link: an http(s) URL or open_plan:/open_scratch:/open_file:.");
+            return Result<string, string>.AsError("expected a link: an http(s) URL or open_plan:/open_scratch:/open_file:/open_folder:.");
         if (s.Length > DysonA2uiProtocol.MaxMediaUrlLength)
             return Result<string, string>.AsError($"link exceeds {DysonA2uiProtocol.MaxMediaUrlLength} characters.");
         if (DysonBuiltInConversationActions.IsReservedPrefix(s))

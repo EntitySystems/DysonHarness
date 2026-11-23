@@ -48,15 +48,25 @@ public static class DysonOpenFolder
 
             var realRoot = RealPath(root);
             var realFull = RealPath(full);
-            return IsUnder(realRoot, realFull)
-                ? Result<string, string>.AsValue(realFull)
-                : Result<string, string>.AsError($"Path escapes work directory: {Display(relative)}");
+            if (!IsUnder(realRoot, realFull))
+                return Result<string, string>.AsError($"Path escapes work directory: {Display(relative)}");
+            // macOS `open <dir>` runs a bundle (Foo.app) instead of showing it, so a bundle folder is never handed over.
+            return OperatingSystem.IsMacOS() && (IsBundleName(Path.GetFileName(full)) || IsBundleName(Path.GetFileName(realFull)))
+                ? Result<string, string>.AsError($"Not opened: {Display(relative)} is an application bundle.")
+                : Result<string, string>.AsValue(realFull);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return Result<string, string>.AsError($"Cannot open folder: {ex.Message}");
+            // Includes "untrusted mount point" on Windows hosts that refuse to resolve a link: fail closed.
+            return Result<string, string>.AsError($"Cannot open folder {Display(relative)} (a link on its path or the work root could not be resolved safely): {ex.Message}");
         }
     }
+
+    private static readonly string[] BundleExtensions = [".app", ".workflow", ".saver", ".prefpane", ".action", ".scptd"];
+
+    /// <summary>True for a macOS bundle directory name that <c>open</c> would launch.</summary>
+    public static bool IsBundleName(string? name) =>
+        BundleExtensions.Contains(Path.GetExtension(name ?? ""), StringComparer.OrdinalIgnoreCase);
 
     private static string Display(string relative) => relative.Length == 0 ? "." : relative;
 

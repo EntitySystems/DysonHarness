@@ -80,12 +80,25 @@ public sealed class DysonOpenFolderTests : IDisposable
         var (launched, launch) = Recorder();
         var opened = await DysonOpenFolder.OpenAsync("src/sub", _root, launch);
         Assert.True(opened.IsSuccess, opened.Error);
-        Assert.Equal(Path.GetFullPath(Path.Combine(_root, "src", "sub")), Assert.Single(launched));
+        // The launcher gets the real path (a temp dir under a symlink, e.g. macOS /var, resolves differently).
+        var sent = Assert.Single(launched);
+        Assert.Equal(DysonOpenFolder.ResolveReal("src/sub", _root).Value, sent);
+        Assert.EndsWith(Path.Combine("src", "sub"), sent, StringComparison.Ordinal);
 
         var (rootLaunched, rootLaunch) = Recorder();
         Assert.True((await DysonOpenFolder.OpenAsync("", _root, rootLaunch)).IsSuccess);
-        Assert.Equal(Path.GetFullPath(_root), Assert.Single(rootLaunched).TrimEnd(Path.DirectorySeparatorChar));
+        Assert.Equal(DysonOpenFolder.ResolveReal("", _root).Value, Assert.Single(rootLaunched));
     }
+
+    [Theory]
+    [InlineData("Foo.app", true)]
+    [InlineData("Foo.APP", true)]
+    [InlineData("x.workflow", true)]
+    [InlineData("app", false)]
+    [InlineData("src", false)]
+    [InlineData("a.apple", false)]
+    public void Bundle_names_are_recognised(string name, bool bundle) =>
+        Assert.Equal(bundle, DysonOpenFolder.IsBundleName(name));
 
     [Fact]
     public async Task Missing_folder_and_a_file_open_nothing_with_a_clear_error()
@@ -159,6 +172,6 @@ public sealed class DysonOpenFolderTests : IDisposable
 
         var ok = await DysonOpenFolder.OpenAsync("inside/sub", _root, launch);
         Assert.True(ok.IsSuccess, ok.Error);
-        Assert.Equal(Path.GetFullPath(Path.Combine(_root, "src", "sub")), Assert.Single(launched));
+        Assert.Equal(DysonOpenFolder.ResolveReal("src/sub", _root).Value, Assert.Single(launched));
     }
 }
