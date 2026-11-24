@@ -140,7 +140,7 @@ An inline three.js viewer for a `.glb` or `.fbx` file in the work directory: dra
 
 2+ images → one ImageGallery, never several Image components. A carousel of ordered images, one slide at a time, with prev/next, an "n / N" counter and the caption under the slide.
 
-- `images` (alias `items`), at most 50, order kept, url and path can mix. Each item is a string (`http(s)://` is a url, anything else a work-relative path) or an object with exactly one of `url` / `path` plus `alt`, `caption`, `title`, `description`. Both or neither of `url` / `path`, a non-http(s) url, a blank path or more than 50 items is `VALIDATION_FAILED` at that item. `images: []` shows "No images".
+- `images` (alias `items`), at most 50, order kept, url and path can mix. Each item is a string (`http(s)://` is a url, anything else a work-relative path) or an object with exactly one of `url` / `path` plus `alt`, `caption`, `title`, `description`. Both `url` and `path`, a non-http(s) url, a blank path or more than 50 items is `VALIDATION_FAILED` at that item. `images: []` shows "No images".
 - Gallery `title` is a heading above the slide; `height` 120..800 px (default 320, images fitted, not cropped). `columns` is accepted and ignored.
 - Item `title` is a single-line band over the bottom of the image (max 200 chars, longer is cut with …; blank = no band; the tooltip shows the full text), separate from `caption` (under the image). Accessible name: `alt`, `description`, `title`, then the file name or host.
 - Path images use the `Image.path` rules (png, jpg/jpeg, gif, webp, bmp, ≤ 20 MB; a rooted or `..` path is `VALIDATION_FAILED`). A missing, unsupported or oversized file, or a url that fails to load, is text on that slide only; the rest work.

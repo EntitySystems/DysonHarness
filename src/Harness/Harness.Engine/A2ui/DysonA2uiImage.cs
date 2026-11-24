@@ -40,7 +40,10 @@ public static class DysonA2uiImage
         if (string.IsNullOrWhiteSpace(title))
             return null;
         var text = string.Join(' ', title.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return text.Length <= MaxTitleLength ? text : text[..(MaxTitleLength - 1)] + "…";
+        if (text.Length <= MaxTitleLength)
+            return text;
+        var cut = char.IsHighSurrogate(text[MaxTitleLength - 2]) ? MaxTitleLength - 2 : MaxTitleLength - 1;
+        return text[..cut] + "…";
     }
 
     /// <summary>

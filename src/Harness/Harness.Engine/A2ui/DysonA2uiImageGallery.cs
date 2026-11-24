@@ -73,7 +73,8 @@ public static class DysonA2uiImageGallery
                 case JsonObject o:
                     var hasUrl = o.ContainsKey("url");
                     var hasPath = o.ContainsKey("path");
-                    if (hasUrl == hasPath)
+                    // Neither url nor path stays valid: pre-plan-384 rows had an optional url and are re-validated on load; it renders as a text slide.
+                    if (hasUrl && hasPath)
                         return (pointer, "an image needs exactly one of url or path.");
                     if (hasUrl && !DysonA2uiLinks.IsMediaUrl(DysonA2uiValidator.AsString(o["url"])))
                         return ($"{pointer}/url", DysonA2uiLinks.MediaUrlMessage);
@@ -96,27 +97,30 @@ public static class DysonA2uiImageGallery
     }
 
     /// <summary>Resolved <c>images</c> / <c>items</c> value to slides, in input order, at most <see cref="MaxImages"/>. Bad items become Invalid slides with text.</summary>
-    public static IReadOnlyList<DysonA2uiGalleryItem> Normalize(JsonNode? resolved)
+    public static IReadOnlyList<DysonA2uiGalleryItem> Normalize(JsonNode? resolved, Func<JsonNode?, JsonNode?>? resolveField = null)
     {
         if (resolved is not JsonArray list)
             return [];
         var items = new List<DysonA2uiGalleryItem>();
         for (var i = 0; i < list.Count && i < MaxImages; i++)
-            items.Add(Item(i, list[i]));
+            items.Add(Item(i, list[i], resolveField ?? (n => n)));
         return items;
     }
 
-    private static DysonA2uiGalleryItem Item(int index, JsonNode? node)
+    /// <summary><paramref name="resolve"/> resolves bound text fields (<c>{"@path"}</c>) of an object item; url and path stay literal.</summary>
+    private static DysonA2uiGalleryItem Item(int index, JsonNode? node, Func<JsonNode?, JsonNode?> resolve)
     {
         if (node is JsonObject o)
         {
-            var alt = Text(o["alt"]);
-            var caption = Text(o["caption"]);
-            var title = DysonA2uiImage.NormalizeTitle(DysonA2uiValidator.AsString(o["title"]));
-            var description = Text(o["description"]);
+            var alt = Text(resolve(o["alt"]));
+            var caption = Text(resolve(o["caption"]));
+            var title = DysonA2uiImage.NormalizeTitle(DysonA2uiValidator.AsString(resolve(o["title"])));
+            var description = Text(resolve(o["description"]));
             var url = o["url"];
             var path = o["path"];
-            if ((url is null) == (path is null))
+            if (url is null && path is null)
+                return new(index, DysonA2uiGalleryKind.Invalid, alt ?? title ?? caption ?? description ?? "No image address", alt, caption, title, description);
+            if (url is not null && path is not null)
                 return new(index, DysonA2uiGalleryKind.Invalid, "Needs exactly one of url or path.", alt, caption, title, description);
             var value = Text(url ?? path);
             var kind = url is not null
@@ -206,14 +210,14 @@ public static class DysonA2uiImageGallery
 
     /// <summary>The AudioPlayer host rule (no localhost, single-label, private suffixes, private IP literals, credentials).</summary>
     public static bool IsLoadableUrl(string? url) =>
-        DysonA2uiAudio.PlayableUrl("open_url:" + url) is not null;
+        DysonA2uiLinks.IsMediaUrl(url) && DysonA2uiAudio.PlayableUrl("open_url:" + url) is not null;
 
     /// <summary>Next slide index: clamped inline (<paramref name="wrap"/> false), wrapped in the modal. Count 0 gives 0.</summary>
     public static int Step(int index, int delta, int count, bool wrap)
     {
         if (count <= 0)
             return 0;
-        var next = index + delta;
-        return wrap ? ((next % count) + count) % count : Math.Clamp(next, 0, count - 1);
+        var next = (long)index + delta;
+        return (int)(wrap ? ((next % count) + count) % count : Math.Clamp(next, 0, count - 1));
     }
 }

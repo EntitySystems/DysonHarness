@@ -112,7 +112,8 @@
     protected override async Task OnParametersSetAsync()
     {
         var resolved = DysonA2uiBinding.ResolveValue(Component["images"] ?? Component["items"], View.Model, Scope);
-        var key = resolved?.ToJsonString();
+        var items = DysonA2uiImageGallery.Normalize(resolved, field => DysonA2uiBinding.ResolveValue(field, View.Model, Scope));
+        var key = string.Join('\u0001', items.Select(i => $"{i.Kind}|{i.Value}|{i.Alt}|{i.Caption}|{i.Title}|{i.Description}"));
         if (string.Equals(key, _key, StringComparison.Ordinal))
             return;
 
@@ -120,7 +121,8 @@
         var version = ++_version;
         ReleasePreviews();
         _failed.Clear();
-        var items = DysonA2uiImageGallery.Normalize(resolved);
+        // The consent named the hosts of the list the user saw; a changed list asks again.
+        _remoteOk = false;
         _items = items;
         _index = Math.Clamp(_index, 0, Math.Max(0, items.Count - 1));
         _cards = new DysonA2uiImageCard?[items.Count];

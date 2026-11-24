@@ -47,7 +47,7 @@ public static class DysonA2uiImageZoom
     }
 
     public static (double X, double Y) ClampPan(double x, double y, (double MaxX, double MaxY) bounds) =>
-        (Math.Clamp(x, -bounds.MaxX, bounds.MaxX), Math.Clamp(y, -bounds.MaxY, bounds.MaxY));
+        (Math.Clamp(x, -Math.Max(0, bounds.MaxX), Math.Max(0, bounds.MaxX)), Math.Clamp(y, -Math.Max(0, bounds.MaxY), Math.Max(0, bounds.MaxY)));
 
     public static (int Percent, double PanX, double PanY) Reset() => (MinPercent, 0, 0);
 

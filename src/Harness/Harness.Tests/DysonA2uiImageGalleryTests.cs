@@ -73,7 +73,21 @@ public class DysonA2uiImageGalleryTests
     public void Check_object_needs_exactly_one_of_url_or_path()
     {
         AssertFails("\"images\":[\"a.png\",\"b.png\",{\"url\":\"https://a/x.png\",\"path\":\"c.png\"}]", P0 + "/images/2");
-        AssertFails("\"images\":[\"a.png\",\"b.png\",{\"alt\":\"x\"}]", P0 + "/images/2");
+        // Old rows had an optional url: neither stays valid and renders as a text slide.
+        AssertValid("\"images\":[\"a.png\",{\"caption\":\"c\"}]");
+        var slide = DysonA2uiImageGallery.Normalize(JsonNode.Parse("[{\"title\":\"T\",\"caption\":\"c\"}]"))[0];
+        Assert.Equal(DysonA2uiGalleryKind.Invalid, slide.Kind);
+        Assert.Equal("T", slide.Value);
+    }
+
+    [Fact]
+    public void Normalize_resolves_bound_item_text_and_IsLoadableUrl_applies_the_media_url_rule()
+    {
+        var items = DysonA2uiImageGallery.Normalize(
+            JsonNode.Parse("[{\"path\":\"c.jpg\",\"title\":{\"@path\":\"/t\"}}]"),
+            f => f is JsonObject ? JsonValue.Create("Bound") : f);
+        Assert.Equal("Bound", items[0].Title);
+        Assert.False(DysonA2uiImageGallery.IsLoadableUrl("https://example.com/" + new string('a', 2100)));
     }
 
     [Theory]

@@ -101,6 +101,11 @@
   padding: var(--sp-2) var(--sp-4) 0;
 }
 
+.a2ui-image-modal__toolbar [aria-disabled="true"] {
+  opacity: .45;
+  cursor: default;
+}
+
 .a2ui-image-modal__slider {
   flex: 0 1 240px;
   min-width: 80px;

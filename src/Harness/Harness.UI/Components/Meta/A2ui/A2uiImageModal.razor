@@ -39,6 +39,7 @@
                         aria-label="Close">×</button>
             </div>
             <div class="a2ui-image-modal__frame">
+                @* Zoom buttons use aria-disabled (not disabled) so a click that reaches 100%/500% keeps focus inside the modal's key handler. *@
                 @* The stage and its img carry NO Razor style/class that holds the transform: the transform is JS-owned
                    (--a2ui-zoom/--a2ui-pan-x/--a2ui-pan-y, data-pannable, data-dragging), so a re-render mid-drag cannot reset the pan. *@
                 <div class="a2ui-image-modal__stage"
@@ -49,6 +50,7 @@
                     @if (src is not null)
                     {
                         <img class="a2ui-image-modal__img"
+                             @key="at"
                              src="@src"
                              alt="@slide.Alt"
                              decoding="async"
@@ -77,7 +79,7 @@
                 }
             </div>
             <div class="a2ui-image-modal__toolbar" role="group" aria-label="Zoom">
-                <button type="button" class="btn btn-ghost" aria-label="Zoom out" disabled="@(_zoom <= DysonA2uiImageZoom.MinPercent)" @onclick="() => ZoomStepAsync(-1)">−</button>
+                <button type="button" class="btn btn-ghost" aria-label="Zoom out" aria-disabled="@(_zoom <= DysonA2uiImageZoom.MinPercent ? "true" : null)" @onclick="() => ZoomStepAsync(-1)">−</button>
                 <input type="range"
                        class="a2ui-image-modal__slider"
                        min="@DysonA2uiImageZoom.MinPercent"
@@ -89,9 +91,9 @@
                        @oninput="OnSliderInputAsync"
                        @onkeydown="OnSliderKeyDown"
                        @onkeydown:stopPropagation="true" />
-                <button type="button" class="btn btn-ghost" aria-label="Zoom in" disabled="@(_zoom >= DysonA2uiImageZoom.MaxPercent)" @onclick="() => ZoomStepAsync(1)">+</button>
+                <button type="button" class="btn btn-ghost" aria-label="Zoom in" aria-disabled="@(_zoom >= DysonA2uiImageZoom.MaxPercent ? "true" : null)" @onclick="() => ZoomStepAsync(1)">+</button>
                 <span class="a2ui-image-modal__zoom-value mono">@DysonA2uiImageZoom.ValueText(_zoom)</span>
-                <button type="button" class="btn btn-ghost" disabled="@(_zoom <= DysonA2uiImageZoom.MinPercent)" @onclick="ResetZoomAsync">Reset</button>
+                <button type="button" class="btn btn-ghost" aria-disabled="@(_zoom <= DysonA2uiImageZoom.MinPercent ? "true" : null)" @onclick="ResetZoomAsync">Reset</button>
                 @if (_zoom > DysonA2uiImageZoom.MinPercent)
                 {
                     <span class="a2ui-image-modal__hint">Drag or use arrow keys to pan</span>
@@ -182,7 +184,7 @@
         _failed.Clear();
         _natW = _natH = 0;
         _viewResetPending = true;
-        _scrollPending = true;
+        _scrollPending = item.Slides.Count > 1;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
