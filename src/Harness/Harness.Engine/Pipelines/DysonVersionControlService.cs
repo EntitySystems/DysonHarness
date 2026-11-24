@@ -133,8 +133,7 @@ public sealed class DysonVersionControlService : IDisposable
     /// <summary>
     /// Lease for <see cref="DysonPipelineEvent"/> consumers (the Meta relay). Like a pill lease, plus job fetches
     /// (same cap and freshness cache as a panel) only while some run is active, so an idle repo costs nothing extra.
-    /// ponytail: a run that completes between two ticks never has its jobs fetched, so its last JobCompleted lines are
-    /// missing; the RunCompleted event still names it. Upgrade path = one final job fetch for a just-completed run.
+    /// A run that completes between two ticks still gets one final job fetch (see <see cref="NeedsJobsLocked"/>).
     /// </summary>
     public IDisposable WatchEvents()
     {
@@ -619,7 +618,7 @@ public sealed class DysonVersionControlService : IDisposable
 
         bool eventJobs;
         lock (_lock)
-            eventJobs = _eventLeases > 0 && runs.Any(r => r.State is DysonPipelineState.Queued or DysonPipelineState.Waiting or DysonPipelineState.Running);
+            eventJobs = _eventLeases > 0 && runs.Any(NeedsJobsLocked);
         var jobs = await FetchJobsAsync(provider, target, runs, panelOpen || eventJobs, token).ConfigureAwait(false);
 
         DysonPipelineSnapshot next;
@@ -730,11 +729,7 @@ public sealed class DysonVersionControlService : IDisposable
             var seen = new HashSet<long>();
             foreach (var run in runs)
             {
-                if (run.State is not (DysonPipelineState.Queued or DysonPipelineState.Waiting or DysonPipelineState.Running))
-                    continue;
-                if (!seen.Add(run.Id))
-                    continue;
-                if (Fresh(run))
+                if (!NeedsJobsLocked(run) || !seen.Add(run.Id))
                     continue;
                 candidates.Add((run, EtagOf(run.Id)));
             }
@@ -764,6 +759,11 @@ public sealed class DysonVersionControlService : IDisposable
                     _jobsCache[run.Id] = (run.Attempt, run.UpdatedAt, result.Value.Items);
                     _jobsEtag[run.Id] = result.Value.ETag;
                 }
+                else if (!IsActive(run) && _jobsCache.TryGetValue(run.Id, out var kept))
+                {
+                    // Final fetch answered 304: the cached jobs are final; stamp them so the run is not refetched every tick.
+                    _jobsCache[run.Id] = (run.Attempt, run.UpdatedAt, kept.Jobs);
+                }
 
                 if (_wantedSet.Remove(run.Id))
                     _wanted.Remove(run.Id);
@@ -777,6 +777,24 @@ public sealed class DysonVersionControlService : IDisposable
             PruneLocked(runs);
 
         return CurrentJobs(runs);
+    }
+
+    private static bool IsActive(DysonPipelineState state) =>
+        state is DysonPipelineState.Queued or DysonPipelineState.Waiting or DysonPipelineState.Running;
+
+    private static bool IsActive(DysonPipelineRun run) => IsActive(run.State);
+
+    /// <summary>
+    /// An active run is fetched when its cached jobs predate its (Attempt, UpdatedAt). A finished run is fetched only if
+    /// jobs were cached while it ran and are stale, or still show an active job (the run can finish without its
+    /// updated_at moving past the cached stamp): jobs cached as Running never outlive the run. A finished run never
+    /// fetched stays unfetched (no cost for history).
+    /// </summary>
+    private bool NeedsJobsLocked(DysonPipelineRun run)
+    {
+        if (!_jobsCache.TryGetValue(run.Id, out var cached))
+            return IsActive(run);
+        return !Fresh(run) || (!IsActive(run) && cached.Jobs.Any(j => IsActive(j.State)));
     }
 
     private bool Fresh(DysonPipelineRun run) =>
