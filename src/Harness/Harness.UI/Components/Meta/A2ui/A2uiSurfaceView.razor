@@ -39,7 +39,7 @@
     private A2uiModel3DOpen? _model3d;
     private string? _model3dPreviewId;
     private A2uiImageOpen? _image;
-    private string? _imagePreviewId;
+    private List<string> _imagePreviewIds = [];
 
     [Parameter, EditorRequired] public DysonA2uiSurface Surface { get; set; } = default!;
 
@@ -136,14 +136,41 @@
     }
 
     /// <summary>Opens the large Image view (one expanded item at a time). It registers its own preview id, so an inline rebuild cannot orphan it.</summary>
-    internal void OpenImage(string nodeId, string alt, string caption, DysonA2uiImageCard card)
+    internal void OpenImage(string nodeId, string alt, string? title, string caption, DysonA2uiImageCard card)
+    {
+        ReleaseImage();
+        var slide = new A2uiImageSlide(alt, title, caption, null, null, null, null);
+        OpenGallery(nodeId, "", [new A2uiSlideSource(slide, card)], 0, false);
+    }
+
+    /// <summary>
+    /// Opens the large Image view on one or more slides. It registers its own preview ids (one per path slide, released on close,
+    /// replace and dispose), so an inline rebuild cannot orphan them.
+    /// ponytail: an in-flight list change (A to B to A) can orphan path-only entries (a few hundred bytes each); not fixed.
+    /// </summary>
+    internal void OpenGallery(string nodeId, string title, IReadOnlyList<A2uiSlideSource> sources, int index, bool remoteConsented)
     {
         _model3d = null;
         Previews.Remove(_model3dPreviewId);
         _model3dPreviewId = null;
-        Previews.Remove(_imagePreviewId);
-        _imagePreviewId = Previews.PutFile(card.AbsolutePath, card.ContentType);
-        _image = new A2uiImageOpen(nodeId, alt, caption, card, DysonFilePreviewStore.UrlFor(_imagePreviewId));
+        ReleaseImage();
+        var slides = new List<A2uiImageSlide>(sources.Count);
+        foreach (var (slide, card) in sources)
+        {
+            if (card is null)
+            {
+                slides.Add(slide);
+                continue;
+            }
+
+            var id = Previews.PutFile(card.AbsolutePath, card.ContentType);
+            _imagePreviewIds.Add(id);
+            slides.Add(slide with { PreviewUrl = DysonFilePreviewStore.UrlFor(id), OpenFunc = card.OpenFunc });
+        }
+
+        if (slides.Count == 0)
+            return;
+        _image = new A2uiImageOpen(nodeId, title, slides, Math.Clamp(index, 0, slides.Count - 1), remoteConsented);
         _render = true;
         StateHasChanged();
     }
@@ -158,8 +185,9 @@
     private void ReleaseImage()
     {
         _image = null;
-        Previews.Remove(_imagePreviewId);
-        _imagePreviewId = null;
+        foreach (var id in _imagePreviewIds)
+            Previews.Remove(id);
+        _imagePreviewIds = [];
     }
 
     private void CloseModel3D()
@@ -175,8 +203,7 @@
     {
         Previews.Remove(_model3dPreviewId);
         _model3dPreviewId = null;
-        Previews.Remove(_imagePreviewId);
-        _imagePreviewId = null;
+        ReleaseImage();
         if (!UsesModel3D)
             return;
 
@@ -218,7 +245,8 @@
         }
 
         // The open image's node is gone (deleteSurface, replaced component): close the large view.
-        if (_image is { } openImage && A2uiProps.Str(Component(openImage.NodeId)?["component"]) != DysonA2uiImage.ComponentName)
+        if (_image is { } openImage
+            && A2uiProps.Str(Component(openImage.NodeId)?["component"]) is not (DysonA2uiImage.ComponentName or DysonA2uiImageGallery.ComponentName))
         {
             ReleaseImage();
             _render = true;

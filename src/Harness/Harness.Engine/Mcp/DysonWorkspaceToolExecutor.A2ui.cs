@@ -71,7 +71,8 @@ public sealed partial class DysonWorkspaceToolExecutor
         foreach (var (pointer, path) in DysonA2uiLocalVideo.PathPointers(parsedMessages.Value)
                      .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiModel3D.ComponentName))
                      .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiImage.ComponentName))
-                     .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiAudio.ComponentName)))
+                     .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiAudio.ComponentName))
+                     .Concat(DysonA2uiImageGallery.PathPointers(parsedMessages.Value)))
         {
             var resolved = await DysonA2uiLocalVideo.ResolveRelativeAsync(path, WorkRoot, cancellationToken).ConfigureAwait(false);
             if (resolved.IsError)

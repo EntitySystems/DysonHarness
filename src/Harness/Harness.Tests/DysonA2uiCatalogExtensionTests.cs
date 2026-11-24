@@ -74,7 +74,7 @@ public class DysonA2uiCatalogExtensionTests
         ["Link"] = "\"text\":\"Docs\",\"href\":\"https://example.com/docs\"",
         ["Tooltip"] = "\"child\":\"x\",\"text\":\"tip\"",
         ["VideoEmbed"] = "\"url\":\"https://example.com/v\",\"title\":\"V\"",
-        ["ImageGallery"] = "\"images\":[{\"url\":\"https://example.com/a.png\",\"caption\":\"c\"}]",
+        ["ImageGallery"] = "\"images\":[\"https://example.com/a.png\",\"img/b.png\",{\"path\":\"c.jpg\",\"alt\":\"C\",\"title\":\"T\"},{\"url\":\"https://example.com/d.png\",\"caption\":\"c\"}],\"title\":\"Shots\",\"height\":320",
         ["ImageGrid"] = "\"images\":[{\"caption\":\"c\"}]",
         ["Pressable"] = "\"child\":\"x\",\"action\":{\"event\":{\"name\":\"go\"}}",
         ["Form"] = "\"children\":[]",

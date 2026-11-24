@@ -4,7 +4,8 @@
 @using DysonHarness
 
 @* Media + composites. A remote MediaUrl is validated but NEVER fetched or rendered (no img/video/iframe); Image.path (A2uiImage) and
-   AudioPlayer.path (A2uiAudio) use the same-origin local preview route. AudioPlayer.url is the one remote load, and only after the
+   AudioPlayer.path (A2uiAudio) use the same-origin local preview route; ImageGallery (A2uiImageGallery) shows path images the same way and loads remote urls only after one user click.
+   ImageGrid stays a placeholder grid. AudioPlayer.url is the one remote load, and only after the
    user presses play (A2uiAudio; private/loopback/LAN/non-http targets stay a link card). A LinkTarget is a
    <button> that calls View.OpenAsync(func), so no href exists. SVG attributes are our numbers or fixed icon paths. *@
 @{
@@ -16,7 +17,7 @@
     case "Image":
         @if (Component["path"] is not null)
         {
-            <A2uiImage View="View" Id="@Id" Component="Component" Scope="@Scope" Aria="aria" />
+            <A2uiImage View="View" Id="@Id" Component="Component" Scope="@Scope" Aria="aria" Inline="Inline" />
         }
         else
         {
@@ -59,6 +60,8 @@
         </div>
         break;
     case "ImageGallery":
+        <A2uiImageGallery View="View" Id="@Id" Component="Component" Scope="@Scope" Aria="aria" Inline="Inline" />
+        break;
     case "ImageGrid":
         var items = Items();
         var cols = A2uiProps.Int(Component["columns"]) is { } n and >= 1 and <= 6 ? n : 3;
@@ -143,6 +146,9 @@
     [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
     [Parameter] public string Scope { get; set; } = "";
     [Parameter] public int Depth { get; set; } = 1;
+
+    /// <summary>Rendered inside a kit Button: Image and ImageGallery draw the plain image (no nested button).</summary>
+    [Parameter] public bool Inline { get; set; }
 
     private sealed record MapMarker(string Label, double Lat, double Lng, string Category, string Description);
 

@@ -324,6 +324,11 @@ public static partial class DysonA2uiValidator
                 return Err(path, "AudioPlayer needs exactly one of url or path.");
             if (name == DysonA2uiTreeDiagram.ComponentName && DysonA2uiTreeDiagram.Check(c["nodes"]) is var (suffix, treeMessage))
                 return Err(path + suffix, treeMessage);
+            if (name == DysonA2uiImageGallery.ComponentName
+                && (DysonA2uiImageGallery.Check(c["images"]) ?? DysonA2uiImageGallery.Check(c["items"], "items")) is var (galleryAt, galleryMessage))
+            {
+                return Err(path + galleryAt, galleryMessage);
+            }
 
             // ponytail: the surface catalogId is not stored, so Dyson components are stamped with
             // @catalogId here; omitted means Dyson, so a later updateComponents on an explicit-basic

@@ -194,6 +194,33 @@ public class DysonRenderA2uiTests
     }
 
     [Fact]
+    public async Task ImageGallery_escaping_paths_fail_at_the_item_pointer_but_missing_file_renders()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        static JsonObject Gallery(params JsonNode[] images)
+        {
+            var create = Create("gal", new JsonObject { ["id"] = "root", ["component"] = "ImageGallery", ["images"] = new JsonArray(images) });
+            create["createSurface"]!["catalogId"] = DysonCatalog;
+            return create;
+        }
+
+        var parent = await RenderAsync(executor, Args(Gallery(JsonValue.Create("a.png")!, JsonValue.Create("../x.png")!)));
+        Assert.True(parent.IsError);
+        Assert.Contains("\"VALIDATION_FAILED\"", parent.Content, StringComparison.Ordinal);
+        Assert.Contains("/components/0/images/1", parent.Content, StringComparison.Ordinal);
+        Assert.Empty(Assert.Single(session.Turns).A2uiSurface!.Components);
+
+        var rooted = await RenderAsync(executor, Args(Gallery(JsonValue.Create("https://example.com/a.png")!, new JsonObject { ["path"] = "/etc/passwd" })));
+        Assert.True(rooted.IsError);
+        Assert.Contains("/components/0/images/1/path", rooted.Content, StringComparison.Ordinal);
+
+        var missing = await RenderAsync(executor, Args(Gallery(
+            JsonValue.Create("gone-" + Guid.NewGuid().ToString("N") + ".png")!,
+            new JsonObject { ["url"] = "https://example.com/a.png" })));
+        Assert.False(missing.IsError, missing.Content);
+    }
+
+    [Fact]
     public async Task AudioPlayer_escaping_path_fails_at_the_path_pointer_but_missing_file_renders()
     {
         var (session, executor) = await MetaExecutorAsync();

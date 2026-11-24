@@ -1,0 +1,227 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
+@using System.Text.Json.Nodes
+@using Microsoft.AspNetCore.Components.Web
+@using DysonHarness
+@implements IDisposable
+@inject DysonUiHost Host
+@inject DysonFilePreviewStore Previews
+
+@* ImageGallery: ordered url + path images as an inline carousel (one slide at a time). Path slides load through
+   DysonA2uiImage.LoadCardAsync (one Task.Run hop for the whole list) and show through the same-origin preview route; a bad slide
+   is text, never a surface error. Remote url slides never load on their own: one click on "Load N remote images" enables every
+   url that passes the AudioPlayer host rule, for this component instance only. Normalising, the host rule and stepping are
+   DysonA2uiImageGallery (Engine). A click on the image opens the shared modal via the surface view. Inline (inside a kit Button)
+   renders the plain current image only. *@
+<figure class="a2ui-igal" style="--a2ui-igal-h:@HeightPx" @attributes="Aria"
+        tabindex="@(Inline ? null : "0")"
+        role="@(Inline ? null : "group")"
+        aria-roledescription="@(Inline ? null : "carousel")"
+        @onkeydown="OnKeyDown">
+    @if (GalleryTitle() is { Length: > 0 } galleryTitle)
+    {
+        <div class="a2ui-igal__title">@galleryTitle</div>
+    }
+    @if (_items.Count == 0)
+    {
+        <div class="a2ui-igal__box a2ui-igal__box--note"><span class="a2ui-igal__text">No images</span></div>
+    }
+    else
+    {
+        var i = Math.Clamp(_index, 0, _items.Count - 1);
+        var item = _items[i];
+        var (src, text, remote) = Display(i);
+        var name = item.Name ?? "Image";
+        <div class="a2ui-igal__box @(src is null ? "a2ui-igal__box--note" : null)">
+            @if (src is null)
+            {
+                <span class="a2ui-igal__text">@name</span>
+                <span class="a2ui-igal__note">@text</span>
+            }
+            else if (Inline)
+            {
+                <img @key="i" src="@src" alt="@name" decoding="async" referrerpolicy="@(remote ? "no-referrer" : null)" @onerror="() => MarkFailed(i)" />
+            }
+            else
+            {
+                <button type="button"
+                        class="a2ui-igal__open"
+                        aria-label="@("Open gallery: " + name)"
+                        title="@(item.Title ?? name)"
+                        @onclick="OpenModal"
+                        @onclick:stopPropagation="true">
+                    <img @key="i" src="@src" alt="@name" decoding="async" referrerpolicy="@(remote ? "no-referrer" : null)" @onerror="() => MarkFailed(i)" />
+                    <span class="a2ui-igal__expand" aria-hidden="true">
+                        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+                            <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" fill="none" stroke="currentColor" stroke-width="1.5" />
+                        </svg>
+                    </span>
+                </button>
+            }
+            @if (src is not null && item.Title is { Length: > 0 } band)
+            {
+                <div class="a2ui-igal__title-band" aria-hidden="@(band == name ? "true" : null)">@band</div>
+            }
+        </div>
+        @if (!Inline)
+        {
+            <div class="a2ui-igal__bar">
+                <button type="button" class="btn btn-ghost" aria-label="Previous image" disabled="@(i == 0)" @onclick="() => Step(-1)">‹</button>
+                <span class="a2ui-igal__count mono" aria-live="polite">@((i + 1).ToString(CultureInfo.InvariantCulture)) / @_items.Count.ToString(CultureInfo.InvariantCulture)</span>
+                <button type="button" class="btn btn-ghost" aria-label="Next image" disabled="@(i == _items.Count - 1)" @onclick="() => Step(1)">›</button>
+                @if (_remoteCount > 0 && !_remoteOk)
+                {
+                    <button type="button" class="btn a2ui-igal__consent" @onclick="Consent">@A2uiRemoteImages.Label(_remoteCount, _hosts)</button>
+                }
+            </div>
+        }
+        @if (item.Caption is { Length: > 0 } caption)
+        {
+            <figcaption class="a2ui-igal__caption">@caption</figcaption>
+        }
+    }
+</figure>
+
+@code {
+    private IReadOnlyList<DysonA2uiGalleryItem> _items = [];
+    private DysonA2uiImageCard?[] _cards = [];
+    private string?[] _errors = [];
+    private string?[] _srcs = [];
+    private List<string> _previewIds = [];
+    private IReadOnlyList<string> _hosts = [];
+    private readonly HashSet<int> _failed = [];
+    private string? _key;
+    private int _version;
+    private int _index;
+    private int _remoteCount;
+    private bool _remoteOk;
+    private bool _disposed;
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public string? Id { get; set; }
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public Dictionary<string, object>? Aria { get; set; }
+
+    /// <summary>Rendered inside a kit Button: plain current image, no buttons, no icon, no tooltip (the band still shows).</summary>
+    [Parameter] public bool Inline { get; set; }
+
+    // Clamped int formatted invariant: no agent string reaches the style.
+    private string HeightPx => string.Create(CultureInfo.InvariantCulture, $"{DysonA2uiImageGallery.ClampHeight(A2uiProps.Int(Component["height"]))}px");
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var resolved = DysonA2uiBinding.ResolveValue(Component["images"] ?? Component["items"], View.Model, Scope);
+        var key = resolved?.ToJsonString();
+        if (string.Equals(key, _key, StringComparison.Ordinal))
+            return;
+
+        _key = key;
+        var version = ++_version;
+        ReleasePreviews();
+        _failed.Clear();
+        var items = DysonA2uiImageGallery.Normalize(resolved);
+        _items = items;
+        _index = Math.Clamp(_index, 0, Math.Max(0, items.Count - 1));
+        _cards = new DysonA2uiImageCard?[items.Count];
+        _errors = new string?[items.Count];
+        _srcs = new string?[items.Count];
+        _remoteCount = items.Count(i => i.Kind == DysonA2uiGalleryKind.Url && DysonA2uiImageGallery.IsLoadableUrl(i.Value));
+        _hosts = DysonA2uiImageGallery.RemoteHosts(items);
+
+        var workRoot = Host.FocusedSessionWorkRootPath;
+        // One thread-pool hop for every slide (rules_blazor_circuit); the guard below drops a stale result.
+        var loaded = await Task.Run(() => Task.WhenAll(items.Select(async item => item.Kind == DysonA2uiGalleryKind.Path
+            ? await DysonA2uiImage.LoadCardAsync(item.Value, null, workRoot)
+            : null)));
+        if (_disposed || version != _version)
+            return;
+
+        for (var n = 0; n < loaded.Length; n++)
+        {
+            if (loaded[n] is not { } result)
+                continue;
+            if (result.IsError)
+            {
+                _errors[n] = result.Error;
+                continue;
+            }
+
+            _cards[n] = result.Value;
+            var id = Previews.PutFile(result.Value.AbsolutePath, result.Value.ContentType);
+            _previewIds.Add(id);
+            _srcs[n] = DysonFilePreviewStore.UrlFor(id);
+        }
+    }
+
+    // (image src, text shown instead, true for a remote url).
+    private (string? Src, string? Text, bool Remote) Display(int i)
+    {
+        var item = _items[i];
+        if (_failed.Contains(i))
+            return (null, "Image could not be loaded", false);
+        switch (item.Kind)
+        {
+            case DysonA2uiGalleryKind.Path:
+                return _srcs[i] is { } src ? (src, null, false) : (null, _errors[i] ?? "Loading image…", false);
+            case DysonA2uiGalleryKind.Url:
+                if (!DysonA2uiImageGallery.IsLoadableUrl(item.Value))
+                    return (null, "Private or local address, not loaded", false);
+                return _remoteOk ? (item.Value, null, true) : (null, $"Remote image from {DysonA2uiLinks.Host(item.Value)}, not loaded", false);
+            default:
+                return (null, item.Value, false);
+        }
+    }
+
+    private void MarkFailed(int i) => _failed.Add(i);
+
+    private void Step(int delta) => _index = DysonA2uiImageGallery.Step(_index, delta, _items.Count, wrap: false);
+
+    private void Consent() => _remoteOk = true;
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (Inline || args.CtrlKey || args.MetaKey || args.AltKey)
+            return;
+        if (args.Key == "ArrowLeft")
+            Step(-1);
+        else if (args.Key == "ArrowRight")
+            Step(1);
+    }
+
+    private string GalleryTitle() => A2uiProps.String(View, Component["title"], Scope).Trim();
+
+    private void OpenModal()
+    {
+        if (Id is null || _items.Count == 0)
+            return;
+
+        var sources = new List<A2uiSlideSource>(_items.Count);
+        for (var n = 0; n < _items.Count; n++)
+        {
+            var item = _items[n];
+            var name = item.Name ?? "Image";
+            var caption = item.Caption ?? "";
+            var remote = item.Kind == DysonA2uiGalleryKind.Url && DysonA2uiImageGallery.IsLoadableUrl(item.Value) ? item.Value : null;
+            var note = Display(n) is var (_, text, _) ? text : null;
+            if (item.Kind == DysonA2uiGalleryKind.Url && remote is null)
+                note = "Private or local address, not loaded";
+            sources.Add(new A2uiSlideSource(new A2uiImageSlide(name, item.Title, caption, null, remote, null, note), _cards[n]));
+        }
+
+        View.OpenGallery(Id, GalleryTitle(), sources, Math.Clamp(_index, 0, _items.Count - 1), _remoteOk);
+    }
+
+    private void ReleasePreviews()
+    {
+        foreach (var id in _previewIds)
+            Previews.Remove(id);
+        _previewIds = [];
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        ReleasePreviews();
+    }
+}

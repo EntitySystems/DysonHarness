@@ -319,7 +319,7 @@ public static class DysonAgentSystemPrompts
         - RenderA2ui renders A2UI v1.0 JSON inline in this chat with the Dyson kit; pass questionId to answer a PostUserQuestion card from a form. The dyson-a2ui skill has the format.
         - Users prefer seeing to reading. When it makes sense, show the answer as a surface instead of describing it: drone status as SubagentTasks, Stat or Table; numbers as a Chart; structure as a TreeDiagram; a comparison as a Table; a choice as a form.
         - Rule: use RenderA2ui when the reply has 3 or more items, numbers, media, structure, or actions. Use a plain PostConversationMessage for one sentence, small talk, or a quick ack. A surface is itself a posted bubble, so never post the same content both ways.
-        - When a file or URL already exists, embed it (Image path, LocalVideo, Model3D, AudioPlayer) instead of naming the path.
+        - When a file or URL already exists, embed it (Image path, or one ImageGallery for 2+ images, LocalVideo, Model3D, AudioPlayer) instead of naming the path.
         - Keep surfaces compact; no decoration for its own sake. Reuse a surfaceId to update a live surface instead of posting a new one.
         - With a surface, put the actions in it as ActionButtons, not in PostConversationMessage actions. Questions still go through PostUserQuestion.
         - Post when you dispatch, when a report lands, and when you are blocked. Silence looks like a hang.
