@@ -51,7 +51,7 @@ public sealed class DysonVersionControlService : IDisposable
     private bool _detected;
     private string? _runsEtag;
     private readonly Dictionary<long, string?> _jobsEtag = new();
-    private readonly Dictionary<long, (int Attempt, DateTimeOffset UpdatedAt, IReadOnlyList<DysonPipelineJob> Jobs)> _jobsCache = new();
+    private readonly Dictionary<long, (int Attempt, DateTimeOffset UpdatedAt, IReadOnlyList<DysonPipelineJob> Jobs, bool Final)> _jobsCache = new();
     private readonly LinkedList<long> _wanted = new();
     private readonly HashSet<long> _wantedSet = new();
     private int _jobCursor;
@@ -756,13 +756,13 @@ public sealed class DysonVersionControlService : IDisposable
             {
                 if (!result.Value.NotModified)
                 {
-                    _jobsCache[run.Id] = (run.Attempt, run.UpdatedAt, result.Value.Items);
+                    _jobsCache[run.Id] = (run.Attempt, run.UpdatedAt, result.Value.Items, !IsActive(run));
                     _jobsEtag[run.Id] = result.Value.ETag;
                 }
                 else if (!IsActive(run) && _jobsCache.TryGetValue(run.Id, out var kept))
                 {
                     // Final fetch answered 304: the cached jobs are final; stamp them so the run is not refetched every tick.
-                    _jobsCache[run.Id] = (run.Attempt, run.UpdatedAt, kept.Jobs);
+                    _jobsCache[run.Id] = (run.Attempt, run.UpdatedAt, kept.Jobs, true);
                 }
 
                 if (_wantedSet.Remove(run.Id))
@@ -786,15 +786,15 @@ public sealed class DysonVersionControlService : IDisposable
 
     /// <summary>
     /// An active run is fetched when its cached jobs predate its (Attempt, UpdatedAt). A finished run is fetched only if
-    /// jobs were cached while it ran and are stale, or still show an active job (the run can finish without its
-    /// updated_at moving past the cached stamp): jobs cached as Running never outlive the run. A finished run never
-    /// fetched stays unfetched (no cost for history).
+    /// jobs were cached while it ran (not yet <c>Final</c>, i.e. fetched while it was finished; the run can finish without
+    /// its updated_at moving past the cached stamp) or are stale: jobs cached as Running never outlive the run, and a job
+    /// that legitimately stays Queued does not make it refetch forever. A finished run never fetched stays unfetched.
     /// </summary>
     private bool NeedsJobsLocked(DysonPipelineRun run)
     {
         if (!_jobsCache.TryGetValue(run.Id, out var cached))
             return IsActive(run);
-        return !Fresh(run) || (!IsActive(run) && cached.Jobs.Any(j => IsActive(j.State)));
+        return !Fresh(run) || (!IsActive(run) && !cached.Final);
     }
 
     private bool Fresh(DysonPipelineRun run) =>

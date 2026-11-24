@@ -471,6 +471,52 @@ public sealed class DysonVersionControlServiceTests
         Assert.Equal(DysonPipelineState.Succeeded, Assert.Single(h.Service.Snapshot!.Jobs[1]).State);
     }
 
+    [Fact]
+    public async Task A_finished_run_with_a_job_that_stays_queued_gets_one_final_fetch_not_one_per_tick()
+    {
+        var provider = new FakeProvider { Runs = [Run(1, DysonPipelineState.Running)] };
+        await using var h = Harness.Create(provider);
+        var baseline = h.Listen();
+        using var lease = h.Service.WatchEvents();
+        await baseline.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        provider.Runs = [Run(1, DysonPipelineState.Cancelled)];
+        provider.JobsFor = runId => [new(runId * 10, runId, "build", DysonPipelineState.Queued, "Queued", null, null, "u")];
+        var changed = h.Listen();
+        await h.Clock.AdvanceOneAsync(TimeSpan.FromSeconds(15));
+        await changed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(DysonPipelineState.Queued, Assert.Single(h.Service.Snapshot!.Jobs[1]).State);
+
+        var calls = provider.JobsCalls;
+        await h.Clock.AdvanceOneAsync(TimeSpan.FromSeconds(120));
+        await h.Clock.SettleAsync();
+        await h.Clock.AdvanceOneAsync(TimeSpan.FromSeconds(120));
+        await h.Clock.SettleAsync();
+        Assert.Equal(calls, provider.JobsCalls);
+    }
+
+    [Fact]
+    public async Task A_304_on_the_final_job_fetch_of_a_finished_run_ends_the_refetching()
+    {
+        var provider = new FakeProvider { Runs = [Run(1, DysonPipelineState.Running)] };
+        await using var h = Harness.Create(provider);
+        var baseline = h.Listen();
+        using var lease = h.Service.WatchEvents();
+        await baseline.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        provider.Runs = [Run(1, DysonPipelineState.Succeeded)];
+        provider.JobsNotModified = true;
+        var changed = h.Listen();
+        await h.Clock.AdvanceOneAsync(TimeSpan.FromSeconds(15));
+        await changed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await h.Clock.SettleAsync();
+
+        var calls = provider.JobsCalls;
+        await h.Clock.AdvanceOneAsync(TimeSpan.FromSeconds(120));
+        await h.Clock.SettleAsync();
+        Assert.Equal(calls, provider.JobsCalls);
+    }
+
     private static DysonPipelineRun Run(long id, DysonPipelineState state, DateTimeOffset? updatedAt = null) => new(
         id, "ci", "title", "main", "abcdef1234567", "push", (int)id, 1, state, state.ToString(),
         T0, T0, updatedAt ?? T0, $"https://github.com/o/r/actions/runs/{id}");
@@ -675,6 +721,7 @@ public sealed class DysonVersionControlServiceTests
         public Func<long, Result<DysonPipelineJob, DysonPipelineError>>? JobById { get; set; }
         public Func<long, DysonPipelineError?>? JobsError { get; set; }
         public Func<long, IReadOnlyList<DysonPipelineJob>>? JobsFor { get; set; }
+        public bool JobsNotModified { get; set; }
 
         public Task<Result<DysonPipelineRun, DysonPipelineError>> GetRunAsync(
             DysonPipelineTarget target, long runId, CancellationToken ct)
@@ -738,7 +785,7 @@ public sealed class DysonVersionControlServiceTests
                 new(runId * 10, runId, "build", DysonPipelineState.Running, "Running", T0, null, "https://github.com/o/r/job"),
             ];
             return Task.FromResult(Result<DysonPipelineFetch<DysonPipelineJob>, DysonPipelineError>.AsValue(
-                new DysonPipelineFetch<DysonPipelineJob>(false, jobs, "j" + runId, null, null)));
+                new DysonPipelineFetch<DysonPipelineJob>(JobsNotModified, JobsNotModified ? [] : jobs, "j" + runId, null, null)));
         }
     }
 }
