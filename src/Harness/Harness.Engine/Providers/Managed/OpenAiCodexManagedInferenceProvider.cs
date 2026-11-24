@@ -11,16 +11,19 @@ public sealed record OpenAiCodexSwitchOutcome(Guid ProviderId, bool LoginImporte
 /// <summary>
 /// Native ChatGPT Codex provider for Settings → Models (no CLIProxy). Scoped: needs the subject for the
 /// provider row and the consent flag. Tokens live in <see cref="OpenAiCodexAuthService"/>; the provider row
-/// only carries the opaque <c>dyson-openai-codex:&lt;guid&gt;</c> handle as its ApiKey. The engine never
-/// opens a browser (the UI renders the authorize link), so <c>openBrowser</c> is ignored.
+/// only carries the opaque <c>dyson-openai-codex:&lt;guid&gt;</c> handle as its ApiKey. With <c>openBrowser</c>
+/// Begin launches the system browser (<see cref="DysonOsLauncher"/>) after the listener is bound; a failed launch is
+/// reported on <see cref="ManagedConnectionBegin.BrowserLaunchError"/> and the card link still works.
 /// </summary>
 public sealed class OpenAiCodexManagedInferenceProvider(
     OpenAiCodexAuthService auth,
     HttpClient http,
     IDysonModelRepository models,
     IDysonSubjectContext subject,
-    IDysonSubjectSettingsRepository subjectSettings) : IManagedConnectionProvider
+    IDysonSubjectSettingsRepository subjectSettings,
+    Func<string, Task<VoidResult<string>>>? openUrl = null) : IManagedConnectionProvider
 {
+    private readonly Func<string, Task<VoidResult<string>>> _openUrl = openUrl ?? DysonOsLauncher.OpenUrlAsync;
     private readonly OpenAiCodexAuthService _auth = auth ?? throw new ArgumentNullException(nameof(auth));
     private readonly HttpClient _http = http ?? throw new ArgumentNullException(nameof(http));
     private readonly IDysonModelRepository _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -77,12 +80,17 @@ public sealed class OpenAiCodexManagedInferenceProvider(
         if (started.IsError)
             return Result<ManagedConnectionBegin, string>.AsError(started.Error);
 
-        // Flow "redirect": the UI opens the link and awaits Complete, which waits on the listener.
-        return Result<ManagedConnectionBegin, string>.AsValue(new ManagedConnectionBegin(
+        // Flow "redirect": the listener is already bound, so opening the browser now cannot beat it.
+        // The UI awaits Complete, which waits on the listener.
+        var begin = new ManagedConnectionBegin(
             started.Value.AuthorizeUrl,
             started.Value.State,
             UserCode: null,
-            Flow: "redirect"));
+            Flow: "redirect");
+        if (openBrowser)
+            begin = await begin.OpenInBrowserAsync(_openUrl).ConfigureAwait(false);
+
+        return Result<ManagedConnectionBegin, string>.AsValue(begin);
     }
 
     public async Task<Result<ManagedConnectionComplete, string>> CompleteConnectionAsync(
@@ -212,7 +220,8 @@ public sealed class OpenAiCodexManagedInferenceProvider(
             }
         }, cancellationToken);
 
-    public Task CancelConnectionAsync() => _auth.CancelAsync();
+    /// <summary>Drop the pending login (and release port 1455). With <paramref name="state"/>, only that login.</summary>
+    public Task CancelConnectionAsync(string? state = null) => _auth.CancelAsync(state);
 
     /// <summary>Sign out: deletes the stored credential; provider row and slugs stay.</summary>
     public async Task<VoidResult<string>> DisconnectAsync(CancellationToken cancellationToken = default)

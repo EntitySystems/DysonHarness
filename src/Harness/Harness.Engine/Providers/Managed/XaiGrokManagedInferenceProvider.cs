@@ -11,8 +11,9 @@ public sealed record XaiSwitchOutcome(Guid ProviderId, bool LoginImported, strin
 /// <summary>
 /// Native xAI/Grok Build provider for Settings → Models (no CLIProxy). Scoped: needs the subject for the
 /// provider row and the consent flag. Tokens live in <see cref="XaiGrokAuthService"/>; the provider row only
-/// carries the opaque <c>dyson-xai:&lt;guid&gt;</c> handle as its ApiKey. The engine never opens a browser
-/// (the UI renders the verification link), so <c>openBrowser</c> is ignored.
+/// carries the opaque <c>dyson-xai:&lt;guid&gt;</c> handle as its ApiKey. With <c>openBrowser</c> Begin launches the
+/// system browser (<see cref="DysonOsLauncher"/>); a failed launch is reported on
+/// <see cref="ManagedConnectionBegin.BrowserLaunchError"/> and the card link still works.
 /// </summary>
 public sealed class XaiGrokManagedInferenceProvider(
     XaiGrokAuthService auth,
@@ -20,8 +21,10 @@ public sealed class XaiGrokManagedInferenceProvider(
     IDysonModelRepository models,
     IDysonSubjectContext subject,
     IDysonSubjectSettingsRepository subjectSettings,
-    XaiGrokClientOptions? options = null) : IManagedConnectionProvider
+    XaiGrokClientOptions? options = null,
+    Func<string, Task<VoidResult<string>>>? openUrl = null) : IManagedConnectionProvider
 {
+    private readonly Func<string, Task<VoidResult<string>>> _openUrl = openUrl ?? DysonOsLauncher.OpenUrlAsync;
     private readonly XaiGrokAuthService _auth = auth ?? throw new ArgumentNullException(nameof(auth));
     private readonly HttpClient _http = http ?? throw new ArgumentNullException(nameof(http));
     private readonly IDysonModelRepository _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -90,13 +93,17 @@ public sealed class XaiGrokManagedInferenceProvider(
         if (url is null)
             return Result<ManagedConnectionBegin, string>.AsError("xAI returned no usable https verification link.");
 
-        return Result<ManagedConnectionBegin, string>.AsValue(new ManagedConnectionBegin(
+        var begin = new ManagedConnectionBegin(
             url,
             s.State,
             s.UserCode,
             "device",
             s.ExpiresInSeconds,
-            s.IntervalSeconds));
+            s.IntervalSeconds);
+        if (openBrowser)
+            begin = await begin.OpenInBrowserAsync(_openUrl).ConfigureAwait(false);
+
+        return Result<ManagedConnectionBegin, string>.AsValue(begin);
     }
 
     public async Task<Result<ManagedConnectionComplete, string>> CompleteConnectionAsync(

@@ -125,8 +125,11 @@ public sealed class OpenAiCodexAuthService(
             : Result<string, string>.AsValue(credential.Email ?? "");
     }
 
-    /// <summary>Drop the pending listener (user pressed Cancel).</summary>
-    public Task CancelAsync() => DropPendingAsync();
+    /// <summary>
+    /// Drop the pending listener (user pressed Cancel) so port 1455 is free for a retry. With <paramref name="state"/>,
+    /// only that login: a late cancel from an old attempt must not kill the listener of a retry already started.
+    /// </summary>
+    public Task CancelAsync(string? state = null) => DropPendingAsync(state);
 
     /// <summary>
     /// Current access token for <paramref name="handle"/>, refreshing within
@@ -281,12 +284,15 @@ public sealed class OpenAiCodexAuthService(
             : parsed;
     }
 
-    private async Task DropPendingAsync()
+    private async Task DropPendingAsync(string? onlyState = null)
     {
         PendingLogin? pending;
         lock (_pendingLock)
         {
             pending = _pending;
+            if (onlyState is not null && !string.Equals(pending?.State, onlyState, StringComparison.Ordinal))
+                return;
+
             _pending = null;
         }
 

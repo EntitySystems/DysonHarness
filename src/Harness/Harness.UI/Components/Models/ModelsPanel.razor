@@ -1,6 +1,7 @@
 @namespace Harness.UI.Components.Models
 @using DysonHarness
 @using Harness.UI.Services
+@using Microsoft.Extensions.Options
 @implements IDisposable
 @inject IDysonModelRepository ModelStore
 @inject IHttpClientFactory HttpClientFactory
@@ -8,6 +9,7 @@
 @inject ManagedInferenceProviderCatalog ManagedCatalog
 @inject ConfirmDialogService ConfirmDialog
 @inject DysonUiHost Host
+@inject IOptions<DysonHostingOptions> Hosting
 
 <div class="models-panel panel">
     <div class="tool-panel__title">Providers &amp; slugs</div>
@@ -444,8 +446,11 @@
         _downloadProgress = null;
         try
         {
-            // Native: the engine never opens a browser; the card renders the verification link.
-            var begin = await managed.BeginConnectionAsync(openBrowser: !nativeXai && !nativeCodex, CreateDownloadProgress());
+            // Local: the engine opens the system browser (DysonOsLauncher). Cloud: the server's browser is the wrong
+            // machine, so only the card link opens it. A failed launch is shown and the card link keeps working.
+            var begin = await managed.BeginConnectionAsync(
+                openBrowser: Hosting.Value.Mode != DysonHostingMode.Cloud,
+                CreateDownloadProgress());
             if (begin.IsError)
             {
                 _error = begin.Error;
@@ -454,6 +459,8 @@
             }
 
             _pendingAuth[managed.ManagedSource] = begin.Value;
+            if (begin.Value.BrowserLaunchError is { } launchError)
+                _error = $"Could not open the browser ({launchError}). Use the sign-in link on the card.";
             if (nativeXai)
             {
                 // Cancel button takes over from the busy spinner while the user approves in the browser.
@@ -879,7 +886,7 @@
             if (!completed)
             {
                 _pendingAuth.Remove(managed.ManagedSource);
-                await ManagedCatalog.OpenAiCodex.CancelConnectionAsync();
+                await ManagedCatalog.OpenAiCodex.CancelConnectionAsync(begin.State);
             }
 
             if (ReferenceEquals(_codexCts, cts))
