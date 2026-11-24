@@ -1,0 +1,196 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
+@using System.Text.Json.Nodes
+@using DysonHarness
+@using Harness.UI.Components.Files
+@implements IDisposable
+@inject DysonUiHost Host
+
+@* DirectoryView.path: a work-relative folder card. Card data is DysonA2uiDirectoryView (Engine): the listing is read off the circuit on
+   render and when path changes, never persisted. Header: folder icon, title, path, Open in Explorer/Finder, expand (opens the modal
+   owned by A2uiSurfaceView). Body: the rows that fit the height, then "+N more". A file row dispatches open_file: through
+   View.OpenAsync; a folder row opens the modal at that folder. A bad or missing folder renders as card text. *@
+<section class="a2ui-dir" style="--a2ui-dir-h:@HeightPx" aria-label="@("Folder " + Title())" @attributes="Aria">
+    <div class="a2ui-dir__header">
+        <svg class="a2ui-dir__folder" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+            <path d="@A2uiDirectoryFormat.IconPath(DysonA2uiEntryKind.Folder)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <span class="a2ui-dir__title">@Title()</span>
+        @if (_listing is { } head)
+        {
+            var shown = PathText(head);
+            var openLabel = FileTreePanel.OpenInFileManagerLabel;
+            <span class="a2ui-dir__path mono" title="@shown">@shown</span>
+            <button type="button"
+                    class="btn btn-ghost a2ui-dir__icon-btn"
+                    aria-label="@openLabel"
+                    title="@openLabel"
+                    disabled="@View.OpenBusy"
+                    @onclick="() => View.OpenAsync(head.OpenFolderFunc)">
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
+                    <path d="@A2uiIcons.Path("external-link")" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            </button>
+            <button type="button"
+                    class="btn btn-ghost a2ui-dir__icon-btn"
+                    aria-label="@("Expand folder " + Title())"
+                    aria-haspopup="dialog"
+                    title="Expand"
+                    @onclick="Expand">
+                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+                    <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" fill="none" stroke="currentColor" stroke-width="1.5" />
+                </svg>
+            </button>
+        }
+    </div>
+    @if (_listing is { } listing)
+    {
+        var visible = DysonA2uiDirectoryView.VisibleRows(_height);
+        var entries = listing.Entries;
+        var more = entries.Count > visible;
+        var rows = more ? visible - 1 : entries.Count;
+        var hidden = listing.TotalSeen - rows;
+        if (entries.Count == 0)
+        {
+            <div class="a2ui-dir__note">Empty folder</div>
+        }
+        else
+        {
+            <ul class="a2ui-dir__list" role="list">
+                @for (var i = 0; i < rows; i++)
+                {
+                    var entry = entries[i];
+                    <li>
+                        <button type="button"
+                                class="a2ui-dir__row"
+                                title="@entry.Name"
+                                aria-label="@A2uiDirectoryFormat.Label(entry)"
+                                disabled="@(entry.Blocked || (!entry.IsDirectory && View.OpenBusy))"
+                                @onclick="() => OpenEntryAsync(entry)">
+                            <svg class="a2ui-dir__icon @(entry.IsDirectory ? "a2ui-dir__icon--folder" : null)" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+                                <path d="@A2uiDirectoryFormat.IconPath(entry.Kind)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                            <span class="a2ui-dir__name">@entry.Name</span>
+                            @if (entry.Blocked)
+                            {
+                                <span class="a2ui-dir__blocked">link outside work directory</span>
+                            }
+                            else
+                            {
+                                <span class="a2ui-dir__meta a2ui-dir__size">@(entry.Size is { } size ? A2uiDirectoryFormat.Size(size) : "")</span>
+                                <span class="a2ui-dir__meta a2ui-dir__modified">@A2uiDirectoryFormat.Modified(entry.ModifiedUtc)</span>
+                            }
+                        </button>
+                    </li>
+                }
+                @if (more)
+                {
+                    <li>
+                        <button type="button"
+                                class="a2ui-dir__row a2ui-dir__row--more"
+                                aria-label="@($"{hidden} more items, open folder")"
+                                aria-haspopup="dialog"
+                                @onclick="Expand">
+                            <span class="a2ui-dir__name">+@hidden more</span>
+                        </button>
+                    </li>
+                }
+            </ul>
+        }
+    }
+    else
+    {
+        <div class="a2ui-dir__note">@(_error ?? "Loading folder…")</div>
+    }
+</section>
+
+@code {
+    private DysonA2uiDirectoryListing? _listing;
+    private string? _error;
+    private string? _path;
+    private int _height = DysonA2uiDirectoryView.DefaultHeight;
+    private CancellationTokenSource? _cts;
+    private bool _disposed;
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+    [Parameter, EditorRequired] public string? Id { get; set; }
+    [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
+    [Parameter] public string Scope { get; set; } = "";
+    [Parameter] public Dictionary<string, object>? Aria { get; set; }
+
+    // Clamped int formatted invariant: no agent string reaches the style.
+    private string HeightPx => string.Create(CultureInfo.InvariantCulture, $"{_height}px");
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _height = Math.Clamp(A2uiProps.Int(Component["height"]) ?? DysonA2uiDirectoryView.DefaultHeight, 120, 800);
+
+        var path = A2uiProps.Str(Component["path"]);
+        if (string.Equals(path, _path, StringComparison.Ordinal))
+            return;
+
+        if (_path is not null && Id is not null)
+            View.ForgetDirectory(Id);
+        _path = path;
+        _listing = null;
+        _error = null;
+        CancelLoad();
+        var cts = _cts = new CancellationTokenSource();
+        // All directory IO runs on the thread pool inside the Engine; the circuit only awaits.
+        var loaded = await DysonA2uiDirectoryView.LoadAsync(path, Host.FocusedSessionWorkRootPath, cts.Token);
+        if (_disposed || !ReferenceEquals(cts, _cts) || !string.Equals(path, _path, StringComparison.Ordinal))
+            return;
+
+        if (loaded.IsError)
+            _error = loaded.Error;
+        else
+            _listing = loaded.Value;
+    }
+
+    private string Title()
+    {
+        var title = Component["title"] is null ? "" : A2uiProps.String(View, Component["title"], Scope);
+        if (!string.IsNullOrWhiteSpace(title))
+            return title.Trim();
+        if (_listing is { } listing)
+            return listing.Name;
+
+        var segment = (_path ?? "").TrimEnd('/', '\\');
+        segment = segment[(segment.LastIndexOfAny(['/', '\\']) + 1)..];
+        return segment is "" or "." ? "Folder" : segment;
+    }
+
+    private static string PathText(DysonA2uiDirectoryListing listing) => listing.RelativePath.Length == 0 ? "." : listing.RelativePath;
+
+    // The modal reopens where the user last was on this card (e.g. after opening a file), else at the card's folder.
+    private void Expand()
+    {
+        if (_listing is { } listing && Id is not null)
+            View.OpenDirectory(Id, Title(), View.DirectoryStart(Id, listing.RelativePath));
+    }
+
+    private Task OpenEntryAsync(DysonA2uiDirectoryEntry entry)
+    {
+        if (entry.Blocked)
+            return Task.CompletedTask;
+        if (!entry.IsDirectory)
+            return View.OpenAsync(entry.OpenFunc);
+
+        if (Id is not null)
+            View.OpenDirectory(Id, Title(), entry.RelativePath);
+        return Task.CompletedTask;
+    }
+
+    private void CancelLoad()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        CancelLoad();
+    }
+}

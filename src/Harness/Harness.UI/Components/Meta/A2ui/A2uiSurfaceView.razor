@@ -25,6 +25,7 @@
         <A2uiModel3DModal Item="_model3d" OnClose="CloseModel3D" />
     }
     <A2uiImageModal View="this" Item="_image" OnClose="CloseImage" />
+    <A2uiDirectoryModal View="this" Item="_directory" OnClose="CloseDirectory" />
 </div>
 
 @code {
@@ -40,6 +41,8 @@
     private string? _model3dPreviewId;
     private A2uiImageOpen? _image;
     private List<string> _imagePreviewIds = [];
+    private A2uiDirectoryOpen? _directory;
+    private readonly Dictionary<string, string> _directoryLast = new(StringComparer.Ordinal);
 
     [Parameter, EditorRequired] public DysonA2uiSurface Surface { get; set; } = default!;
 
@@ -127,6 +130,7 @@
     internal void OpenModel3D(string nodeId, string title, DysonA2uiModel3DCard card)
     {
         ReleaseImage();
+        _directory = null;
         Previews.Remove(_model3dPreviewId);
         _model3dPreviewId = Previews.PutFile(card.AbsolutePath, card.ContentType);
         _model3d = new A2uiModel3DOpen(nodeId, title, card, DysonFilePreviewStore.UrlFor(_model3dPreviewId));
@@ -154,6 +158,7 @@
         Previews.Remove(_model3dPreviewId);
         _model3dPreviewId = null;
         ReleaseImage();
+        _directory = null;
         var slides = new List<A2uiImageSlide>(sources.Count);
         foreach (var (slide, card) in sources)
         {
@@ -171,6 +176,36 @@
         if (slides.Count == 0)
             return;
         _image = new A2uiImageOpen(nodeId, title, slides, Math.Clamp(index, 0, slides.Count - 1), remoteConsented);
+        _render = true;
+        StateHasChanged();
+    }
+
+    /// <summary>Opens the folder modal at <paramref name="relativePath"/> (one expanded item at a time) and remembers it as this card's last folder.</summary>
+    internal void OpenDirectory(string nodeId, string title, string relativePath)
+    {
+        _model3d = null;
+        Previews.Remove(_model3dPreviewId);
+        _model3dPreviewId = null;
+        ReleaseImage();
+        _directoryLast[nodeId] = relativePath;
+        _directory = new A2uiDirectoryOpen(nodeId, title, relativePath);
+        _render = true;
+        StateHasChanged();
+    }
+
+    /// <summary>The modal's current folder for a card; no re-render.</summary>
+    internal void RememberDirectory(string nodeId, string relativePath) => _directoryLast[nodeId] = relativePath;
+
+    /// <summary>Where the card's expand button opens: the last folder the modal showed for that node (so it returns there after a file open), else the card's folder.</summary>
+    internal string DirectoryStart(string? nodeId, string cardRelativePath) =>
+        nodeId is not null && _directoryLast.TryGetValue(nodeId, out var last) ? last : cardRelativePath;
+
+    /// <summary>The card's path changed: its remembered folder no longer applies.</summary>
+    internal void ForgetDirectory(string nodeId) => _directoryLast.Remove(nodeId);
+
+    private void CloseDirectory()
+    {
+        _directory = null;
         _render = true;
         StateHasChanged();
     }
@@ -249,6 +284,15 @@
             && A2uiProps.Str(Component(openImage.NodeId)?["component"]) is not (DysonA2uiImage.ComponentName or DysonA2uiImageGallery.ComponentName))
         {
             ReleaseImage();
+            _render = true;
+        }
+
+        // The open folder's node is gone (deleteSurface, replaced component): close the modal.
+        if (_directory is { } openDirectory
+            && A2uiProps.Str(Component(openDirectory.NodeId)?["component"]) != DysonA2uiDirectoryView.ComponentName)
+        {
+            _directoryLast.Remove(openDirectory.NodeId);
+            _directory = null;
             _render = true;
         }
 

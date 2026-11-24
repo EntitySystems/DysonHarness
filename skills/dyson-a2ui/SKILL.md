@@ -12,7 +12,7 @@ description: >-
 
 - Use `RenderA2ui` often: whenever a component would clarify or structure what you show (status of several drones, a plan summary with links, a comparison, a checklist, a form).
 - Use plain `PostConversationMessage` for a single sentence or small talk.
-- Users prefer to see, not read. When a file or URL exists, embed it (`Image` path, one `ImageGallery` for 2+ images, `AudioPlayer`, `LocalVideo`, `Model3D`). Draw data as a `Chart`, `TreeDiagram` or `SubagentTasks` instead of describing it in text.
+- Users prefer to see, not read. When a file or URL exists, embed it (`Image` path, one `ImageGallery` for 2+ images, `AudioPlayer`, `LocalVideo`, `Model3D`, `DirectoryView` for a folder). Draw data as a `Chart`, `TreeDiagram` or `SubagentTasks` instead of describing it in text.
 - Use `PostUserQuestion` for a question. The host already draws its card as A2UI.
 - With a surface, put the actions in the surface as `ActionButton`s (section 6c), not in PostConversationMessage `actions`.
 
@@ -25,7 +25,7 @@ description: >-
 - Stable UAX#31 `surfaceId` (e.g. `deploy_form`; no `dyson_` prefix).
 - `createSurface {surfaceId, catalogId?, components, dataModel?}` once; exactly one `"id":"root"`, every child id must exist.
 - Then `updateComponents {surfaceId, components}` (same id replaces) / `updateDataModel {surfaceId, path?, value}` (RFC 6901, default `/`; `null` deletes). Re-create is `INTEGRITY_ERROR`; `deleteSurface {surfaceId}` drops it.
-- `ActionButton` / `QuestionSlot` / `LocalVideo` / `Model3D` / `PipelineRun` / `SubagentTasks` / `TreeDiagram` are Dyson catalog components. They work with `catalogId` omitted (or set to `a2ui://dyson/catalogs/v1/catalog.json`). Only an explicit basic surface `catalogId` or component `"@catalogId"` rejects them. No component needs `@catalogId`.
+- `ActionButton` / `QuestionSlot` / `LocalVideo` / `Model3D` / `DirectoryView` / `PipelineRun` / `SubagentTasks` / `TreeDiagram` are Dyson catalog components. They work with `catalogId` omitted (or set to `a2ui://dyson/catalogs/v1/catalog.json`). Only an explicit basic surface `catalogId` or component `"@catalogId"` rejects them. No component needs `@catalogId`.
 - The CopilotKit playground id `https://copilotkit.ai/a2ui/catalogs/playground/v1` is accepted as an alias of the Dyson catalog.
 
 ## 4. Kit
@@ -41,7 +41,7 @@ Required props in **bold**. Full props per component: [reference.md](reference.m
 | Charts | `Chart` (**data**; chartType, xKey, series), `BarChart`, `LineChart`, `AreaChart`, `PieChart`, `Sparkline` (**data**) — section 4b |
 | Media | `Image` (exactly one of **url** / **path**; height 120..800; title band; 2+ images → one ImageGallery, never several Image components), `Icon` (**name**), `Favicon`, `Video`/`VideoEmbed` (**url**), `AudioPlayer` (exactly one of **url** / **path**; section 6b2d), `ImageGallery` (**images**: url or path, ordered, ≤ 50; title, height; 2+ images → one ImageGallery, never several Image components; section 6b2c2), `ImageGrid` (images; placeholders only), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
 | Overlay | `Popover` (children = [PopoverTrigger, PopoverContent]), `Modal` (**trigger**, **content**), `FlashcardFlip` (**front**, **back**), `PulseIndicator` |
-| Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `Model3D` (**path**; title, height 160..800), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest), `SubagentTasks` (**agentId** integer = a drone/explore/review's agentId; the host fills the title, the X/N todo pill and the running state, live), `TreeDiagram` (**nodes** nested `{id, title, text?, tags?[{label, color red|green|accent}], children?}`; flow vertical|horizontal; title) |
+| Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `Model3D` (**path**; title, height 160..800), `DirectoryView` (**path** folder; title, height 120..800), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest), `SubagentTasks` (**agentId** integer = a drone/explore/review's agentId; the host fills the title, the X/N todo pill and the running state, live), `TreeDiagram` (**nodes** nested `{id, title, text?, tags?[{label, color red|green|accent}], children?}`; flow vertical|horizontal; title) |
 
 `weight` on direct children of Row/Column/Box/GridItem; `@accessibility` on any component. Parent rules: GridItem under Grid, FlowItem under Flow, CarouselItem under Carousel, TableRow under Table/TableSection, TableCell under TableRow. `Pressable`, like `Button`, needs a question-bound surface.
 
@@ -162,6 +162,14 @@ An inline three.js viewer for a `.glb` or `.fbx` file in the work directory: dra
 ```json
 {"id":"clip","component":"AudioPlayer","path":"media/standup.mp3","title":"Stand-up recording","caption":"Nov 23"}
 {"id":"pod","component":"AudioPlayer","url":"https://example.com/ep1.mp3","title":"Episode 1"}
+```
+
+## 6b2e. Folder (DirectoryView)
+
+A card for a folder in the work directory: folder name and path, the first entries (folders first, then by name; as many as fit `height`) and "+N more". `path` is a literal work-relative folder (`.` is the work root); `title` defaults to the folder name; `height` 120..800 px (default 240). The expand icon opens a navigable modal (open subfolders, Up, breadcrumb, sort by name / size / modified, refresh). A file opens in the Dyson file viewer; "Open in Explorer" opens the folder in the OS file manager. A rooted or `..` path, or one that escapes the work directory, is `VALIDATION_FAILED`; a missing folder, a file, or an unreadable folder renders as card text. Links that leave the work directory are shown blocked. The listing is a snapshot read when the card renders (Refresh in the modal). `DirectoryView` counts 0 toward the 8 actions per surface.
+
+```json
+{"id":"src","component":"DirectoryView","path":"src/Harness","title":"Harness sources","height":280}
 ```
 
 ## 6b3. Subagent tasks (SubagentTasks)

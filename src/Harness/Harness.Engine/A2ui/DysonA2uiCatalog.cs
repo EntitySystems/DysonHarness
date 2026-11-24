@@ -340,6 +340,10 @@ public static class DysonA2uiCatalog
                 ("path", new(DysonA2uiPropKind.Label, Required: true)),
                 ("title", new(DysonA2uiPropKind.DynamicString)),
                 ("height", Int(160, 800))),
+            [DysonA2uiDirectoryView.ComponentName] = Dyson(
+                ("path", new(DysonA2uiPropKind.Label, Required: true)),
+                ("title", new(DysonA2uiPropKind.DynamicString)),
+                ("height", Int(120, 800))),
             ["ChoicePicker"] = Kit(true,
                 ("options", new(DysonA2uiPropKind.Options, Required: true)),
                 ("value", new(DysonA2uiPropKind.DynamicStringList, Required: true)),

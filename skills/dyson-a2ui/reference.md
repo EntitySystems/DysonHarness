@@ -133,6 +133,7 @@ All charts also take title, subtitle, height 120..480, format number/currency/pe
 | QuestionSlot | **questionId** |
 | LocalVideo | **path** (work-relative); title |
 | Model3D | **path** (work-relative `.glb` / `.fbx`); title; height 160..800 (default 320) |
+| DirectoryView | **path** (work-relative folder, `.` = work root; literal; rooted / `..` rejected); title; height 120..800 (default 240). Card lists top entries + "+N more"; expand opens a navigable modal; files open in the file viewer; counts 0 toward the 8 actions |
 | PipelineRun | exactly one of runId (integer ≥1) or jobIds (1..30 distinct integers); literals only |
 | TreeDiagram | **nodes** (nested `{id, title, text?, tags?[{label, color red\|green\|accent}] ≤6, children?}`; ≤100 nodes, depth ≤12, unique ids, literals only); flow vertical\|horizontal; title |
 | SubagentTasks | **agentId** (integer ≥1, literal; your direct child). Row opens the agent's session; a "Show N agents" button expands its own sub-agents (host-filled, no props) |

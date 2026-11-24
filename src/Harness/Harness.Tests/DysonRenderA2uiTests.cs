@@ -180,6 +180,27 @@ public class DysonRenderA2uiTests
     }
 
     [Fact]
+    public async Task RenderA2ui_DirectoryView_escaping_path_fails_at_pointer_but_missing_folder_renders()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        foreach (var path in new[] { "../x", Path.Combine(Path.GetTempPath(), "x") })
+        {
+            var bad = await RenderAsync(executor, Args(VideoSurface("dir", path, "DirectoryView")));
+            Assert.True(bad.IsError, path);
+            Assert.Contains("\"VALIDATION_FAILED\"", bad.Content, StringComparison.Ordinal);
+            Assert.Contains("/components/0/path", bad.Content, StringComparison.Ordinal);
+            Assert.Empty(Assert.Single(session.Turns).A2uiSurface!.Components);
+        }
+
+        // "." (the work root) and a missing folder are card text at render time, not a tool error.
+        foreach (var path in new[] { ".", "missing/dir-" + Guid.NewGuid().ToString("N") })
+        {
+            var ok = await RenderAsync(executor, Args(VideoSurface("dir_" + Guid.NewGuid().ToString("N"), path, "DirectoryView")));
+            Assert.False(ok.IsError, ok.Content);
+        }
+    }
+
+    [Fact]
     public async Task Image_escaping_path_fails_at_the_path_pointer_but_missing_file_renders()
     {
         var (session, executor) = await MetaExecutorAsync();

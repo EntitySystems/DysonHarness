@@ -85,6 +85,20 @@ public sealed partial class DysonWorkspaceToolExecutor
             }
         }
 
+        // DirectoryView.path follows open_folder: ("." is the work root, which open_file: rejects).
+        foreach (var (pointer, path) in DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiDirectoryView.ComponentName))
+        {
+            var resolved = await DysonA2uiDirectoryView.ResolveRelativeAsync(path, WorkRoot, cancellationToken).ConfigureAwait(false);
+            if (resolved.IsError)
+            {
+                return A2uiError(
+                    call,
+                    new DysonA2uiError(DysonA2uiProtocol.ValidationFailed, surfaceId, pointer, resolved.Error),
+                    questionId,
+                    message);
+            }
+        }
+
         var applied = _session.TryApplyA2ui(parsedMessages.Value, questionId, message);
         if (applied.IsError)
             return A2uiError(call, applied.Error, questionId, message);
