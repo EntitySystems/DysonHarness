@@ -16,6 +16,8 @@
 .a2ui-image-modal__stage {
   position: relative;
   display: grid;
+  /* Definite track so the img's max-width/max-height: 100% resolve (an auto track lets a large image overflow the stage). */
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
   height: max(200px, calc(min(90vh, 960px) - 330px));
   border-radius: var(--radius-md);
@@ -156,8 +158,10 @@
 
 .a2ui-image-modal__thumb img {
   display: block;
-  height: 100%;
+  height: 60px; /* 64px button minus its 2px borders */
   width: auto;
+  max-width: 240px;
+  object-fit: cover;
 }
 
 .a2ui-image-modal__footer {
