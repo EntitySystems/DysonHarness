@@ -101,7 +101,8 @@ public sealed class OpenAiCodexAuthService(
         var callback = await pending.Callback
             .WaitAsync(OpenAiCodexClientProfile.CallbackWait, cancellationToken)
             .ConfigureAwait(false);
-        await DropPendingAsync().ConfigureAwait(false);
+        // Only our own login: a newer Begin already replaced (and disposed) this one, and must keep its listener.
+        await DropPendingAsync(pending.State).ConfigureAwait(false);
 
         if (!callback.Ok)
             return Result<string, string>.AsError(CallbackError(callback));

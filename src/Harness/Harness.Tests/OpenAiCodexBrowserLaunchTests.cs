@@ -86,6 +86,23 @@ public sealed class OpenAiCodexBrowserLaunchTests
     }
 
     [Fact]
+    public async Task Complete_of_a_replaced_login_does_not_drop_the_newer_login()
+    {
+        var made = new List<OpenAiCodexCallback>();
+        var auth = NewAuth(made);
+        var first = await auth.BeginAsync(Guid.NewGuid());
+        var waiting = auth.CompleteAsync(first.Value.State, DysonSubjects.Local);
+
+        var second = await auth.BeginAsync(Guid.NewGuid());
+        var stale = await waiting;
+
+        Assert.True(stale.IsError);
+        Assert.True(made[1].IsBound);
+        await auth.CancelAsync(second.Value.State);
+        Assert.False(made[1].IsBound);
+    }
+
+    [Fact]
     public async Task Provider_begin_opens_the_browser_after_the_listener_is_bound_and_reports_a_failed_launch()
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);

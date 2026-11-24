@@ -478,8 +478,11 @@
                 return;
             }
 
+            var browserOpened = Hosting.Value.Mode != DysonHostingMode.Cloud && begin.Value.BrowserLaunchError is null;
             _status = string.IsNullOrWhiteSpace(begin.Value.UserCode)
-                ? $"Browser opened for {managed.DisplayName}. Click Complete when finished signing in."
+                ? (browserOpened
+                    ? $"Browser opened for {managed.DisplayName}. Click Complete when finished signing in."
+                    : $"Open the sign-in link on the {managed.DisplayName} card, then click Complete.")
                 : $"Enter device code {begin.Value.UserCode} in the browser, then Complete.";
             _cliProxyInstalled = CliProxy.IsInstalled;
 
