@@ -12,7 +12,7 @@ description: >-
 
 - Use `RenderA2ui` often: whenever a component would clarify or structure what you show (status of several drones, a plan summary with links, a comparison, a checklist, a form).
 - Use plain `PostConversationMessage` for a single sentence or small talk.
-- Users prefer to see, not read. When a file or URL exists, embed it (`Image` path, `AudioPlayer`, `LocalVideo`, `Model3D`). Draw data as a `Chart`, `TreeDiagram` or `SubagentTasks` instead of describing it in text.
+- Users prefer to see, not read. When a file or URL exists, embed it (`Image` path, one `ImageGallery` for 2+ images, `AudioPlayer`, `LocalVideo`, `Model3D`, `DirectoryView` for a folder). Draw data as a `Chart`, `TreeDiagram` or `SubagentTasks` instead of describing it in text.
 - Use `PostUserQuestion` for a question. The host already draws its card as A2UI.
 - With a surface, put the actions in the surface as `ActionButton`s (section 6c), not in PostConversationMessage `actions`.
 
@@ -25,7 +25,7 @@ description: >-
 - Stable UAX#31 `surfaceId` (e.g. `deploy_form`; no `dyson_` prefix).
 - `createSurface {surfaceId, catalogId?, components, dataModel?}` once; exactly one `"id":"root"`, every child id must exist.
 - Then `updateComponents {surfaceId, components}` (same id replaces) / `updateDataModel {surfaceId, path?, value}` (RFC 6901, default `/`; `null` deletes). Re-create is `INTEGRITY_ERROR`; `deleteSurface {surfaceId}` drops it.
-- `ActionButton` / `QuestionSlot` / `LocalVideo` / `Model3D` / `PipelineRun` / `SubagentTasks` / `TreeDiagram` are Dyson catalog components. They work with `catalogId` omitted (or set to `a2ui://dyson/catalogs/v1/catalog.json`). Only an explicit basic surface `catalogId` or component `"@catalogId"` rejects them. No component needs `@catalogId`.
+- `ActionButton` / `QuestionSlot` / `LocalVideo` / `Model3D` / `DirectoryView` / `PipelineRun` / `SubagentTasks` / `TreeDiagram` are Dyson catalog components. They work with `catalogId` omitted (or set to `a2ui://dyson/catalogs/v1/catalog.json`). Only an explicit basic surface `catalogId` or component `"@catalogId"` rejects them. No component needs `@catalogId`.
 - The CopilotKit playground id `https://copilotkit.ai/a2ui/catalogs/playground/v1` is accepted as an alias of the Dyson catalog.
 
 ## 4. Kit
@@ -39,9 +39,9 @@ Required props in **bold**. Full props per component: [reference.md](reference.m
 | Inputs | `Button` (**child**, **action**), `TextField`, `TextArea`, `CheckBox`, `ChoicePicker`, `Select`/`RadioGroup`/`SegmentedControl` (**options**, **value**), `Radio` (**label**, **value**, **option**), `Slider` (**value**; min/max/step), `DateTimeInput` (**value**), `Pressable` (**child**, **action**), `Form` (**children**); `checks` = `@checks` |
 | Data | `ListItem` (**label**), `Table` (columns + rows, or TableSection/TableRow/TableCell children), `DataTable` (**columns** [{key, label, format?}], **rows**), `ComparisonTable` (**options**, **rows** [{feature, values}]), `Stat` (**label**, **value**; delta, trend, tone), `StatGroup` (**items**), `KeyValueList`/`Timeline` (**items**), `Progress`/`RadialProgress`/`Rating`/`Gauge` (**value**), `TagList` (**tags**), `Avatar` (**name**), `AvatarGroup` (**people**), `Agenda` (**days**), `Map` (**markers** [{label, lat, lng}]) |
 | Charts | `Chart` (**data**; chartType, xKey, series), `BarChart`, `LineChart`, `AreaChart`, `PieChart`, `Sparkline` (**data**) — section 4b |
-| Media | `Image` (exactly one of **url** / **path**; height 120..800), `Icon` (**name**), `Favicon`, `Video`/`VideoEmbed` (**url**), `AudioPlayer` (exactly one of **url** / **path**; section 6b2d), `ImageGallery`/`ImageGrid` (images), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
+| Media | `Image` (exactly one of **url** / **path**; height 120..800; title band; 2+ images → one ImageGallery, never several Image components), `Icon` (**name**), `Favicon`, `Video`/`VideoEmbed` (**url**), `AudioPlayer` (exactly one of **url** / **path**; section 6b2d), `ImageGallery` (**images**: url or path, ordered, ≤ 50; title, height; 2+ images → one ImageGallery, never several Image components; section 6b2c2), `ImageGrid` (images; placeholders only), `CarouselMediaItem`, `LinkCard` (**url**, **title**), `Citation`, `EntityCard` (**title**) — section 4c |
 | Overlay | `Popover` (children = [PopoverTrigger, PopoverContent]), `Modal` (**trigger**, **content**), `FlashcardFlip` (**front**, **back**), `PulseIndicator` |
-| Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `Model3D` (**path**; title, height 160..800), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest), `SubagentTasks` (**agentId** integer = a drone/explore/review's agentId; the host fills the title, the X/N todo pill and the running state, live), `TreeDiagram` (**nodes** nested `{id, title, text?, tags?[{label, color red|green|accent}], children?}`; flow vertical|horizontal; title) |
+| Dyson | `ActionButton` (**label**, **func**), `QuestionSlot` (**questionId**), `LocalVideo` (**path**; title), `Model3D` (**path**; title, height 160..800), `DirectoryView` (**path** folder; title, height 120..800), `PipelineRun` (exactly one of **runId** integer = the whole run with its jobs, or **jobIds** 1..30 integers = only those jobs; get ids from `ListPipelineRuns`, the host fills in the rest), `SubagentTasks` (**agentId** integer = a drone/explore/review's agentId; the host fills the title, the X/N todo pill and the running state, live), `TreeDiagram` (**nodes** nested `{id, title, text?, tags?[{label, color red|green|accent}], children?}`; flow vertical|horizontal; title) |
 
 `weight` on direct children of Row/Column/Box/GridItem; `@accessibility` on any component. Parent rules: GridItem under Grid, FlowItem under Flow, CarouselItem under Carousel, TableRow under Table/TableSection, TableCell under TableRow. `Pressable`, like `Button`, needs a question-bound surface.
 
@@ -58,7 +58,7 @@ Rejected: `Svg`, `HtmlView`, Icon `svgPath` (no model markup), `Treemap`, `Sanke
 ## 4c. Links and media
 
 - `Link.href`, `LinkCard.url`, `Citation.url`, `EntityCard.href`/`actions[].href`, `Video`/`AudioPlayer`/`VideoEmbed.url`: literal `http(s)` URL (becomes `open_url:`) or `open_plan:`/`open_scratch:`/`open_file:`/`open_folder:`. They count toward the 8 actions per surface with ActionButtons (a PipelineRun counts 1).
-- Remote media URLs (`Image.url`, `Avatar.image`, galleries) are validated but never loaded: a placeholder with the alt/caption text, initials for Avatar. `Video` and `VideoEmbed` render as link cards; `AudioPlayer` plays (section 6b2d). `Image.path` shows a work-directory png/jpg/gif/webp/bmp ≤ 20 MB with an expand-to-modal button (section 6b2c). Nothing in a surface fetches from the network on its own: an `AudioPlayer` url loads only after the user presses play.
+- Remote media URLs (`Image.url`, `Avatar.image`, `ImageGrid`) are validated but never loaded: a placeholder with the alt/caption text, initials for Avatar. `ImageGallery` url images load only after one click per gallery (section 6b2c2). `Video` and `VideoEmbed` render as link cards; `AudioPlayer` plays (section 6b2d). `Image.path` shows a work-directory png/jpg/gif/webp/bmp ≤ 20 MB with an expand-to-modal button (section 6b2c). Nothing in a surface fetches from the network on its own: an `AudioPlayer` url loads only after the user presses play, and an `ImageGallery`'s remote urls only after the user presses "Load N remote images".
 
 Dashboard example:
 
@@ -130,10 +130,29 @@ An inline three.js viewer for a `.glb` or `.fbx` file in the work directory: dra
 
 ## 6b2c. Local image (Image.path)
 
-`Image` takes exactly one of `url` (remote, placeholder only, never loaded) or `path` (a file in the work directory, shown). Formats: png, jpg/jpeg, gif, webp, bmp, at most 20 MB (no svg, tiff, ico). Width is 100% of the parent; `height` 120..800 px sets the box (default by `variant`: small 120, medium 240, header 200, large 400); the image is fitted, not cropped. An expand icon on the image opens it large in a modal (Esc, × or a click outside closes; the modal can open the file viewer). Alt text is the first of `alt`, `description`, `fallback`, else the file name; `caption` shows under it. Same path rules as LocalVideo: a rooted or `..` path is `VALIDATION_FAILED`; a missing, unsupported or oversized file renders as card text. To show a web image, download it into the work directory first.
+2+ images → one ImageGallery, never several Image components (section 6b2c2). `Image` takes exactly one of `url` (remote, placeholder only, never loaded) or `path` (a file in the work directory, shown). Formats: png, jpg/jpeg, gif, webp, bmp, at most 20 MB (no svg, tiff, ico). Width is 100% of the parent; `height` 120..800 px sets the box (default by `variant`: small 120, medium 240, header 200, large 400); the image is fitted, not cropped. A click anywhere on the image opens it large in a modal (an expand icon hints it; inside a `Button` the image stays plain; Esc, × or a click outside closes; the modal can open the file viewer and zooms as in section 6b2c2). `title` is a single-line band over the bottom of the image (max 200 chars, longer is cut with …; the tooltip shows the full text; blank = no band), separate from `caption`, which shows under the image. Alt text is the first of `alt`, `description`, `fallback`, `title`, else the file name. Same path rules as LocalVideo: a rooted or `..` path is `VALIDATION_FAILED`; a missing, unsupported or oversized file renders as card text. To show a web image, download it into the work directory first.
 
 ```json
 {"id":"shot","component":"Image","path":"docs/img/login.png","alt":"Login screen","caption":"After the fix","height":360}
+```
+
+## 6b2c2. Image gallery (ImageGallery)
+
+2+ images → one ImageGallery, never several Image components. A carousel of ordered images, one slide at a time, with prev/next, an "n / N" counter and the caption under the slide.
+
+- `images` (alias `items`), at most 50, order kept, url and path can mix. Each item is a string (`http(s)://` is a url, anything else a work-relative path) or an object with exactly one of `url` / `path` plus `alt`, `caption`, `title`, `description`. Both `url` and `path`, a non-http(s) url, a blank path or more than 50 items is `VALIDATION_FAILED` at that item. `images: []` shows "No images".
+- Gallery `title` is a heading above the slide; `height` 120..800 px (default 320, images fitted, not cropped). `columns` is accepted and ignored.
+- Item `title` is a single-line band over the bottom of the image (max 200 chars, longer is cut with …; blank = no band; the tooltip shows the full text), separate from `caption` (under the image). Accessible name: `alt`, `description`, `title`, then the file name or host.
+- Path images use the `Image.path` rules (png, jpg/jpeg, gif, webp, bmp, ≤ 20 MB; a rooted or `..` path is `VALIDATION_FAILED`). A missing, unsupported or oversized file, or a url that fails to load, is text on that slide only; the rest work.
+- Remote url images never load on their own: the gallery shows "Load N remote images (host, +N hosts)"; one click loads every allowed url in that gallery (asked again after a reload). A localhost, private-range IP, single-label or `.local` host, or a url with credentials never loads (slide text). To keep a web image, download it into the work directory and use its path.
+- A click on the image opens a modal on that slide: thumbnail strip, prev/next (wraps), Left/Right/Home/End, a zoom slider 100–500% (`+` / `-` / `0` keys, double-click toggles 200%), drag to pan when zoomed (arrow keys pan after clicking the image), Esc, × or a click outside closes. Path slides offer "Open in file viewer". Inside a `Button` the gallery shows the plain current image.
+- The gallery counts 0 toward the 8 actions per surface.
+
+```json
+{"id":"shots","component":"ImageGallery","title":"Before / after","height":320,"images":[
+"docs/img/before.png",
+{"path":"docs/img/after.png","title":"After the fix","caption":"Login screen","alt":"Fixed login"},
+{"url":"https://example.com/ref.jpg","caption":"Reference"}]}
 ```
 
 ## 6b2d. Audio (AudioPlayer)
@@ -143,6 +162,14 @@ An inline three.js viewer for a `.glb` or `.fbx` file in the work directory: dra
 ```json
 {"id":"clip","component":"AudioPlayer","path":"media/standup.mp3","title":"Stand-up recording","caption":"Nov 23"}
 {"id":"pod","component":"AudioPlayer","url":"https://example.com/ep1.mp3","title":"Episode 1"}
+```
+
+## 6b2e. Folder (DirectoryView)
+
+A card for a folder in the work directory: folder name and path, the first entries (folders first, then by name; as many as fit `height`) and "+N more". `path` is a literal work-relative folder (`.` is the work root); `title` defaults to the folder name; `height` 120..800 px (default 240). The expand icon opens a navigable modal (open subfolders, Up, breadcrumb, sort by name / size / modified, refresh). A file opens in the Dyson file viewer; "Open in Explorer" opens the folder in the OS file manager. A rooted or `..` path, or one that escapes the work directory, is `VALIDATION_FAILED`; a missing folder, a file, or an unreadable folder renders as card text. Links that leave the work directory are shown blocked. The listing is a snapshot read when the card renders (Refresh in the modal). `DirectoryView` counts 0 toward the 8 actions per surface.
+
+```json
+{"id":"src","component":"DirectoryView","path":"src/Harness","title":"Harness sources","height":280}
 ```
 
 ## 6b3. Subagent tasks (SubagentTasks)

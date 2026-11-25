@@ -211,7 +211,7 @@ public static class DysonA2uiCatalog
     public const string UnknownComponentGroups =
         "layout (Row, Column, Box, Grid, Tabs, Section, Accordion...), text (Title, Heading, Markdown, Code, Badge, Link...), "
         + "inputs (TextField, Select, Slider, DateTimeInput...), data (Table, DataTable, Stat, Timeline, Progress...), charts (Chart, BarChart...), "
-        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram";
+        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, DirectoryView, PipelineRun, SubagentTasks, TreeDiagram";
 
     private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> StatItem = Props(
         ("label", TxtReq), ("value", AnyReq), ("delta", Txt), ("trend", Enm("up", "down", "flat")),
@@ -264,6 +264,9 @@ public static class DysonA2uiCatalog
 
     private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> GalleryImage = Props(
         ("url", Media), ("caption", Txt), ("alt", Txt), ("title", Txt), ("description", Txt));
+
+    private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> GalleryItem = Props(
+        ("url", Media), ("path", new DysonA2uiPropSpec(DysonA2uiPropKind.Label)), ("caption", Txt), ("alt", Txt), ("title", Txt), ("description", Txt));
 
     private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> EntityAction = Props(
         ("label", TxtReq), ("href", LinkReq));
@@ -337,6 +340,10 @@ public static class DysonA2uiCatalog
                 ("path", new(DysonA2uiPropKind.Label, Required: true)),
                 ("title", new(DysonA2uiPropKind.DynamicString)),
                 ("height", Int(160, 800))),
+            [DysonA2uiDirectoryView.ComponentName] = Dyson(
+                ("path", new(DysonA2uiPropKind.Label, Required: true)),
+                ("title", new(DysonA2uiPropKind.DynamicString)),
+                ("height", Int(120, 800))),
             ["ChoicePicker"] = Kit(true,
                 ("options", new(DysonA2uiPropKind.Options, Required: true)),
                 ("value", new(DysonA2uiPropKind.DynamicStringList, Required: true)),
@@ -412,8 +419,10 @@ public static class DysonA2uiCatalog
         d["Link"] = Kit(false, ("text", TxtReq), ("href", LinkReq));
         d["Tooltip"] = Kit(false, ("child", RefReq), ("text", Txt), ("tip", Txt));
         d["VideoEmbed"] = Kit(false, ("url", LinkReq), ("title", Txt), ("caption", Txt), ("thumbnail", Media));
-        foreach (var name in new[] { "ImageGallery", "ImageGrid" })
-            d[name] = Kit(false, ("images", Objects(GalleryImage, 50)), ("items", Objects(GalleryImage, 50)), ("columns", Int(1, 6)));
+        d["ImageGrid"] = Kit(false, ("images", Objects(GalleryImage, 50)), ("items", Objects(GalleryImage, 50)), ("columns", Int(1, 6)));
+        // ImageGallery: url or path items (string or object); exactly-one-of and path rules live in DysonA2uiImageGallery. columns is accepted and ignored (persisted rows).
+        d[DysonA2uiImageGallery.ComponentName] = Kit(false, ("images", StringsOrObjects(GalleryItem, DysonA2uiImageGallery.MaxImages)),
+            ("items", StringsOrObjects(GalleryItem, DysonA2uiImageGallery.MaxImages)), ("title", Txt), ("height", Int(120, 800)), ("columns", Int(1, 6)));
     }
 
     private static void AddInputs(Dictionary<string, DysonA2uiComponentSpec> d)
@@ -490,7 +499,7 @@ public static class DysonA2uiCatalog
     private static void AddMedia(Dictionary<string, DysonA2uiComponentSpec> d)
     {
         // Image: exactly one of url / path (checked by the validator at the component pointer). path is a Dyson extension prop.
-        d["Image"] = Kit(false, ("url", Media), ("path", new DysonA2uiPropSpec(DysonA2uiPropKind.Label)), ("height", Int(120, 800)), ("description", Txt), ("fallback", Txt), ("alt", Txt), ("caption", Txt),
+        d["Image"] = Kit(false, ("url", Media), ("path", new DysonA2uiPropSpec(DysonA2uiPropKind.Label)), ("height", Int(120, 800)), ("description", Txt), ("fallback", Txt), ("alt", Txt), ("caption", Txt), ("title", Txt),
             ("variant", Enm("icon", "avatar", "small", "medium", "large", "header")));
         d["Icon"] = Kit(false, ("name", TxtReq), ("label", Txt),
             ("svgPath", Rej("Icon.svgPath is rejected: model-supplied SVG is not allowed. Use a built-in icon name.")));

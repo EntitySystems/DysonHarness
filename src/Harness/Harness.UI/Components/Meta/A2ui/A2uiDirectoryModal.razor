@@ -1,0 +1,397 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using System.Globalization
+@using Microsoft.AspNetCore.Components.Web
+@using DysonHarness
+@using Harness.UI.Components.Files
+@using Harness.UI.Components.Motion
+@implements IDisposable
+@inject DysonUiHost Host
+
+@* Folder modal (app modal pattern: DysonTransition + confirm-dialog, same shell as A2uiImageModal). Owned by A2uiSurfaceView, outside the
+   node tree, so a surface revision does not close or reload it. Navigation state lives here; every listing is DysonA2uiDirectoryView.LoadAsync
+   (Engine: lexical + real-path containment on every step, off the circuit). The modal only ever navigates to an entry, parent or breadcrumb
+   path taken from a previous listing, never to typed text. A file click closes the modal, then dispatches open_file: like A2uiImageModal. *@
+<DysonTransition Item="Item" ExitMs="140" RestoreFocus="true" OnEntered="OnEnteredAsync" Context="ctx">
+    @{
+        var item = ctx.Item!;
+        var header = item.HasTitle ? item.Title : _listing?.Name ?? "Folder";
+    }
+    <div class="confirm-dialog-backdrop dyson-fade-scale @ctx.StateClass"
+         role="presentation"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+         @onkeydown="args => ctx.IsExiting ? Task.CompletedTask : OnKeyDownAsync(args)">
+        <div class="confirm-dialog a2ui-dir-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="@_titleId"
+             @onclick:stopPropagation="true">
+            @* Focus trap (pure Blazor): tabbing past either end lands on a sentinel that sends focus to the other end. *@
+            <span class="a2ui-dir-modal__sentinel" tabindex="0" @onfocus="FocusLastAsync"></span>
+            <div class="confirm-dialog__header">
+                <h3 id="@_titleId">@header</h3>
+                <button type="button"
+                        class="btn btn-ghost"
+                        @ref="_closeBtn"
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+                        aria-label="Close">×</button>
+            </div>
+            <div class="a2ui-dir-modal__toolbar">
+                <button type="button"
+                        class="btn btn-ghost"
+                        @ref="_upBtn"
+                        disabled="@(_rel.Length == 0)"
+                        title="Up one folder (Alt+Up, Backspace)"
+                        aria-label="Up one folder"
+                        @onclick="UpAsync">
+                    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
+                        <path d="@A2uiIcons.Path("arrow-up")" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    Up
+                </button>
+                @if (_listing is { } crumbsOf)
+                {
+                    <nav class="a2ui-dir-modal__crumbs" aria-label="Breadcrumb">
+                        <ol>
+                            @for (var i = 0; i < crumbsOf.Breadcrumb.Count; i++)
+                            {
+                                var crumb = crumbsOf.Breadcrumb[i];
+                                <li>
+                                    @if (i == crumbsOf.Breadcrumb.Count - 1)
+                                    {
+                                        <span class="a2ui-dir-modal__crumb-current" aria-current="location">@crumb.Name</span>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="a2ui-dir-modal__crumb" @onclick="() => NavigateAsync(crumb.RelativePath)">@crumb.Name</button>
+                                    }
+                                </li>
+                            }
+                        </ol>
+                    </nav>
+                }
+                else
+                {
+                    <span class="a2ui-dir-modal__crumbs"></span>
+                }
+                <button type="button" class="btn btn-ghost" @ref="_refreshBtn" @onclick="RefreshAsync">Refresh</button>
+                <button type="button"
+                        class="btn btn-ghost"
+                        disabled="@(_listing is null || View.OpenBusy)"
+                        @onclick="() => View.OpenAsync(_listing!.OpenFolderFunc)">@FileTreePanel.OpenInFileManagerLabel</button>
+            </div>
+            @if (_error is not null)
+            {
+                <div class="a2ui-dir-modal__error" role="alert">@_error</div>
+            }
+            @if (_listing is not null)
+            {
+                @* ponytail: no virtualization. At most MaxEntries (1000) rows render as plain DOM; past that the Engine truncates. Upgrade path: Virtualize with a fixed row height. *@
+                <div class="a2ui-dir-modal__scroll">
+                    <table class="a2ui-dir-modal__table" aria-busy="@(_busy ? "true" : null)" aria-label="@("Contents of " + _listing.Name)">
+                        <thead>
+                            <tr>
+                                <th scope="col" aria-sort="@AriaSort(DysonA2uiDirectorySort.Name)">
+                                    <button type="button" class="a2ui-dir-modal__sort" @onclick="() => SortBy(DysonA2uiDirectorySort.Name)">Name<span aria-hidden="true">@Arrow(DysonA2uiDirectorySort.Name)</span></button>
+                                </th>
+                                <th scope="col" class="a2ui-dir-modal__col-size" aria-sort="@AriaSort(DysonA2uiDirectorySort.Size)">
+                                    <button type="button" class="a2ui-dir-modal__sort" @onclick="() => SortBy(DysonA2uiDirectorySort.Size)">Size<span aria-hidden="true">@Arrow(DysonA2uiDirectorySort.Size)</span></button>
+                                </th>
+                                <th scope="col" class="a2ui-dir-modal__col-modified" aria-sort="@AriaSort(DysonA2uiDirectorySort.Modified)">
+                                    <button type="button" class="a2ui-dir-modal__sort" @ref="_sortModified" @onclick="() => SortBy(DysonA2uiDirectorySort.Modified)">Modified<span aria-hidden="true">@Arrow(DysonA2uiDirectorySort.Modified)</span></button>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @for (var i = 0; i < _sorted.Count; i++)
+                            {
+                                var index = i;
+                                var entry = _sorted[i];
+                                <tr @key="entry.RelativePath">
+                                    <td>
+                                        <button type="button"
+                                                class="a2ui-dir-modal__name"
+                                                @ref="_rows[entry.RelativePath]"
+                                                title="@entry.Name"
+                                                aria-label="@A2uiDirectoryFormat.Label(entry)"
+                                                disabled="@(entry.Blocked || (!entry.IsDirectory && View.OpenBusy))"
+                                                @onkeydown="args => OnRowKeyDownAsync(args, index)"
+                                                @onclick="() => OpenEntryAsync(entry)">
+                                            <svg class="a2ui-dir-modal__icon @(entry.IsDirectory ? "a2ui-dir-modal__icon--folder" : null)" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+                                                <path d="@A2uiDirectoryFormat.IconPath(entry.Kind)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                                            </svg>
+                                            <span class="a2ui-dir-modal__label">@entry.Name</span>
+                                        </button>
+                                    </td>
+                                    @if (entry.Blocked)
+                                    {
+                                        <td colspan="2" class="a2ui-dir-modal__blocked">link outside work directory</td>
+                                    }
+                                    else
+                                    {
+                                        <td class="a2ui-dir-modal__col-size">@(entry.Size is { } size ? A2uiDirectoryFormat.Size(size) : "")</td>
+                                        <td class="a2ui-dir-modal__col-modified">@A2uiDirectoryFormat.Modified(entry.ModifiedUtc)</td>
+                                    }
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    @if (_sorted.Count == 0)
+                    {
+                        <div class="a2ui-dir-modal__empty">Empty folder</div>
+                    }
+                </div>
+            }
+            else if (_error is null)
+            {
+                <div class="a2ui-dir-modal__empty">Loading folder…</div>
+            }
+            <div class="a2ui-dir-modal__footer">
+                <span class="a2ui-dir-modal__status" role="status" aria-live="polite">@StatusText()</span>
+            </div>
+            <span class="a2ui-dir-modal__sentinel" tabindex="0" @onfocus="FocusFirstAsync"></span>
+        </div>
+    </div>
+</DysonTransition>
+
+@code {
+    private readonly string _titleId = "a2ui-dir-" + Guid.NewGuid().ToString("N");
+    // Keyed by entry path (not row index) so sorting and refreshes never leave a ref pointing at another row. Cleared per open.
+    private readonly Dictionary<string, ElementReference> _rows = new(StringComparer.Ordinal);
+    private ElementReference _backdropEl;
+    private ElementReference _closeBtn;
+    private ElementReference _upBtn;
+    private ElementReference _refreshBtn;
+    private ElementReference _sortModified;
+    private A2uiDirectoryOpen? _seen;
+    private DysonA2uiDirectoryListing? _listing;
+    private IReadOnlyList<DysonA2uiDirectoryEntry> _sorted = [];
+    private string _rel = "";
+    private string? _error;
+    private DysonA2uiDirectorySort _sortKey = DysonA2uiDirectorySort.Name;
+    private bool _desc;
+    private bool _busy;
+    private bool _entered;
+    private bool _focusPending;
+    private bool _disposed;
+    private CancellationTokenSource? _cts;
+
+    [Parameter, EditorRequired] public A2uiSurfaceView View { get; set; } = default!;
+
+    /// <summary>Open folder; null closes (DysonTransition keeps the markup for the exit window).</summary>
+    [Parameter] public A2uiDirectoryOpen? Item { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (Item is not { } item)
+        {
+            if (_seen is not null)
+            {
+                _seen = null;
+                _entered = false;
+                _busy = false;
+                CancelLoad();
+            }
+
+            return;
+        }
+
+        if (ReferenceEquals(item, _seen))
+            return;
+
+        _seen = item;
+        _rel = item.RelativePath;
+        _listing = null;
+        _sorted = [];
+        _error = null;
+        _sortKey = DysonA2uiDirectorySort.Name;
+        _desc = false;
+        _rows.Clear();
+        _focusPending = true;
+        _ = LoadAsync(item.RelativePath);
+    }
+
+    // One load at a time: a new navigation cancels the previous, and a result that is no longer current is dropped.
+    private async Task LoadAsync(string rel)
+    {
+        CancelLoad();
+        var cts = _cts = new CancellationTokenSource();
+        var token = cts.Token;
+        var nodeId = _seen?.NodeId;
+        _busy = true;
+        _error = null;
+
+        var result = await DysonA2uiDirectoryView.LoadAsync(rel, Host.FocusedSessionWorkRootPath, token);
+        if (_disposed || !ReferenceEquals(cts, _cts))
+            return;
+
+        _busy = false;
+        if (result.IsError)
+        {
+            // The previous listing (if any) stays visible; Up, the breadcrumb and Refresh still work from it.
+            _error = result.Error;
+        }
+        else
+        {
+            _listing = result.Value;
+            _rel = _listing.RelativePath;
+            Resort();
+            if (nodeId is not null)
+                View.RememberDirectory(nodeId, _rel);
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void CancelLoad()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
+    }
+
+    private void Resort() =>
+        _sorted = _listing is null ? [] : DysonA2uiDirectoryView.Sort(_listing.Entries, _sortKey, _desc);
+
+    private Task NavigateAsync(string rel)
+    {
+        _focusPending = true;
+        return LoadAsync(rel);
+    }
+
+    private Task UpAsync() => _rel.Length == 0 ? Task.CompletedTask : NavigateAsync(DysonA2uiDirectoryView.ParentOf(_rel));
+
+    private Task RefreshAsync() => LoadAsync(_rel);
+
+    private void SortBy(DysonA2uiDirectorySort key)
+    {
+        _desc = key == _sortKey && !_desc;
+        _sortKey = key;
+        Resort();
+    }
+
+    private string? AriaSort(DysonA2uiDirectorySort key) =>
+        key != _sortKey ? null : _desc ? "descending" : "ascending";
+
+    private string Arrow(DysonA2uiDirectorySort key) =>
+        key != _sortKey ? "" : _desc ? " ▼" : " ▲";
+
+    private Task OpenEntryAsync(DysonA2uiDirectoryEntry entry)
+    {
+        if (entry.Blocked)
+            return Task.CompletedTask;
+        return entry.IsDirectory ? NavigateAsync(entry.RelativePath) : OpenInViewerAsync(entry.OpenFunc);
+    }
+
+    private async Task OpenInViewerAsync(string func)
+    {
+        await CloseAsync();
+        await View.OpenAsync(func);
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private Task OnKeyDownAsync(KeyboardEventArgs args)
+    {
+        if (args.CtrlKey || args.MetaKey)
+            return Task.CompletedTask;
+        if (args.Key == "Escape")
+            return CloseAsync();
+        if ((args.AltKey && args.Key == "ArrowUp") || (!args.AltKey && args.Key == "Backspace"))
+            return UpAsync();
+        return Task.CompletedTask;
+    }
+
+    // Up/Down/Home/End move between row buttons (blocked rows are disabled and skipped). ponytail: the browser also scrolls the list by
+    // its own arrow-key default; preventDefault cannot be conditional in pure Blazor and would break Enter/Space, so the jitter stays.
+    private async Task OnRowKeyDownAsync(KeyboardEventArgs args, int index)
+    {
+        if (args.CtrlKey || args.AltKey || args.MetaKey || args.ShiftKey)
+            return;
+
+        var target = args.Key switch
+        {
+            "ArrowDown" => NextEnabled(index, 1),
+            "ArrowUp" => NextEnabled(index, -1),
+            "Home" => NextEnabled(-1, 1),
+            "End" => NextEnabled(_sorted.Count, -1),
+            _ => -1,
+        };
+        if (target >= 0 && _rows.TryGetValue(_sorted[target].RelativePath, out var row))
+            await FocusAsync(row);
+    }
+
+    private int NextEnabled(int from, int step)
+    {
+        for (var i = from + step; i >= 0 && i < _sorted.Count; i += step)
+        {
+            if (!_sorted[i].Blocked && (_sorted[i].IsDirectory || !View.OpenBusy))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private ElementReference LastControl()
+    {
+        var last = NextEnabled(_sorted.Count, -1);
+        if (last >= 0 && _rows.TryGetValue(_sorted[last].RelativePath, out var row))
+            return row;
+        return _listing is not null ? _sortModified : _refreshBtn;
+    }
+
+    private Task FocusFirstAsync() => FocusAsync(_closeBtn);
+
+    private Task FocusLastAsync() => FocusAsync(LastControl());
+
+    private static async Task FocusAsync(ElementReference element)
+    {
+        try { await element.FocusAsync(); }
+        catch { /* element may already be gone (overlay closing, row replaced) */ }
+    }
+
+    private async Task OnEnteredAsync()
+    {
+        // Esc works at once; focus then moves to the first row when the listing is in (OnAfterRender).
+        await FocusAsync(_backdropEl);
+        _entered = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusPending || !_entered || _busy || Item is null)
+            return;
+
+        _focusPending = false;
+        var first = NextEnabled(-1, 1);
+        if (first >= 0 && _rows.TryGetValue(_sorted[first].RelativePath, out var row))
+            await FocusAsync(row);
+        else
+            await FocusAsync(_rel.Length > 0 ? _upBtn : _refreshBtn);
+    }
+
+    private string StatusText()
+    {
+        if (_busy)
+            return "Loading…";
+        if (_listing is not { } listing)
+            return "";
+
+        var shown = listing.Entries.Count;
+        if (!listing.Truncated)
+            return shown == 1 ? "1 item" : $"{shown} items";
+
+        // TotalSeen stops at ScanCap, so a folder that big reads "5000+".
+        var total = listing.TotalSeen.ToString(CultureInfo.InvariantCulture) + (listing.TotalSeen >= DysonA2uiDirectoryView.ScanCap ? "+" : "");
+        return $"Showing first {shown} of {total}";
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        CancelLoad();
+    }
+}

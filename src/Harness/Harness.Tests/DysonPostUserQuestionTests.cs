@@ -84,6 +84,7 @@ public class DysonPostUserQuestionTests
         Assert.Contains("Users prefer to see", description, StringComparison.Ordinal);
         Assert.Contains("Skip it for a single-sentence reply or simple chatting", description, StringComparison.Ordinal);
         Assert.Contains("put the actions in the surface as ActionButton", description, StringComparison.Ordinal);
+        Assert.Contains("2+ images: one ImageGallery", description, StringComparison.Ordinal);
         Assert.True(description.Length <= 1000, $"RenderA2ui description is {description.Length} chars.");
         Assert.EndsWith(
             DysonMetaAgentTools.PostConversationMessageA2uiPointer,

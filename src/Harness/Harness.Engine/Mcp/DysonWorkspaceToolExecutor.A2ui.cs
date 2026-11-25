@@ -71,9 +71,24 @@ public sealed partial class DysonWorkspaceToolExecutor
         foreach (var (pointer, path) in DysonA2uiLocalVideo.PathPointers(parsedMessages.Value)
                      .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiModel3D.ComponentName))
                      .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiImage.ComponentName))
-                     .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiAudio.ComponentName)))
+                     .Concat(DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiAudio.ComponentName))
+                     .Concat(DysonA2uiImageGallery.PathPointers(parsedMessages.Value)))
         {
             var resolved = await DysonA2uiLocalVideo.ResolveRelativeAsync(path, WorkRoot, cancellationToken).ConfigureAwait(false);
+            if (resolved.IsError)
+            {
+                return A2uiError(
+                    call,
+                    new DysonA2uiError(DysonA2uiProtocol.ValidationFailed, surfaceId, pointer, resolved.Error),
+                    questionId,
+                    message);
+            }
+        }
+
+        // DirectoryView.path follows open_folder: ("." is the work root, which open_file: rejects).
+        foreach (var (pointer, path) in DysonA2uiLocalVideo.PathPointers(parsedMessages.Value, DysonA2uiDirectoryView.ComponentName))
+        {
+            var resolved = await DysonA2uiDirectoryView.ResolveRelativeAsync(path, WorkRoot, cancellationToken).ConfigureAwait(false);
             if (resolved.IsError)
             {
                 return A2uiError(

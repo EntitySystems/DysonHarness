@@ -264,7 +264,9 @@ public static class DysonUiWebHost
             sp.GetService<DysonSessionEventPublisher>(),
             sp.GetService<DysonWorkDirectoryFocus>(),
             sp.GetService<DysonVoiceMode>(),
-            sp.GetService<DysonMessageBus>()));
+            sp.GetService<DysonMessageBus>(),
+            sp.GetService<DysonVersionControlRegistry>(),
+            sp.GetService<IDysonWorkDirectoryRepository>()));
 
         if (hostingMode == DysonHostingMode.Cloud)
             builder.Services.AddScoped<CircuitHandler, DysonCloudSubjectCircuitHandler>();

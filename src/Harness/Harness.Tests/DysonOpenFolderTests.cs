@@ -131,6 +131,32 @@ public sealed class DysonOpenFolderTests : IDisposable
     }
 
     [Fact]
+    public async Task ResolveReal_forLaunch_false_allows_bundle_folder()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "Foo.app"));
+
+        // Browsing a bundle folder is fine everywhere.
+        var browse = DysonOpenFolder.ResolveReal("Foo.app", _root, forLaunch: false);
+        Assert.True(browse.IsSuccess, browse.Error);
+
+        // The launch default refuses it on macOS only; OpenAsync always launches with forLaunch: true.
+        var (launched, launch) = Recorder();
+        var opened = await DysonOpenFolder.OpenAsync("Foo.app", _root, launch);
+        if (OperatingSystem.IsMacOS())
+        {
+            Assert.True(DysonOpenFolder.ResolveReal("Foo.app", _root).IsError);
+            Assert.True(opened.IsError);
+            Assert.Contains("application bundle", opened.Error, StringComparison.Ordinal);
+            Assert.Empty(launched);
+        }
+        else
+        {
+            Assert.True(opened.IsSuccess, opened.Error);
+            Assert.Equal(browse.Value, Assert.Single(launched));
+        }
+    }
+
+    [Fact]
     public async Task Launcher_failure_is_returned()
     {
         var (_, launch) = Recorder(VoidResult<string>.AsError("no file manager"));

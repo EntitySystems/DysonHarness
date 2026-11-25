@@ -27,7 +27,8 @@ public static class DysonOpenFolder
     }
 
     /// <summary>The real absolute folder path, or the reason nothing may be opened. Does IO: call off the circuit.</summary>
-    public static Result<string, string> ResolveReal(string? relativePath, string? workRoot)
+    /// <param name="forLaunch">False for browsing (DirectoryView): a macOS bundle folder is listed, not refused. <see cref="OpenAsync"/> always launches with true.</param>
+    public static Result<string, string> ResolveReal(string? relativePath, string? workRoot, bool forLaunch = true)
     {
         if (string.IsNullOrWhiteSpace(workRoot))
             return Result<string, string>.AsError("Work directory is required.");
@@ -51,7 +52,7 @@ public static class DysonOpenFolder
             if (!IsUnder(realRoot, realFull))
                 return Result<string, string>.AsError($"Path escapes work directory: {Display(relative)}");
             // macOS `open <dir>` runs a bundle (Foo.app) instead of showing it, so a bundle folder is never handed over.
-            return OperatingSystem.IsMacOS() && (IsBundleName(Path.GetFileName(full)) || IsBundleName(Path.GetFileName(realFull)))
+            return forLaunch && OperatingSystem.IsMacOS() && (IsBundleName(Path.GetFileName(full)) || IsBundleName(Path.GetFileName(realFull)))
                 ? Result<string, string>.AsError($"Not opened: {Display(relative)} is an application bundle.")
                 : Result<string, string>.AsValue(realFull);
         }
@@ -71,7 +72,7 @@ public static class DysonOpenFolder
     private static string Display(string relative) => relative.Length == 0 ? "." : relative;
 
     /// <summary>Resolves a link on every segment (a junction in the middle of the path counts, not just the last one).</summary>
-    private static string RealPath(string full, int depth = 0)
+    internal static string RealPath(string full, int depth = 0)
     {
         // A link target can itself pass through links, so resolve it again; 16 hops is far past any real chain.
         if (depth > 16)
@@ -93,7 +94,7 @@ public static class DysonOpenFolder
         return current;
     }
 
-    private static bool IsUnder(string root, string path)
+    internal static bool IsUnder(string root, string path)
     {
         root = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         path = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

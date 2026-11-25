@@ -540,17 +540,17 @@ public static class DysonMetaAgentTools
         {
             Name = "RenderA2ui",
             Description =
-                "Render an interactive UI surface inline in the meta chat from A2UI v1.0 JSON. " +
+                "Render a UI surface inline in meta chat from A2UI v1.0 JSON. " +
                 "Use it often: whenever a component would clarify or structure what you show the user. " +
                 "Users prefer to see: embed an existing file or URL (Image, AudioPlayer, LocalVideo, Model3D, Chart) over describing it. " +
                 "Skip it for a single-sentence reply or simple chatting (use PostConversationMessage). " +
-                "With a surface, put the actions in the surface as ActionButton components (open_plan:, open_scratch:, open_file:, open_url:); " +
-                "PostConversationMessage actions are only for a plain message with no surface. " +
-                "JSON only: no markdown, HTML, or code fences. " +
+                "With a surface, put the actions in the surface as ActionButtons (open_plan:, open_scratch:, open_file:, open_url:); " +
+                "PostConversationMessage actions are only for a message with no surface. " +
+                "JSON only (no markdown/HTML/fences). " +
                 "Kit: layout (Row, Grid, Card, Tabs...), text (Text, Heading, Markdown...), inputs (TextField, Select...), data (Table, Stat, Chart...); " +
-                "Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram. No Svg/HtmlView. Image/AudioPlayer path = work file. " +
+                "Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram. No Svg/HtmlView. Image/AudioPlayer path = work file. 2+ images: one ImageGallery, not several Image. " +
                 "Reuse a surfaceId to update it. " +
-                "The dyson-a2ui skill has the format and examples.",
+                "The dyson-a2ui skill has format and examples.",
             InputSchemaJson = """
                 {"type":"object","additionalProperties":false,"required":["messages"],
                  "properties":{

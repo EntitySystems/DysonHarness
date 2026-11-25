@@ -58,12 +58,31 @@ public sealed partial class DysonSessionRuntime
             targets.Add(new DysonPipelineRelayTarget(
                 session.PersistenceId,
                 workDirectoryId,
-                token => session.Config.Pipelines is { } hook
-                    ? hook(workDirectoryId, token)
-                    : Task.FromResult(Result<DysonVersionControlService, string>.AsError("Pipelines are not available in this host"))));
+                token => ResolvePipelineService(session, workDirectoryId, token)));
         }
 
         return relay.SyncAsync(targets, ct);
+    }
+
+    /// <summary>
+    /// The runtime's own registry and repository first: they live as long as the retained scope, and sessions the runtime
+    /// factory builds carry no <see cref="DysonAgentSessionConfig.Pipelines"/> hook. The session hook is the fallback
+    /// (a host that builds its own sessions, tests).
+    /// </summary>
+    private async Task<Result<DysonVersionControlService, string>> ResolvePipelineService(
+        DysonAgentSession session, Guid workDirectoryId, CancellationToken ct)
+    {
+        if (_versionControl is not null && _workDirectories is not null)
+        {
+            var wd = await _workDirectories.GetAsync(workDirectoryId, ct).ConfigureAwait(false);
+            return wd.IsError
+                ? Result<DysonVersionControlService, string>.AsError(wd.Error)
+                : _versionControl.GetOrCreate(wd.Value);
+        }
+
+        return session.Config.Pipelines is { } hook
+            ? await hook(workDirectoryId, ct).ConfigureAwait(false)
+            : Result<DysonVersionControlService, string>.AsError("Pipelines are not available in this host");
     }
 
     /// <summary>
