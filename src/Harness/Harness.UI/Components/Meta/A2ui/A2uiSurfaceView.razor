@@ -181,14 +181,14 @@
     }
 
     /// <summary>Opens the folder modal at <paramref name="relativePath"/> (one expanded item at a time) and remembers it as this card's last folder.</summary>
-    internal void OpenDirectory(string nodeId, string title, string relativePath)
+    internal void OpenDirectory(string nodeId, string title, string relativePath, string cardPath)
     {
         _model3d = null;
         Previews.Remove(_model3dPreviewId);
         _model3dPreviewId = null;
         ReleaseImage();
         _directoryLast[nodeId] = relativePath;
-        _directory = new A2uiDirectoryOpen(nodeId, title, relativePath);
+        _directory = new A2uiDirectoryOpen(nodeId, title, relativePath, cardPath);
         _render = true;
         StateHasChanged();
     }
@@ -287,14 +287,19 @@
             _render = true;
         }
 
-        // The open folder's node is gone (deleteSurface, replaced component): close the modal.
+        // The open folder's node is gone (deleteSurface, replaced component) or the agent re-pointed its path: close the modal.
         if (_directory is { } openDirectory
-            && A2uiProps.Str(Component(openDirectory.NodeId)?["component"]) != DysonA2uiDirectoryView.ComponentName)
+            && (A2uiProps.Str(Component(openDirectory.NodeId)?["component"]) != DysonA2uiDirectoryView.ComponentName
+                || A2uiProps.Str(Component(openDirectory.NodeId)?["path"]) != openDirectory.CardPath))
         {
             _directoryLast.Remove(openDirectory.NodeId);
             _directory = null;
             _render = true;
         }
+
+        // Drop remembered folders of cards that no longer exist.
+        foreach (var stale in _directoryLast.Keys.Where(k => Component(k) is null).ToList())
+            _directoryLast.Remove(stale);
 
         var current = (Locked, Busy, Error, OpenBusy, Question, State?.Version ?? 0);
         if (!ReferenceEquals(Surface, _lastSurface) || current != _last || !SameEmbedded(EmbeddedQuestions, _lastEmbedded))

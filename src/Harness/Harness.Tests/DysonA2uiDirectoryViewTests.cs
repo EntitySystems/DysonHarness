@@ -211,6 +211,21 @@ public sealed class DysonA2uiDirectoryViewTests : IDisposable
         Assert.Equal([".git", "node_modules", ".env"], listing.Value.Entries.Select(e => e.Name));
     }
 
+    [Fact]
+    public async Task LoadAsync_skips_names_the_open_keys_cannot_round_trip_on_unix()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Windows cannot create edge-whitespace names or a backslash inside a name
+
+        await File.WriteAllTextAsync(Path.Combine(_root, " lead.txt"), "x");
+        await File.WriteAllTextAsync(Path.Combine(_root, "a\\b.txt"), "x");
+        await File.WriteAllTextAsync(Path.Combine(_root, "ok.txt"), "x");
+
+        var listing = await DysonA2uiDirectoryView.LoadAsync("", _root);
+        Assert.True(listing.IsSuccess, listing.IsError ? listing.Error : null);
+        Assert.Equal(["ok.txt"], listing.Value.Entries.Select(e => e.Name));
+    }
+
     private static DysonA2uiDirectoryEntry Entry(string name, bool dir, long? size, int day) =>
         new(name, name, dir, dir ? DysonA2uiEntryKind.Folder : DysonA2uiEntryKind.File, size,
             new DateTime(2024, 1, day, 0, 0, 0, DateTimeKind.Utc), false, false);

@@ -3,8 +3,14 @@ using DysonHarness;
 
 namespace Harness.UI.Components.Meta.A2ui;
 
-/// <summary>What the surface's folder modal shows: the node id (closes when the node goes), the card title and the folder to open at (work-relative, "" = root).</summary>
-public sealed record A2uiDirectoryOpen(string NodeId, string Title, string RelativePath);
+/// <summary>
+/// What the surface's folder modal shows: the node id (closes when the node goes), the title the agent set ("" = none, the modal then
+/// names the folder it is in), the folder to open at (work-relative, "" = root) and the card's own path (closes when it changes).
+/// </summary>
+public sealed record A2uiDirectoryOpen(string NodeId, string Title, string RelativePath, string CardPath)
+{
+    public bool HasTitle => Title.Length > 0;
+}
 
 /// <summary>Presentation helpers shared by the DirectoryView card and its modal. Text only; the Engine owns every listing rule.</summary>
 internal static class A2uiDirectoryFormat

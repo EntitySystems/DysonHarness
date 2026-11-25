@@ -211,7 +211,7 @@ public static class DysonA2uiCatalog
     public const string UnknownComponentGroups =
         "layout (Row, Column, Box, Grid, Tabs, Section, Accordion...), text (Title, Heading, Markdown, Code, Badge, Link...), "
         + "inputs (TextField, Select, Slider, DateTimeInput...), data (Table, DataTable, Stat, Timeline, Progress...), charts (Chart, BarChart...), "
-        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram";
+        + "media (Image, Icon, Video...), feedback (Popover, Modal, Tooltip...), composites (LinkCard, EntityCard...); Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, DirectoryView, PipelineRun, SubagentTasks, TreeDiagram";
 
     private static readonly IReadOnlyDictionary<string, DysonA2uiPropSpec> StatItem = Props(
         ("label", TxtReq), ("value", AnyReq), ("delta", Txt), ("trend", Enm("up", "down", "flat")),

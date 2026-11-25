@@ -14,7 +14,7 @@
 <DysonTransition Item="Item" ExitMs="140" RestoreFocus="true" OnEntered="OnEnteredAsync" Context="ctx">
     @{
         var item = ctx.Item!;
-        var header = string.IsNullOrWhiteSpace(item.Title) ? _listing?.Name ?? "Folder" : item.Title;
+        var header = item.HasTitle ? item.Title : _listing?.Name ?? "Folder";
     }
     <div class="confirm-dialog-backdrop dyson-fade-scale @ctx.StateClass"
          role="presentation"
@@ -328,7 +328,7 @@
     {
         for (var i = from + step; i >= 0 && i < _sorted.Count; i += step)
         {
-            if (!_sorted[i].Blocked)
+            if (!_sorted[i].Blocked && (_sorted[i].IsDirectory || !View.OpenBusy))
                 return i;
         }
 

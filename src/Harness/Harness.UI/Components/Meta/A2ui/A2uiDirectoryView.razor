@@ -91,7 +91,7 @@
                                 aria-label="@($"{hidden} more items, open folder")"
                                 aria-haspopup="dialog"
                                 @onclick="Expand">
-                            <span class="a2ui-dir__name">+@hidden more</span>
+                            <span class="a2ui-dir__name">+@hidden@(listing.Truncated && listing.TotalSeen >= DysonA2uiDirectoryView.ScanCap ? "+" : "") more</span>
                         </button>
                     </li>
                 }
@@ -147,11 +147,15 @@
             _listing = loaded.Value;
     }
 
+    // The title the agent set, or "" (the modal then names whichever folder it is in).
+    private string ExplicitTitle() =>
+        (Component["title"] is null ? "" : A2uiProps.String(View, Component["title"], Scope)).Trim();
+
     private string Title()
     {
-        var title = Component["title"] is null ? "" : A2uiProps.String(View, Component["title"], Scope);
-        if (!string.IsNullOrWhiteSpace(title))
-            return title.Trim();
+        var title = ExplicitTitle();
+        if (title.Length > 0)
+            return title;
         if (_listing is { } listing)
             return listing.Name;
 
@@ -166,7 +170,7 @@
     private void Expand()
     {
         if (_listing is { } listing && Id is not null)
-            View.OpenDirectory(Id, Title(), View.DirectoryStart(Id, listing.RelativePath));
+            View.OpenDirectory(Id, ExplicitTitle(), View.DirectoryStart(Id, listing.RelativePath), _path ?? "");
     }
 
     private Task OpenEntryAsync(DysonA2uiDirectoryEntry entry)
@@ -177,7 +181,7 @@
             return View.OpenAsync(entry.OpenFunc);
 
         if (Id is not null)
-            View.OpenDirectory(Id, Title(), entry.RelativePath);
+            View.OpenDirectory(Id, ExplicitTitle(), entry.RelativePath, _path ?? "");
         return Task.CompletedTask;
     }
 

@@ -119,6 +119,10 @@ public static class DysonA2uiDirectoryView
                     break;
                 }
 
+                // ponytail: a name the open_file:/open_folder: key cannot carry back (edge whitespace is trimmed there, a Unix
+                // backslash is turned into '/') would list but never open, so it is left out. Upgrade: a path-free entry id.
+                if (info.Name.Trim() != info.Name || (!OperatingSystem.IsWindows() && info.Name.Contains('\\')))
+                    continue;
                 seen.Add(info);
             }
 
@@ -172,7 +176,7 @@ public static class DysonA2uiDirectoryView
             if (isLink)
             {
                 var target = info.ResolveLinkTarget(returnFinalTarget: true);
-                blocked = !DysonOpenFolder.IsUnder(realRoot, DysonOpenFolder.RealPath((target ?? info).FullName));
+                blocked = target is null || !DysonOpenFolder.IsUnder(realRoot, DysonOpenFolder.RealPath(target.FullName));
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
@@ -184,7 +188,7 @@ public static class DysonA2uiDirectoryView
         if (info is FileInfo file)
         {
             try { size = file.Length; }
-            catch (IOException) { /* dangling link: no size */ }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* dangling link or unreadable: no size */ }
         }
 
         return new DysonA2uiDirectoryEntry(
