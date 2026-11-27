@@ -1,0 +1,152 @@
+@namespace Harness.UI.Components.Meta.A2ui
+@using DysonHarness
+@implements IDisposable
+@inject DysonUiHost Host
+@inject DysonMessageBus Bus
+@inject IJSRuntime Js
+
+@* One SubagentTasks row: spinner, title, #id, X/N pill, an optional expand button and (expanded) the agent's own
+   sub-agents as the same row again. Card data, the roster and the live watch are DysonA2uiSubagentTasks (Engine);
+   opening a session is the roster click (DysonUiHost.NavigateToSessionAsync, then home). The expand button is a
+   sibling of the open button, so it never triggers the open. *@
+@if (_card is { Message: null } card)
+{
+    <div class="a2ui-subagent-tasks-wrap" @attributes="Aria">
+        <div class="a2ui-subagent-tasks"
+             data-status="@card.Status"
+             data-running="@(card.IsRunning ? "true" : null)">
+            @if (card.PersistenceId != Guid.Empty)
+            {
+                <button type="button"
+                        class="a2ui-subagent-tasks__open"
+                        title="Open @card.Title"
+                        aria-label="@($"Open {card.Title} #{card.AgentId}")"
+                        @onclick="OpenAsync">
+                    @Content(card)
+                </button>
+            }
+            else
+            {
+                <div class="a2ui-subagent-tasks__open">@Content(card)</div>
+            }
+            @if (card.ChildIds.Count > 0)
+            {
+                <button type="button"
+                        class="a2ui-subagent-tasks__toggle"
+                        aria-expanded="@(_expanded ? "true" : "false")"
+                        aria-controls="@(_expanded ? _childrenDomId : null)"
+                        @onclick="Toggle">
+                    <span class="a2ui-subagent-tasks__chevron" aria-hidden="true"></span>
+                    @DysonA2uiSubagentTasks.ToggleLabel(card.ChildIds.Count, _expanded)
+                </button>
+            }
+        </div>
+        @if (_expanded && card.ChildIds.Count > 0 && _self is not null)
+        {
+            <div class="a2ui-subagent-tasks__children" id="@_childrenDomId">
+                @foreach (var childId in card.ChildIds)
+                {
+                    <A2uiSubagentRow @key="childId" Owner="_self" AgentId="childId" />
+                }
+            </div>
+        }
+    </div>
+}
+else
+{
+    <div class="a2ui-subagent-tasks a2ui-subagent-tasks--note" @attributes="Aria">@(_card?.Message ?? "")</div>
+}
+
+@code {
+    private DysonA2uiSubagentTasksCard? _card;
+    private DysonAgentSession? _self;
+    private IDisposable? _watch;
+    private DysonAgentSession? _boundOwner;
+    private Guid _watchedPersistenceId;
+    private int _boundId = -1;
+    private bool _expanded;
+    private bool _disposed;
+    private readonly string _childrenDomId = "a2ui-st-" + Guid.NewGuid().ToString("N")[..8];
+
+    /// <summary>The session whose direct child <see cref="AgentId"/> this row shows.</summary>
+    [Parameter, EditorRequired] public DysonAgentSession? Owner { get; set; }
+    [Parameter, EditorRequired] public int AgentId { get; set; }
+    [Parameter] public Dictionary<string, object>? Aria { get; set; }
+
+    private RenderFragment Content(DysonA2uiSubagentTasksCard card) => @<text>
+        @if (card.IsRunning)
+        {
+            <span class="subagent-card__spinner" aria-hidden="true"></span>
+        }
+        <span class="a2ui-subagent-tasks__title">@card.Title</span>
+        <span class="a2ui-subagent-tasks__id mono">#@card.AgentId</span>
+        <span class="a2ui-subagent-tasks__pill mono"
+              aria-live="polite"
+              aria-label="@($"{card.Complete} of {card.Total} tasks complete")">@card.Pill</span>
+    </text>;
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(Owner, _boundOwner) && AgentId == _boundId)
+            return;
+
+        _boundOwner = Owner;
+        _boundId = AgentId;
+        Refresh();
+        Watch();
+    }
+
+    private void Watch()
+    {
+        _watch?.Dispose();
+        _watch = null;
+        _watchedPersistenceId = _card?.PersistenceId ?? Guid.Empty;
+        var owner = Owner;
+        var id = AgentId;
+        var watch = DysonA2uiSubagentTasks.Watch(Bus, owner, id, _ => InvokeAsync(() =>
+        {
+            if (_disposed || id != _boundId || !ReferenceEquals(owner, _boundOwner))
+                return;
+            var before = _card;
+            Refresh();
+            // The agent appeared (or got its persistence id) after the first render: watch it from now on.
+            if (_card?.PersistenceId != _watchedPersistenceId)
+                Watch();
+            if (!Same(before, _card))
+                StateHasChanged();
+        }));
+        if (watch.IsSuccess)
+            _watch = watch.Value;
+    }
+
+    // Events in the agent's scope also come from its sub-agents; skip the re-render when nothing this row shows moved.
+    private static bool Same(DysonA2uiSubagentTasksCard? a, DysonA2uiSubagentTasksCard? b) =>
+        a is not null && b is not null && a with { ChildIds = b.ChildIds } == b && a.ChildIds.SequenceEqual(b.ChildIds);
+
+    private void Refresh()
+    {
+        _card = DysonA2uiSubagentTasks.Build(Owner, AgentId);
+        _self = null;
+        if (Owner is not null && Owner.TryGetSubagent(AgentId, out var self))
+            _self = self;
+    }
+
+    private void Toggle() => _expanded = !_expanded;
+
+    private async Task OpenAsync()
+    {
+        if (_card is not { Message: null, PersistenceId: var id } || id == Guid.Empty)
+            return;
+
+        var opened = await Host.NavigateToSessionAsync(id);
+        if (opened.IsSuccess)
+            await DysonCircuitJs.NavigateAsync(Js, "/");
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _watch?.Dispose();
+        _watch = null;
+    }
+}

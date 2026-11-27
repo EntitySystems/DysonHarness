@@ -51,12 +51,13 @@ public sealed class DysonVersionControlService : IDisposable
     private bool _detected;
     private string? _runsEtag;
     private readonly Dictionary<long, string?> _jobsEtag = new();
-    private readonly Dictionary<long, (int Attempt, DateTimeOffset UpdatedAt, IReadOnlyList<DysonPipelineJob> Jobs)> _jobsCache = new();
+    private readonly Dictionary<long, (int Attempt, DateTimeOffset UpdatedAt, IReadOnlyList<DysonPipelineJob> Jobs, bool Final)> _jobsCache = new();
     private readonly LinkedList<long> _wanted = new();
     private readonly HashSet<long> _wantedSet = new();
     private int _jobCursor;
     private int _pillLeases;
     private int _panelLeases;
+    private int _eventLeases;
     private int _panelOpened;
     private int _consecutiveFailures;
     private int? _rateRemaining;
@@ -125,7 +126,25 @@ public sealed class DysonVersionControlService : IDisposable
             EnsureLoopLocked();
             if (panelOpen)
                 CancelWaitLocked();
-            return new Lease(this, panelOpen);
+            return new Lease(this, panelOpen ? LeaseKind.Panel : LeaseKind.Pill);
+        }
+    }
+
+    /// <summary>
+    /// Lease for <see cref="DysonPipelineEvent"/> consumers (the Meta relay). Like a pill lease, plus job fetches
+    /// (same cap and freshness cache as a panel) only while some run is active, so an idle repo costs nothing extra.
+    /// A run that completes between two ticks still gets one final job fetch (see <see cref="NeedsJobsLocked"/>).
+    /// </summary>
+    public IDisposable WatchEvents()
+    {
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _eventLeases++;
+            if (_loop is not { IsCompleted: false })
+                ForgetNotDetectedLocked();
+            EnsureLoopLocked();
+            return new Lease(this, LeaseKind.Events);
         }
     }
 
@@ -597,9 +616,13 @@ public sealed class DysonVersionControlService : IDisposable
                 _runsEtag = runsResult.Value.ETag;
         }
 
-        var jobs = await FetchJobsAsync(provider, target, runs, panelOpen, token).ConfigureAwait(false);
+        bool eventJobs;
+        lock (_lock)
+            eventJobs = _eventLeases > 0 && runs.Any(NeedsJobsLocked);
+        var jobs = await FetchJobsAsync(provider, target, runs, panelOpen || eventJobs, token).ConfigureAwait(false);
 
         DysonPipelineSnapshot next;
+        DysonPipelineSnapshot? previous;
         bool publish;
         lock (_lock)
         {
@@ -630,7 +653,7 @@ public sealed class DysonVersionControlService : IDisposable
                 _binding.WorkDirectoryId, provider.Id, provider.DisplayName, target,
                 runs, jobs, running, queued, error, _seams.Now());
 
-            var previous = _snapshot;
+            previous = _snapshot;
             publish = previous is null
                 || !previous.Runs.SequenceEqual(next.Runs)
                 || !JobsEqual(previous.Jobs, next.Jobs)
@@ -638,8 +661,13 @@ public sealed class DysonVersionControlService : IDisposable
             Volatile.Write(ref _snapshot, next);
         }
 
-        if (publish)
-            _bus.Publish(DysonBusScopes.WorkDirectory(_binding.WorkDirectoryId), new DysonPipelinesChangedEvent(_binding.WorkDirectoryId));
+        if (!publish)
+            return;
+        var scope = DysonBusScopes.WorkDirectory(_binding.WorkDirectoryId);
+        _bus.Publish(scope, new DysonPipelinesChangedEvent(_binding.WorkDirectoryId));
+        // Outside the lock; subscribers are channel-only (publish is synchronous on this poll thread).
+        foreach (var evt in DysonPipelineEventDiff.Diff(_binding.WorkDirectoryId, previous, next, next.FetchedAt ?? _seams.Now()))
+            _bus.Publish(scope, evt);
     }
 
     private async Task<bool> EnsureDetectedAsync(CancellationToken token)
@@ -701,11 +729,7 @@ public sealed class DysonVersionControlService : IDisposable
             var seen = new HashSet<long>();
             foreach (var run in runs)
             {
-                if (run.State is not (DysonPipelineState.Queued or DysonPipelineState.Waiting or DysonPipelineState.Running))
-                    continue;
-                if (!seen.Add(run.Id))
-                    continue;
-                if (Fresh(run))
+                if (!NeedsJobsLocked(run) || !seen.Add(run.Id))
                     continue;
                 candidates.Add((run, EtagOf(run.Id)));
             }
@@ -732,8 +756,13 @@ public sealed class DysonVersionControlService : IDisposable
             {
                 if (!result.Value.NotModified)
                 {
-                    _jobsCache[run.Id] = (run.Attempt, run.UpdatedAt, result.Value.Items);
+                    _jobsCache[run.Id] = (run.Attempt, run.UpdatedAt, result.Value.Items, !IsActive(run));
                     _jobsEtag[run.Id] = result.Value.ETag;
+                }
+                else if (!IsActive(run) && _jobsCache.TryGetValue(run.Id, out var kept))
+                {
+                    // Final fetch answered 304: the cached jobs are final; stamp them so the run is not refetched every tick.
+                    _jobsCache[run.Id] = (run.Attempt, run.UpdatedAt, kept.Jobs, true);
                 }
 
                 if (_wantedSet.Remove(run.Id))
@@ -748,6 +777,24 @@ public sealed class DysonVersionControlService : IDisposable
             PruneLocked(runs);
 
         return CurrentJobs(runs);
+    }
+
+    private static bool IsActive(DysonPipelineState state) =>
+        state is DysonPipelineState.Queued or DysonPipelineState.Waiting or DysonPipelineState.Running;
+
+    private static bool IsActive(DysonPipelineRun run) => IsActive(run.State);
+
+    /// <summary>
+    /// An active run is fetched when its cached jobs predate its (Attempt, UpdatedAt). A finished run is fetched only if
+    /// jobs were cached while it ran (not yet <c>Final</c>, i.e. fetched while it was finished; the run can finish without
+    /// its updated_at moving past the cached stamp) or are stale: jobs cached as Running never outlive the run, and a job
+    /// that legitimately stays Queued does not make it refetch forever. A finished run never fetched stays unfetched.
+    /// </summary>
+    private bool NeedsJobsLocked(DysonPipelineRun run)
+    {
+        if (!_jobsCache.TryGetValue(run.Id, out var cached))
+            return IsActive(run);
+        return !Fresh(run) || (!IsActive(run) && !cached.Final);
     }
 
     private bool Fresh(DysonPipelineRun run) =>
@@ -793,14 +840,16 @@ public sealed class DysonVersionControlService : IDisposable
             _rateRemaining, _retryAfter, pollHint: null, _seams.Now());
     }
 
-    private int LeaseCountLocked() => _pillLeases + _panelLeases;
+    private int LeaseCountLocked() => _pillLeases + _panelLeases + _eventLeases;
 
-    private void ReleaseLease(bool panelOpen)
+    private void ReleaseLease(LeaseKind kind)
     {
         lock (_lock)
         {
-            if (panelOpen)
+            if (kind == LeaseKind.Panel)
                 _panelLeases = Math.Max(0, _panelLeases - 1);
+            else if (kind == LeaseKind.Events)
+                _eventLeases = Math.Max(0, _eventLeases - 1);
             else
                 _pillLeases = Math.Max(0, _pillLeases - 1);
             if (LeaseCountLocked() == 0)
@@ -837,7 +886,9 @@ public sealed class DysonVersionControlService : IDisposable
         return true;
     }
 
-    private sealed class Lease(DysonVersionControlService owner, bool panelOpen) : IDisposable
+    private enum LeaseKind { Pill, Panel, Events }
+
+    private sealed class Lease(DysonVersionControlService owner, LeaseKind kind) : IDisposable
     {
         private int _disposed;
 
@@ -845,7 +896,7 @@ public sealed class DysonVersionControlService : IDisposable
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
-            owner.ReleaseLease(panelOpen);
+            owner.ReleaseLease(kind);
         }
     }
 }

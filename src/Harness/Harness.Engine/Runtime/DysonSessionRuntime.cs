@@ -26,6 +26,8 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
     private readonly IDisposable? _slugContextSubscription;
     private readonly DysonWorkDirectoryFocus? _focus;
     private readonly DysonVoiceMode? _voice;
+    private readonly DysonVersionControlRegistry? _versionControl;
+    private readonly IDysonWorkDirectoryRepository? _workDirectories;
     private readonly ConcurrentDictionary<Guid, DysonAgentSessionRuntimeLease> _leasesById = new();
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
     private readonly ConcurrentDictionary<Guid, byte> _busySessions = new();
@@ -71,7 +73,9 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
         DysonSessionEventPublisher? sessionEvents = null,
         DysonWorkDirectoryFocus? focus = null,
         DysonVoiceMode? voice = null,
-        DysonMessageBus? bus = null)
+        DysonMessageBus? bus = null,
+        DysonVersionControlRegistry? versionControl = null,
+        IDysonWorkDirectoryRepository? workDirectories = null)
     {
         ArgumentNullException.ThrowIfNull(subjectContext);
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
@@ -80,6 +84,8 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
         _focus = focus;
         _voice = voice;
         _bus = bus;
+        _versionControl = versionControl;
+        _workDirectories = workDirectories;
         if (bus is not null)
         {
             var sub = bus.Subscribe<DysonSlugDefaultMaxTargetContextChangedEvent>(
@@ -896,6 +902,7 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
 
             CancelAllPromptTokens();
             DisposeVoiceSidecarSubscriptions();
+            DisposePipelineRelay();
             _slugContextSubscription?.Dispose();
         }
         finally
@@ -1815,5 +1822,7 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
             Kind = kind,
             Version = version,
         });
+        if (kind is DysonRuntimeChangeKind.SessionGraph or DysonRuntimeChangeKind.Busy)
+            SchedulePipelineRelaySync();
     }
 }

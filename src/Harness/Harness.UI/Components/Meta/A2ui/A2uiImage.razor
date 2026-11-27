@@ -8,23 +8,37 @@
 
 @* Image.path: a work-directory png/jpg/gif/webp/bmp shown through the same-origin /__dyson/file-preview route (the only
    fetch a surface makes; a remote Image.url is never loaded and stays a placeholder in A2uiMediaNode). Card data is
-   DysonA2uiImage (Engine). The expand button asks the surface view for the large modal, which registers its own preview id. *@
+   DysonA2uiImage (Engine). A click anywhere on the image (one <button> around the img) asks the surface view for the large modal, which
+   registers its own preview id; the expand icon is decorative. Inline (inside a kit Button) renders the plain image. *@
 <figure class="a2ui-image" style="--a2ui-image-h:@HeightPx" @attributes="Aria">
     @if (_card is not null && !_decodeFailed)
     {
+        var name = Alt();
+        var title = Title();
         <div class="a2ui-image__box">
-            <img src="@_src" alt="@Alt()" loading="lazy" decoding="async" @onerror="OnImgError" />
-            @if (_height >= 120)
+            @if (_height >= 120 && !Inline)
             {
                 <button type="button"
-                        class="a2ui-image__expand"
-                        aria-label="@("Expand image: " + Alt())"
-                        title="Expand"
-                        @onclick="Expand">
-                    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
-                        <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" fill="none" stroke="currentColor" stroke-width="1.5" />
-                    </svg>
+                        class="a2ui-image__open"
+                        aria-label="@("Open image: " + name)"
+                        title="@(title ?? name)"
+                        @onclick="Expand"
+                        @onclick:stopPropagation="true">
+                    <img src="@_src" alt="@name" loading="lazy" decoding="async" @onerror="OnImgError" />
+                    <span class="a2ui-image__expand" aria-hidden="true">
+                        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+                            <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" fill="none" stroke="currentColor" stroke-width="1.5" />
+                        </svg>
+                    </span>
                 </button>
+            }
+            else
+            {
+                <img src="@_src" alt="@name" loading="lazy" decoding="async" @onerror="OnImgError" />
+            }
+            @if (title is not null && _height >= 120)
+            {
+                <div class="a2ui-image__title-band" aria-hidden="@(title == name ? "true" : null)">@title</div>
             }
         </div>
         @if (Caption() is { Length: > 0 } caption)
@@ -56,6 +70,9 @@
     [Parameter, EditorRequired] public JsonObject Component { get; set; } = default!;
     [Parameter] public string Scope { get; set; } = "";
     [Parameter] public Dictionary<string, object>? Aria { get; set; }
+
+    /// <summary>Rendered inside a kit Button: plain image (no open button, icon or tooltip); the title band still shows.</summary>
+    [Parameter] public bool Inline { get; set; }
 
     // Clamped int formatted invariant: no agent string reaches the style.
     private string HeightPx => string.Create(CultureInfo.InvariantCulture, $"{_height}px");
@@ -95,21 +112,19 @@
     private void Expand()
     {
         if (_card is { } card && Id is not null)
-            View.OpenImage(Id, Alt(), Caption(), card);
+            View.OpenImage(Id, Alt(), Title(), Caption(), card);
     }
 
-    // First non-blank of alt, description, fallback, then the file name.
-    private string Alt()
-    {
-        foreach (var key in new[] { "alt", "description", "fallback" })
-        {
-            var text = A2uiProps.String(View, Component[key], Scope);
-            if (!string.IsNullOrWhiteSpace(text))
-                return text;
-        }
+    // Engine rule: first non-blank of alt, description, fallback, title, then the file name.
+    private string Alt() =>
+        DysonA2uiImage.AccessibleName(
+            A2uiProps.String(View, Component["alt"], Scope),
+            A2uiProps.String(View, Component["description"], Scope),
+            A2uiProps.String(View, Component["fallback"], Scope),
+            Title(),
+            _card?.Title ?? Path.GetFileName(_path ?? "")) ?? "Image";
 
-        return _card?.Title ?? Path.GetFileName(_path ?? "") ?? "Image";
-    }
+    private string? Title() => DysonA2uiImage.NormalizeTitle(A2uiProps.String(View, Component["title"], Scope));
 
     private string Caption() => A2uiProps.String(View, Component["caption"], Scope);
 

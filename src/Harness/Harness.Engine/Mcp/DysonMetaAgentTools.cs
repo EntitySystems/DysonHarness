@@ -499,7 +499,7 @@ public static class DysonMetaAgentTools
                 "Do not use this to ask the user a question. A question goes through PostUserQuestion, with a custom message. " +
                 "Assistant text is not shown; use this for everything the user should see. " +
                 "Optional actions add buttons { name, func } where func is one string. " +
-                "open_plan:{planId}, open_scratch:{id}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. " +
+                "open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_folder:{path} (opens the folder in the OS file manager), and open_url:{url} need no registration; any other key must already be registered. " +
                 "Buttons are not run until the user clicks. " +
                 "When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. " +
                 "Omit actions or pass [] for a plain markdown bubble. " +
@@ -514,7 +514,7 @@ public static class DysonMetaAgentTools
                     "actions": {
                       "type": "array",
                       "maxItems": 8,
-                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_scratch:{id}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for a plain markdown bubble.",
+                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_folder:{path} (opens the folder in the OS file manager), and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for a plain markdown bubble.",
                       "items": {
                         "type": "object",
                         "required": ["name", "func"],
@@ -540,16 +540,17 @@ public static class DysonMetaAgentTools
         {
             Name = "RenderA2ui",
             Description =
-                "Render an interactive UI surface inline in the meta chat from A2UI v1.0 JSON. " +
-                "Use it often: whenever a component (cards, lists, forms, choices, buttons) would clarify or structure what you show the user. " +
+                "Render a UI surface inline in meta chat from A2UI v1.0 JSON. " +
+                "Use it often: whenever a component would clarify or structure what you show the user. " +
+                "Users prefer to see: embed an existing file or URL (Image, AudioPlayer, LocalVideo, Model3D, Chart) over describing it. " +
                 "Skip it for a single-sentence reply or simple chatting (use PostConversationMessage). " +
-                "When you use a surface, put the actions in the surface as ActionButton components (func open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_url:{url}); " +
-                "PostConversationMessage actions are only for a plain message with no surface. " +
-                "JSON only: no markdown, HTML, or code fences. " +
-                "Kit: layout (Row, Column, Grid, Card, Tabs...), text (Text, Heading, Markdown, Link...), inputs (TextField, Select, Slider...), data (Table, DataTable, Stat, Chart...); " +
-                "Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram. No Svg/HtmlView. Image.path = work file (shown); url never loaded. " +
+                "With a surface, put the actions in the surface as ActionButtons (open_plan:, open_scratch:, open_file:, open_url:); " +
+                "PostConversationMessage actions are only for a message with no surface. " +
+                "JSON only (no markdown/HTML/fences). " +
+                "Kit: layout (Row, Grid, Card, Tabs...), text (Text, Heading, Markdown...), inputs (TextField, Select...), data (Table, Stat, Chart...); " +
+                "Dyson catalog: ActionButton, QuestionSlot, LocalVideo, Model3D, PipelineRun, SubagentTasks, TreeDiagram. No Svg/HtmlView. Image/AudioPlayer path = work file. 2+ images: one ImageGallery, not several Image. " +
                 "Reuse a surfaceId to update it. " +
-                "The dyson-a2ui skill has the format and examples.",
+                "The dyson-a2ui skill has format and examples.",
             InputSchemaJson = """
                 {"type":"object","additionalProperties":false,"required":["messages"],
                  "properties":{
@@ -596,7 +597,7 @@ public static class DysonMetaAgentTools
                     "actions": {
                       "type": "array",
                       "maxItems": 8,
-                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_scratch:{id}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for no buttons.",
+                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_folder:{path} (opens the folder in the OS file manager), and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for no buttons.",
                       "items": {
                         "type": "object",
                         "required": ["name", "func"],
@@ -675,7 +676,7 @@ public static class DysonMetaAgentTools
                     "actions": {
                       "type": "array",
                       "maxItems": 8,
-                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_scratch:{id}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] to clear the buttons.",
+                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_scratch:{id}, open_file:{path}, open_folder:{path} (opens the folder in the OS file manager), and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] to clear the buttons.",
                       "items": {
                         "type": "object",
                         "required": ["name", "func"],

@@ -131,6 +131,9 @@ public class DysonRenderA2uiTests
     [Theory]
     [InlineData("open_url:javascript:alert(1)", "Only http/https URLs are allowed.")]
     [InlineData("open_file:../x", "Path escapes work directory")]
+    [InlineData("open_folder:../x", "Path escapes work directory")]
+    [InlineData("open_folder:src/../..", "Path escapes work directory")]
+    [InlineData("open_folder:", "Folder path is required.")]
     public async Task ActionButton_bad_payload_is_tool_error_and_publishes_no_surface(string func, string reason)
     {
         var (session, executor) = await MetaExecutorAsync();
@@ -177,6 +180,27 @@ public class DysonRenderA2uiTests
     }
 
     [Fact]
+    public async Task RenderA2ui_DirectoryView_escaping_path_fails_at_pointer_but_missing_folder_renders()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        foreach (var path in new[] { "../x", Path.Combine(Path.GetTempPath(), "x") })
+        {
+            var bad = await RenderAsync(executor, Args(VideoSurface("dir", path, "DirectoryView")));
+            Assert.True(bad.IsError, path);
+            Assert.Contains("\"VALIDATION_FAILED\"", bad.Content, StringComparison.Ordinal);
+            Assert.Contains("/components/0/path", bad.Content, StringComparison.Ordinal);
+            Assert.Empty(Assert.Single(session.Turns).A2uiSurface!.Components);
+        }
+
+        // "." (the work root) and a missing folder are card text at render time, not a tool error.
+        foreach (var path in new[] { ".", "missing/dir-" + Guid.NewGuid().ToString("N") })
+        {
+            var ok = await RenderAsync(executor, Args(VideoSurface("dir_" + Guid.NewGuid().ToString("N"), path, "DirectoryView")));
+            Assert.False(ok.IsError, ok.Content);
+        }
+    }
+
+    [Fact]
     public async Task Image_escaping_path_fails_at_the_path_pointer_but_missing_file_renders()
     {
         var (session, executor) = await MetaExecutorAsync();
@@ -187,6 +211,47 @@ public class DysonRenderA2uiTests
         Assert.Empty(Assert.Single(session.Turns).A2uiSurface!.Components);
 
         var missing = await RenderAsync(executor, Args(VideoSurface("img", "gone-" + Guid.NewGuid().ToString("N") + ".png", "Image")));
+        Assert.False(missing.IsError, missing.Content);
+    }
+
+    [Fact]
+    public async Task ImageGallery_escaping_paths_fail_at_the_item_pointer_but_missing_file_renders()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        static JsonObject Gallery(params JsonNode[] images)
+        {
+            var create = Create("gal", new JsonObject { ["id"] = "root", ["component"] = "ImageGallery", ["images"] = new JsonArray(images) });
+            create["createSurface"]!["catalogId"] = DysonCatalog;
+            return create;
+        }
+
+        var parent = await RenderAsync(executor, Args(Gallery(JsonValue.Create("a.png")!, JsonValue.Create("../x.png")!)));
+        Assert.True(parent.IsError);
+        Assert.Contains("\"VALIDATION_FAILED\"", parent.Content, StringComparison.Ordinal);
+        Assert.Contains("/components/0/images/1", parent.Content, StringComparison.Ordinal);
+        Assert.Empty(Assert.Single(session.Turns).A2uiSurface!.Components);
+
+        var rooted = await RenderAsync(executor, Args(Gallery(JsonValue.Create("https://example.com/a.png")!, new JsonObject { ["path"] = "/etc/passwd" })));
+        Assert.True(rooted.IsError);
+        Assert.Contains("/components/0/images/1/path", rooted.Content, StringComparison.Ordinal);
+
+        var missing = await RenderAsync(executor, Args(Gallery(
+            JsonValue.Create("gone-" + Guid.NewGuid().ToString("N") + ".png")!,
+            new JsonObject { ["url"] = "https://example.com/a.png" })));
+        Assert.False(missing.IsError, missing.Content);
+    }
+
+    [Fact]
+    public async Task AudioPlayer_escaping_path_fails_at_the_path_pointer_but_missing_file_renders()
+    {
+        var (session, executor) = await MetaExecutorAsync();
+        var bad = await RenderAsync(executor, Args(VideoSurface("aud", "../x.mp3", "AudioPlayer")));
+        Assert.True(bad.IsError);
+        Assert.Contains("\"VALIDATION_FAILED\"", bad.Content, StringComparison.Ordinal);
+        Assert.Contains("/components/0/path", bad.Content, StringComparison.Ordinal);
+        Assert.Empty(Assert.Single(session.Turns).A2uiSurface!.Components);
+
+        var missing = await RenderAsync(executor, Args(VideoSurface("aud", "gone-" + Guid.NewGuid().ToString("N") + ".mp3", "AudioPlayer")));
         Assert.False(missing.IsError, missing.Content);
     }
 

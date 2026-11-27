@@ -109,7 +109,7 @@
     [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
     [Parameter] public string? ActiveWorkRootPath { get; set; }
 
-    private static string OpenInFileManagerLabel =>
+    internal static string OpenInFileManagerLabel =>
         OperatingSystem.IsWindows()
             ? "Open in Explorer"
             : OperatingSystem.IsMacOS()

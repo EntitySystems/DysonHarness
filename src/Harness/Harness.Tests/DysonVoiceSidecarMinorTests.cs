@@ -108,12 +108,74 @@ public class DysonVoiceSidecarMinorTests
         Assert.Contains("Start a new session to switch provider kind", applied.Error, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Pipeline_batch_to_an_idle_meta_becomes_a_queued_turn_with_the_marker()
+    {
+        var prompts = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var harness = await Rig.CreateAsync(prompts);
+        var meta = await harness.AdoptAsync(DysonAgentModes.MetaAgent);
+
+        var delivered = await harness.Runtime.DeliverPipelineBatchAsync(meta.PersistenceId, "run 1 failed", CancellationToken.None);
+        Assert.True(delivered.IsSuccess, delivered.IsError ? delivered.Error : null);
+
+        var ran = await prompts.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.StartsWith(DysonInjectedUserComments.PipelineMarker, ran, StringComparison.Ordinal);
+        Assert.Contains("run 1 failed", ran, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Pipeline_batch_to_a_running_meta_turn_is_injected_and_never_queued_or_cancelled()
+    {
+        await using var harness = await Rig.CreateAsync(null);
+        var meta = await harness.AdoptAsync(DysonAgentModes.MetaAgent);
+        var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal, Instruction = "working" };
+        using var inFlight = meta.BeginInFlightPrompt(turn);
+
+        var delivered = await harness.Runtime.DeliverPipelineBatchAsync(meta.PersistenceId, "run 1 failed", CancellationToken.None);
+
+        Assert.True(delivered.IsSuccess, delivered.IsError ? delivered.Error : null);
+        var comment = Assert.Single(DysonInjectedUserComments.From(turn.ReasoningLog));
+        Assert.Equal(DysonInjectedUserComments.PipelineMarker, comment.Marker);
+        Assert.Equal("run 1 failed", comment.Text);
+        Assert.Empty(harness.Runtime.GetQueuedPrompts(meta.PersistenceId));
+        Assert.Null(turn.CompletedUtc);
+    }
+
+    [Fact]
+    public async Task Pipeline_batch_supersedes_a_still_queued_older_batch()
+    {
+        var prompts = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var harness = await Rig.CreateAsync(prompts);
+        var meta = await harness.AdoptAsync(DysonAgentModes.MetaAgent);
+        var stale = DysonAgentSession.CreateNormalTurn(
+            DysonInjectedUserComments.FormatWithMarker(DysonInjectedUserComments.PipelineMarker, "stale batch"));
+        Assert.True(harness.Runtime.EnqueuePrompt(meta.PersistenceId, stale).IsSuccess);
+
+        var delivered = await harness.Runtime.DeliverPipelineBatchAsync(meta.PersistenceId, "fresh batch", CancellationToken.None);
+        Assert.True(delivered.IsSuccess, delivered.IsError ? delivered.Error : null);
+
+        // The first prompt to run is the fresh one: the stale one was dropped from the queue, not run first.
+        var ran = await prompts.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Contains("fresh batch", ran, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Pipeline_batch_for_a_vanished_session_is_dropped_quietly()
+    {
+        await using var harness = await Rig.CreateAsync(null);
+        var delivered = await harness.Runtime.DeliverPipelineBatchAsync(Guid.NewGuid(), "x", CancellationToken.None);
+        Assert.True(delivered.IsSuccess);
+    }
+
     private sealed class Rig : IAsyncDisposable
     {
         private readonly SqliteConnection _connection;
 
-        private Rig(SqliteConnection connection, DysonSessionRuntime runtime, DysonMessageBus bus)
+        private readonly TaskCompletionSource<string>? _prompts;
+
+        private Rig(SqliteConnection connection, DysonSessionRuntime runtime, DysonMessageBus bus, TaskCompletionSource<string>? prompts)
         {
+            _prompts = prompts;
             _connection = connection;
             Runtime = runtime;
             Bus = bus;
@@ -131,13 +193,13 @@ public class DysonVoiceSidecarMinorTests
             var bus = new DysonMessageBus();
             var runtime = new DysonSessionRuntime(
                 subject, sessions, new LoadingFactory(sessions, bus, prompts), voice: null);
-            return Task.FromResult(new Rig(connection, runtime, bus));
+            return Task.FromResult(new Rig(connection, runtime, bus, prompts));
         }
 
         public async Task<StubSession> AdoptAsync(string mode)
         {
             var created = await CreateRowAsync(mode, parentId: null);
-            var session = new StubSession(mode, new DysonAgentSessionConfig { Bus = Bus }, null);
+            var session = new StubSession(mode, new DysonAgentSessionConfig { Bus = Bus }, _prompts);
             session.SetPersistenceIdForTest(created);
             var adopted = Runtime.AdoptLiveSession(session);
             Assert.True(adopted.IsSuccess, adopted.IsError ? adopted.Error : null);

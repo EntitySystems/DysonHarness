@@ -1,0 +1,223 @@
+/* Folder modal: size modifier on the global confirm-dialog, plus toolbar, breadcrumb and listing table. Tokens from app.css only. */
+.a2ui-dir-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(900px, 94vw);
+  max-width: none;
+  height: min(80vh, 720px);
+  max-height: min(90vh, 960px);
+}
+
+/* Zero-size focus-trap anchors; the @onfocus handlers send focus to the other end of the dialog. */
+.a2ui-dir-modal__sentinel {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  outline: none;
+}
+
+.a2ui-dir-modal__toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  min-width: 0;
+}
+
+.a2ui-dir-modal__crumbs {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.a2ui-dir-modal__crumbs ol {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.a2ui-dir-modal__crumbs li + li::before {
+  content: "/";
+  padding: 0 var(--sp-1);
+  color: var(--text-faint);
+}
+
+.a2ui-dir-modal__crumb {
+  padding: 2px var(--sp-1);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.a2ui-dir-modal__crumb:hover {
+  background: var(--accent-softer);
+  color: var(--text);
+}
+
+.a2ui-dir-modal__crumb:focus-visible,
+.a2ui-dir-modal__sort:focus-visible,
+.a2ui-dir-modal__name:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.a2ui-dir-modal__crumb-current {
+  padding: 2px var(--sp-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--text);
+}
+
+.a2ui-dir-modal__error {
+  flex: none;
+  margin: 0 var(--sp-4) var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.a2ui-dir-modal__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.a2ui-dir-modal__table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--fs-sm);
+}
+
+.a2ui-dir-modal__table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border-subtle);
+  font-weight: var(--fw-semibold);
+  text-align: left;
+}
+
+.a2ui-dir-modal__table td {
+  height: 30px;
+  padding: 0 var(--sp-3);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.a2ui-dir-modal__table tbody tr:hover {
+  background: var(--accent-softer);
+}
+
+.a2ui-dir-modal__col-size {
+  width: 96px;
+  text-align: right !important;
+}
+
+.a2ui-dir-modal__col-modified {
+  width: 160px;
+}
+
+.a2ui-dir-modal__sort {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.a2ui-dir-modal__sort:hover {
+  color: var(--text);
+}
+
+.a2ui-dir-modal__name {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.a2ui-dir-modal__name:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+.a2ui-dir-modal__icon {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.a2ui-dir-modal__icon--folder {
+  color: var(--accent-amber);
+}
+
+.a2ui-dir-modal__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.a2ui-dir-modal__blocked {
+  color: var(--text-faint) !important;
+  font-size: var(--fs-xs);
+}
+
+.a2ui-dir-modal__empty {
+  padding: var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.a2ui-dir-modal__footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: var(--sp-2) var(--sp-4);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.a2ui-dir-modal__status {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+@media (max-width: 560px) {
+  .a2ui-dir-modal__table th.a2ui-dir-modal__col-modified,
+  .a2ui-dir-modal__table td.a2ui-dir-modal__col-modified {
+    display: none;
+  }
+}

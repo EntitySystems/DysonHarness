@@ -5,21 +5,30 @@
 @* Custom player over a hidden <audio>, or a visible <video> when Video is set (no native controls).
    AudioPlayer.razor.js owns playback and DOM state so timeupdate never crosses the circuit; this
    component only mounts and tears it down. *@
-<div class="audio-player @(Video ? "audio-player--video" : null)" role="group" aria-label="@($"{(Video ? "Video" : "Audio")} player: {Title}")" @ref="_root">
+<div class="audio-player @(Video ? "audio-player--video" : null) @(Compact ? "audio-player--compact" : null)" role="group" aria-label="@($"{(Video ? "Video" : "Audio")} player: {Title}")" @ref="_root">
     @if (Video)
     {
         <video class="audio-player__video" preload="metadata" playsinline src="@Src"></video>
     }
     else
     {
-        <audio preload="metadata" src="@Src"></audio>
+        @if (DeferredSrc is not null)
+        {
+            @* Remote url: no src (so no network) until the first press of play; the JS module sets it from data-src. *@
+            <audio preload="none" data-src="@DeferredSrc"></audio>
+        }
+        else
+        {
+            <audio preload="metadata" src="@Src"></audio>
+        }
     }
 
     <button type="button"
             class="audio-player__btn audio-player__play"
             data-role="play"
-            aria-label="Play"
-            title="Play">
+            data-play-label="@PlayLabel"
+            aria-label="@PlayLabel"
+            title="@PlayLabel">
         <svg class="audio-player__icon audio-player__icon--play" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" />
         </svg>
@@ -44,19 +53,22 @@
         <span class="audio-player__time mono" data-role="duration">--:--</span>
     </div>
 
-    <button type="button"
-            class="audio-player__btn audio-player__toggle"
-            data-role="loop"
-            aria-label="Loop"
-            aria-pressed="false"
-            title="Loop: off">
-        <svg class="audio-player__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M17 2l4 4-4 4" />
-            <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
-            <path d="M7 22l-4-4 4-4" />
-            <path d="M21 13v1a4 4 0 0 1-4 4H3" />
-        </svg>
-    </button>
+    @if (!Compact)
+    {
+        <button type="button"
+                class="audio-player__btn audio-player__toggle"
+                data-role="loop"
+                aria-label="Loop"
+                aria-pressed="false"
+                title="Loop: off">
+            <svg class="audio-player__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M17 2l4 4-4 4" />
+                <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
+                <path d="M7 22l-4-4 4-4" />
+                <path d="M21 13v1a4 4 0 0 1-4 4H3" />
+            </svg>
+        </button>
+    }
 
     <div class="audio-player__volume">
         <button type="button"
@@ -91,7 +103,7 @@
         <span data-role="error-text"></span>
         @if (OnOpenExternal.HasDelegate)
         {
-            <button type="button" class="btn btn-ghost audio-player__external" @onclick="OnOpenExternal">Open in default app</button>
+            <button type="button" class="btn btn-ghost audio-player__external" @onclick="OnOpenExternal">@ExternalLabel</button>
         }
     </div>
 </div>
@@ -102,7 +114,20 @@
     private IJSObjectReference? _player;
     private bool _disposed;
 
-    [Parameter, EditorRequired] public string Src { get; set; } = "";
+    /// <summary>Local/preview url, loaded on mount. Set this or <see cref="DeferredSrc"/>.</summary>
+    [Parameter] public string Src { get; set; } = "";
+
+    /// <summary>Remote url loaded only when the user first presses play (renders <c>data-src</c>, no <c>src</c>).</summary>
+    [Parameter] public string? DeferredSrc { get; set; }
+
+    /// <summary>Single full-width bar for A2UI surfaces: no loop button, tighter layout.</summary>
+    [Parameter] public bool Compact { get; set; }
+
+    /// <summary>Play button label until the media has a src (a remote player names its host here).</summary>
+    [Parameter] public string PlayLabel { get; set; } = "Play";
+
+    /// <summary>Error-banner button text.</summary>
+    [Parameter] public string ExternalLabel { get; set; } = "Open in default app";
     [Parameter] public string? Title { get; set; }
 
     /// <summary>Renders a <c>&lt;video&gt;</c> above the controls instead of a hidden <c>&lt;audio&gt;</c>.</summary>

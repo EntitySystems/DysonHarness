@@ -31,6 +31,28 @@ public static class DysonA2uiImage
         _ => 240,
     };
 
+    /// <summary>Longest title-band text; a longer title is truncated at render time (bound values are unknown at validation).</summary>
+    public const int MaxTitleLength = 200;
+
+    /// <summary>Trims and collapses whitespace runs (incl. newlines) to one space. Blank gives null (no band); over <see cref="MaxTitleLength"/> is cut to 199 chars plus an ellipsis.</summary>
+    public static string? NormalizeTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return null;
+        var text = string.Join(' ', title.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (text.Length <= MaxTitleLength)
+            return text;
+        var cut = char.IsHighSurrogate(text[MaxTitleLength - 2]) ? MaxTitleLength - 2 : MaxTitleLength - 1;
+        return text[..cut] + "…";
+    }
+
+    /// <summary>
+    /// First non-blank of the candidates, in order: Image passes alt, description, fallback, title, file name; a gallery
+    /// item passes alt, description, null, title, file name or host. Null when all are blank.
+    /// </summary>
+    public static string? AccessibleName(string? alt, string? description, string? fallback, string? title, string? fileOrHost) =>
+        new[] { alt, description, fallback, title, fileOrHost }.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))?.Trim();
+
     // ponytail: 20 MB cap; the browser decodes the full image. Upgrade: server-side downscale (ConvertImage/Magick) for big files.
     public const long MaxBytes = 20L * 1024 * 1024;
 

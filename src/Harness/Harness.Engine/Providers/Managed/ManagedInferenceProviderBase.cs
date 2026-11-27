@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -148,7 +147,7 @@ public abstract class ManagedInferenceProviderBase : IManagedConnectionProvider
             obj["expires_in"]?.GetValue<int?>());
 
         if (openBrowser)
-            TryOpenBrowser(begin.AuthUrl);
+            begin = await begin.OpenInBrowserAsync(DysonOsLauncher.OpenUrlAsync).ConfigureAwait(false);
 
         return Result<ManagedConnectionBegin, string>.AsValue(begin);
     }
@@ -407,21 +406,6 @@ public abstract class ManagedInferenceProviderBase : IManagedConnectionProvider
             .ConfigureAwait(false);
     }
 
-    private static void TryOpenBrowser(string url)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = url,
-                UseShellExecute = true,
-            });
-        }
-        catch
-        {
-            // UI still shows the URL
-        }
-    }
 }
 
 public sealed record ManagedModelInfo(
